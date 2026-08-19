@@ -55,6 +55,26 @@ jobs:
       - name: Executor imports without the core package present
         run: python -c "import athena_executor.main; print('executor image is self-contained')"
 
+  node:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: node } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      - run: gofmt -l . | tee /dev/stderr | (! read)
+      - run: go vet ./...
+      - run: go test ./...
+      # The agent must stay a single static binary: a runtime dependency on the
+      # protected host is the thing the Go choice exists to avoid.
+      - run: CGO_ENABLED=0 go build -o /tmp/athena-node ./cmd/athena-node
+      - name: Agent exposes no shell capability
+        run: |
+          if grep -rn '"run_shell"\|exec.Command(cmd\|/bin/sh' internal/collect/; then
+            echo "::error::the agent must not expose a generic execution path"; exit 1
+          fi
+          echo "no generic execution path"
+
   web:
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: web } }
