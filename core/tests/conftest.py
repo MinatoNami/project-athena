@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from urllib.parse import urlsplit, unquote
+from urllib.parse import unquote, urlsplit
 
 import pytest
 
