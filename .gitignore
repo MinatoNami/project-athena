@@ -1,0 +1,28 @@
+# secrets — generated on the deployment host, never committed
+deploy/secrets/
+deploy/.env
+*.key
+*.pem
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+
+# node / nuxt
+node_modules/
+.nuxt/
+.output/
+.data/
+*.log
+
+# local
+.DS_Store
+.env
+.env.local
