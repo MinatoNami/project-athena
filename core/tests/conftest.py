@@ -33,6 +33,8 @@ def engine():
     from alembic.config import Config
     from sqlalchemy import create_engine
 
+    _ensure_database_exists(INTEGRATION_DSN)
+
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", INTEGRATION_DSN)
 
@@ -44,6 +46,33 @@ def engine():
     command.upgrade(cfg, "head")
 
     return create_engine(INTEGRATION_DSN, future=True)
+
+
+def _ensure_database_exists(dsn: str) -> None:
+    """Create the test database if it is missing.
+
+    Losing it is easy — wiping the compose volume for a clean install takes it with
+    the rest — and a missing database should not look like 17 broken tests.
+    """
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.exc import OperationalError
+
+    target = urlsplit(dsn).path.lstrip("/")
+    try:
+        create_engine(dsn).connect().close()
+        return
+    except OperationalError as exc:
+        if "does not exist" not in str(exc):
+            raise
+
+    admin = create_engine(
+        dsn.rsplit("/", 1)[0] + "/postgres", isolation_level="AUTOCOMMIT", future=True
+    )
+    with admin.connect() as conn:
+        # Identifier, so it cannot be bound as a parameter. The name comes from the
+        # operator's own DSN, never from user input.
+        conn.execute(text(f'CREATE DATABASE "{target}"'))
+    admin.dispose()
 
 
 @pytest.fixture
