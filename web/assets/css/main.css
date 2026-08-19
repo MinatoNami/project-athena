@@ -10,7 +10,10 @@
   --rule: #e1e0d9;
   --good: #0ca30c;
   --warn: #fab219;
+  /* Readable warning ink; the swatch colour itself is sub-3:1 on a light surface. */
+  --warn-ink: #8a5a00;
   --crit: #66201f;
+  --never-hatch: rgba(102, 32, 31, .22);
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -32,6 +35,8 @@
   --ink-2: #c3c2b7;
   --rule: #2c2c2a;
   --crit: #f9bcb3;
+  --warn-ink: #fab219;
+  --never-hatch: rgba(249, 188, 179, .28);
   color-scheme: dark;
 }
 
