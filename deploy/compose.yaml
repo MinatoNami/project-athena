@@ -41,11 +41,20 @@ services:
   migrate:
     <<: *core
     restart: "no"
+    healthcheck:
+      disable: true
     command: ["migrate"]
 
   api:
     <<: *core
     command: ["serve"]
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz',timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
     depends_on:
       db:
         condition: service_healthy
@@ -54,6 +63,8 @@ services:
 
   worker:
     <<: *core
+    healthcheck:
+      disable: true   # no HTTP surface; a queue heartbeat check is M8 (reliability)
     command: ["worker"]
     environment:
       <<: *core-env
@@ -64,6 +75,8 @@ services:
 
   scheduler:
     <<: *core
+    healthcheck:
+      disable: true   # no HTTP surface; a queue heartbeat check is M8 (reliability)
     command: ["scheduler"]
     depends_on:
       migrate:
