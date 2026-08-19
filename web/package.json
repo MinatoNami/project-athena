@@ -1,0 +1,23 @@
+{
+  "name": "athena-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "preview": "nuxt preview",
+    "typecheck": "nuxt typecheck",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "nuxt": "^4.0.0",
+    "vue": "^3.5.0",
+    "vue-router": "^4.4.0"
+  },
+  "devDependencies": {
+    "@nuxt/eslint": "^0.7.0",
+    "eslint": "^9.15.0",
+    "typescript": "^5.7.0",
+    "vue-tsc": "^2.1.0"
+  }
+}

@@ -1,0 +1,79 @@
+/* Tokens defined on bare :root for light; redefined for dark under both the OS
+   media query and an explicit toggle, so neither can win by accident.
+   Full palette: docs/WEB_UI.md §8. */
+:root {
+  --surface: #fcfcfb;
+  --plane: #f9f9f7;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --ink-muted: #898781;
+  --rule: #e1e0d9;
+  --good: #0ca30c;
+  --warn: #fab219;
+  --crit: #66201f;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --surface: #1a1a19;
+    --plane: #0d0d0d;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --ink-muted: #898781;
+    --rule: #2c2c2a;
+    --crit: #f9bcb3;
+    color-scheme: dark;
+  }
+}
+:root[data-theme='dark'] {
+  --surface: #1a1a19;
+  --plane: #0d0d0d;
+  --ink: #ffffff;
+  --ink-2: #c3c2b7;
+  --rule: #2c2c2a;
+  --crit: #f9bcb3;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--plane);
+  color: var(--ink);
+  font: 15px/1.55 system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+.wrap { max-width: 62rem; margin: 0 auto; padding: 2rem 1.25rem; }
+.card {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1rem;
+}
+h1 { font-size: 1.5rem; margin: 0 0 .25rem; letter-spacing: -0.01em; }
+h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .07em;
+     color: var(--ink-muted); margin: 0 0 .75rem; font-weight: 600; }
+p.sub { color: var(--ink-2); margin: 0 0 1.5rem; }
+label { display: block; font-size: .82rem; color: var(--ink-2); margin: .85rem 0 .3rem; }
+input {
+  width: 100%; padding: .6rem .7rem; font: inherit;
+  background: var(--plane); color: var(--ink);
+  border: 1px solid var(--rule); border-radius: 7px;
+}
+button {
+  font: inherit; font-weight: 500; padding: .6rem 1.1rem;
+  border: 1px solid var(--rule); border-radius: 7px;
+  background: var(--ink); color: var(--surface); cursor: pointer;
+}
+button.secondary { background: transparent; color: var(--ink); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+.err { color: var(--crit); font-size: .88rem; margin-top: .85rem; }
+.muted { color: var(--ink-muted); font-size: .85rem; }
+.dot { display: inline-block; width: .5rem; height: .5rem; border-radius: 50%; margin-right: .4rem; }
+.dot.live { background: var(--good); }
+.dot.down { background: var(--warn); }
+table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+th { text-align: left; font-weight: 600; color: var(--ink-muted); font-size: .75rem;
+     text-transform: uppercase; letter-spacing: .05em; padding: .4rem .5rem; }
+td { padding: .45rem .5rem; border-top: 1px solid var(--rule); font-variant-numeric: tabular-nums; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
