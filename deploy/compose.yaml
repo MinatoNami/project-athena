@@ -14,10 +14,11 @@ x-core: &core
     ATHENA_DB_USER: athena
     ATHENA_DB_PASSWORD_FILE: /run/secrets/db_password
     ATHENA_MASTER_KEY_FILE: /run/secrets/master_key
+    ATHENA_NODE_SIGNING_KEY_FILE: /run/secrets/node_signing_key
     ATHENA_LOG_LEVEL: ${ATHENA_LOG_LEVEL:-INFO}
     ATHENA_ENVIRONMENT: ${ATHENA_ENVIRONMENT:-production}
     ATHENA_COOKIE_SECURE: ${ATHENA_COOKIE_SECURE:-true}
-  secrets: [db_password, master_key]
+  secrets: [db_password, master_key, node_signing_key]
   networks: [private]
 
 services:
@@ -148,3 +149,4 @@ secrets:
   master_key:           { file: ./secrets/master_key }
   session_secret:       { file: ./secrets/session_secret }
   grant_public_key:     { file: ./secrets/grant_public_key }
+  node_signing_key:     { file: ./secrets/node_signing_key }

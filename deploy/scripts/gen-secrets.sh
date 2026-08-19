@@ -38,6 +38,17 @@ else
     echo "  create  grant keypair"
 fi
 
+# Signs task envelopes sent to nodes. Separate from the grant key: a node task and
+# an executor grant authorise different things, and one compromise must not confer
+# the other.
+if [[ -s secrets/node_signing_key ]]; then
+    echo "  keep    node signing key"
+else
+    ( set -o noclobber; openssl genpkey -algorithm ed25519 -out secrets/node_signing_key )
+    chmod 600 secrets/node_signing_key
+    echo "  create  node signing key"
+fi
+
 if [[ ! -f .env ]]; then
     cp .env.example .env
     # The Docker socket's group differs between Docker Desktop (0) and a Linux host
