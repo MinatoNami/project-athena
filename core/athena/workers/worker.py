@@ -19,7 +19,10 @@ from athena.queue import (
     handlers,  # noqa: F401  (import registers the handlers)
     publish,
 )
-from athena.workers import repository  # noqa: F401  (registers scan.repository)
+from athena.workers import (
+    node_ingest,  # noqa: F401  (registers ingest.node_observation)
+    repository,  # noqa: F401  (registers scan.repository)
+)
 
 log = structlog.get_logger(__name__)
 _stop = threading.Event()
