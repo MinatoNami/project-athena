@@ -43,7 +43,7 @@ class ObservedComponent:
     ecosystem: str
     name: str
     version: str
-    scope: str = "direct"          # direct | transitive | os | runtime
+    scope: str = "unknown"         # direct | transitive | os | runtime | unknown
     purl: str | None = None
     cpe: str | None = None
     install_path: str | None = None
