@@ -69,6 +69,21 @@ services:
     environment:
       <<: *core-env
       ATHENA_WORKER_CONCURRENCY: ${ATHENA_WORKER_CONCURRENCY:-4}
+      ATHENA_WORK_VOLUME: athena-work
+    # Group that owns the Docker socket. 0 on Docker Desktop, usually the `docker`
+    # group's gid on a Linux host — `stat -c %g /var/run/docker.sock` to find it.
+    # The worker still runs as an unprivileged user; only socket access is granted.
+    group_add:
+      - "${DOCKER_SOCKET_GID:-0}"
+    volumes:
+      # Launches sandboxed scanner containers as siblings. Socket access is
+      # effectively root on the host: it is the residual risk recorded in
+      # docs/TECHNICAL_DESIGN.md §23.1, and replacing it with a narrow socket proxy
+      # is M8 hardening.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Shared with those containers by NAME — they cannot see a path that exists
+      # only inside this container's filesystem.
+      - athena-work:/work
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -116,6 +131,11 @@ services:
 
 volumes:
   athena-db:
+  athena-work:
+    # Explicit name: the worker passes this to `docker run -v` for sibling
+    # containers, so it must not depend on the compose project prefix. A
+    # mismatch silently creates a second, root-owned volume instead.
+    name: athena-work
 
 networks:
   private:

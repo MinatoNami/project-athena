@@ -40,7 +40,15 @@ fi
 
 if [[ ! -f .env ]]; then
     cp .env.example .env
-    echo "  create  .env (from .env.example)"
+    # The Docker socket's group differs between Docker Desktop (0) and a Linux host
+    # (the `docker` group). Detect it rather than making the operator look it up.
+    if [[ -S /var/run/docker.sock ]]; then
+        gid="$(stat -c %g /var/run/docker.sock 2>/dev/null || echo 0)"
+        sed -i "s/^DOCKER_SOCKET_GID=.*/DOCKER_SOCKET_GID=${gid}/" .env
+        echo "  create  .env (docker socket gid ${gid})"
+    else
+        echo "  create  .env (from .env.example)"
+    fi
 else
     echo "  keep    .env"
 fi
