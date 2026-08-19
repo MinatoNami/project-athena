@@ -93,15 +93,17 @@ preflight() {
     "MISSING docker")            die "Docker is not installed on $HOST." ;;
     "MISSING compose")           die "Docker Compose v2 is unavailable on $HOST." ;;
     "MISSING docker-permission") die "The remote user cannot reach the Docker daemon. Add it to the docker group." ;;
-    OK\ *) ;;
+    OK*) ;;
     *) die "Unexpected preflight response: $report" ;;
   esac
 
   local version free_gb
-  version="$(awk '{print $2}' <<<"$report")"
-  free_gb="$(awk '{print $3}' <<<"$report")"
-  ok "Remote ready — Docker $version, ${free_gb}GB free on /"
-  (( free_gb < 5 )) && warn "Low disk on the remote; image builds may fail."
+  version="$(cut -f2 <<<"$report")"
+  free_gb="$(cut -f3 <<<"$report")"
+  ok "Remote ready — $version, ${free_gb}GB free on /"
+  if [[ "$free_gb" =~ ^[0-9]+$ ]] && (( free_gb < 5 )); then
+    warn "Only ${free_gb}GB free on the remote; image builds may fail."
+  fi
 
   if [[ -d "$REPO_ROOT/.git" ]]; then
     if (( ! ALLOW_DIRTY )) && [[ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]]; then
