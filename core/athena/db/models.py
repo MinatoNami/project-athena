@@ -294,3 +294,75 @@ class MergeCandidate(Base):
     __table_args__ = (
         UniqueConstraint("asset_id", "other_asset_id", name="merge_candidate_pair_uniq"),
     )
+
+
+# ─── nodes (M1) ──────────────────────────────────────────────────────────────
+
+
+class Node(Base):
+    __tablename__ = "node"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    asset_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("asset.id", ondelete="SET NULL")
+    )
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    public_key: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, unique=True)
+    agent_version: Mapped[str | None] = mapped_column(Text)
+    platform: Mapped[str | None] = mapped_column(Text)
+    arch: Mapped[str | None] = mapped_column(Text)
+    capabilities: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    enrolled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class NodeEnrolmentToken(Base):
+    __tablename__ = "node_enrolment_token"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    token_hash: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, unique=True)
+    tier: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown")
+    created_by: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    consumed_by_node: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+
+
+class NodeTask(Base):
+    __tablename__ = "node_task"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    node_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("node.id", ondelete="CASCADE"), nullable=False
+    )
+    capability: Mapped[str] = mapped_column(String(64), nullable=False)
+    args: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    issued_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    nonce: Mapped[str] = mapped_column(Text, nullable=False)
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    succeeded: Mapped[bool | None] = mapped_column(Boolean)
+    result: Mapped[dict | None] = mapped_column(JSONB)
+    error: Mapped[str | None] = mapped_column(Text)
+    scan_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+
+
+class NodeNonce(Base):
+    __tablename__ = "node_nonce"
+
+    node_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("node.id", ondelete="CASCADE"), primary_key=True
+    )
+    nonce: Mapped[str] = mapped_column(Text, primary_key=True)
+    seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
