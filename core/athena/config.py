@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     job_lease_seconds: int = 300
     poll_interval_seconds: float = 1.0
 
+    # Named volume shared between the worker and the sandbox containers it launches.
+    # Sibling containers cannot see a path that exists only inside the worker.
+    work_volume: str = "athena-work"
+
     log_level: str = "INFO"
     environment: str = Field(default="production")
 
