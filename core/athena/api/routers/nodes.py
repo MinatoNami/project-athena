@@ -372,6 +372,30 @@ def list_nodes(
     }
 
 
+@router.post("/{node_id}/collect", status_code=status.HTTP_202_ACCEPTED)
+def collect_now(
+    node_id: str,
+    principal: Principal = Depends(current_principal),
+    session: Session = Depends(db),
+) -> dict:
+    """Queue an immediate observe sweep for one node."""
+    from athena.nodes.dispatch import enqueue_collection
+
+    node = session.get(Node, uuid.UUID(node_id))
+    if node is None or node.revoked_at is not None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such node")
+
+    created = enqueue_collection(session, node)
+    record(
+        session,
+        actor=principal.actor,
+        action="NODE_COLLECTION_REQUESTED",
+        subject=f"node:{node.id}",
+        detail={"tasks": created},
+    )
+    return {"queued": created}
+
+
 @router.delete("/{node_id}")
 def revoke_node(
     node_id: str,

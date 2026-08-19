@@ -5,6 +5,7 @@
     athena scheduler   periodic work (leader-elected)
     athena migrate     apply database migrations
     athena bootstrap   mint a single-use admin bootstrap token
+    athena node-token  mint a single-use node enrolment token
     athena doctor      check schema, keys, connectivity, queue health
     athena keygen      generate a master key
 """
@@ -75,6 +76,50 @@ def _bootstrap() -> int:
     print("=" * 68, file=sys.stderr)
     print(f"\n  {token}\n", file=sys.stderr)
     print("  Create the admin account with this token, then it is burned.", file=sys.stderr)
+    print("=" * 68 + "\n", file=sys.stderr)
+    return 0
+
+
+def _node_token(tier: str = "unknown") -> int:
+    """Mint a node enrolment token without a dashboard session.
+
+    Enrolling a host is a shell-level operation on that host, so it should not
+    require logging into the UI first.
+    """
+    import hashlib
+    import secrets as _secrets
+    from datetime import UTC, datetime, timedelta
+
+    from athena.audit import record
+    from athena.db.base import session_scope
+    from athena.db.models import NodeEnrolmentToken
+
+    token = _secrets.token_urlsafe(32)
+    expires = datetime.now(UTC) + timedelta(minutes=15)
+
+    with session_scope() as session:
+        session.add(
+            NodeEnrolmentToken(
+                token_hash=hashlib.sha256(token.encode()).digest(),
+                tier=tier,
+                created_by="system:cli",
+                expires_at=expires,
+            )
+        )
+        record(
+            session,
+            actor="system:cli",
+            action="NODE_ENROLMENT_TOKEN_MINTED",
+            subject="nodes",
+            detail={"tier": tier, "via": "cli"},
+        )
+
+    print("\n" + "=" * 68, file=sys.stderr)
+    print("  NODE ENROLMENT TOKEN (valid 15 minutes, single use)", file=sys.stderr)
+    print("=" * 68, file=sys.stderr)
+    print(f"\n  {token}\n", file=sys.stderr)
+    print("  On the host to protect:", file=sys.stderr)
+    print(f"    athena-node enrol --core <core-url> --token {token}\n", file=sys.stderr)
     print("=" * 68 + "\n", file=sys.stderr)
     return 0
 
@@ -200,6 +245,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("serve", "worker", "scheduler", "migrate", "bootstrap", "doctor", "keygen"):
         sub.add_parser(name)
+    node_token = sub.add_parser("node-token")
+    node_token.add_argument("--tier", default="unknown")
 
     args = parser.parse_args(argv)
     configure_logging(get_settings().log_level)
@@ -214,6 +261,9 @@ def main(argv: list[str] | None = None) -> int:
 
         run()
         return 0
+
+    if args.command == "node-token":
+        return _node_token(args.tier)
 
     return {
         "serve": _serve,

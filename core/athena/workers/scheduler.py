@@ -21,14 +21,44 @@ _stop = threading.Event()
 
 LOCK_ID = 0x4154_4845  # "ATHE"
 
-# (name, interval seconds, job kind, payload) — real patrol cadence arrives in M1.
-SCHEDULE: list[tuple[str, int, str, dict]] = [
-    ("session-sweep", 300, "system.echo", {"task": "session-sweep"}),
-]
+# (name, interval seconds, job kind, payload)
+SCHEDULE: list[tuple[str, int, str, dict]] = []
+
+# Periodic work done directly by the scheduler rather than through the queue,
+# because it is cheap and must not compete with scans for worker slots.
+NODE_SWEEP_INTERVAL = 60
+NONCE_SWEEP_INTERVAL = 300
 
 
 def _acquire_leadership(session) -> bool:
     return bool(session.execute(text("SELECT pg_try_advisory_lock(:id)"), {"id": LOCK_ID}).scalar())
+
+
+def _sweep_nodes(session, last_run: dict[str, float], now: float) -> None:
+    """Issue collection work to nodes that are due for it."""
+    if now - last_run.get("node-sweep", 0) < NODE_SWEEP_INTERVAL:
+        return
+    last_run["node-sweep"] = now
+
+    from athena.nodes.dispatch import enqueue_collection, nodes_due
+
+    for node in nodes_due(session):
+        created = enqueue_collection(session, node)
+        if created:
+            log.info("scheduler.node_collection", node=str(node.id), tasks=created)
+
+
+def _sweep_nonces(session, last_run: dict[str, float], now: float) -> None:
+    """Drop replay nonces that can no longer be replayed."""
+    if now - last_run.get("nonce-sweep", 0) < NONCE_SWEEP_INTERVAL:
+        return
+    last_run["nonce-sweep"] = now
+
+    from athena.api.routers.nodes import sweep_nonces
+
+    removed = sweep_nonces(session)
+    if removed:
+        log.info("scheduler.nonces_swept", removed=removed)
 
 
 def run() -> None:
@@ -53,6 +83,8 @@ def run() -> None:
                 from athena.queue import enqueue
 
                 now = time.monotonic()
+                _sweep_nodes(session, last_run, now)
+                _sweep_nonces(session, last_run, now)
                 for name, interval, kind, payload in SCHEDULE:
                     if now - last_run.get(name, 0) < interval:
                         continue
