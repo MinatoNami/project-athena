@@ -11,7 +11,7 @@ from starlette.concurrency import run_in_threadpool
 from athena import __version__
 from athena.api.deps import REQUEST_SESSION_ATTR
 from athena.api.events import broker
-from athena.api.routers import audit, auth, events, health, jobs
+from athena.api.routers import assets, audit, auth, events, health, jobs
 
 log = structlog.get_logger(__name__)
 
@@ -66,7 +66,7 @@ def create_app() -> FastAPI:
         return response
 
     app.include_router(health.router)
-    for r in (auth.router, jobs.router, audit.router, events.router):
+    for r in (auth.router, assets.router, jobs.router, audit.router, events.router):
         app.include_router(r, prefix="/api/v1")
 
     @app.exception_handler(Exception)

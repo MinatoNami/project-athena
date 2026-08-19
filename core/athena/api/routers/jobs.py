@@ -13,6 +13,7 @@ from athena.queue import (
     handlers,  # noqa: F401  (registers handlers so kinds resolve)
     known_kinds,
 )
+from athena.workers import repository  # noqa: F401  (registers scan.repository)
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
