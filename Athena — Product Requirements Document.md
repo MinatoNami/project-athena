@@ -2313,7 +2313,7 @@ Initial candidates:
 
 ### Dashboard
 
-- Next.js
+- Nuxt 4 (Vue 3, TypeScript), server-rendered, with the Nitro server acting as a backend-for-frontend so Athena Core is never internet-facing
 
 ### Security Tooling
 
