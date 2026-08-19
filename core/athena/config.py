@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     # --- crypto -------------------------------------------------------------
     master_key_file: str | None = None
     master_key: str | None = None
+    # Signs task envelopes sent to nodes. Distinct from the executor's grant key:
+    # they authorise different things, and one compromise must not confer the other.
+    node_signing_key_file: str | None = None
 
     # --- api ----------------------------------------------------------------
     bind_host: str = "0.0.0.0"  # noqa: S104 - bound to the compose private network
