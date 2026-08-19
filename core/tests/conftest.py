@@ -35,6 +35,12 @@ def engine():
 
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", INTEGRATION_DSN)
+
+    # Rebuild the schema so the suite starts from a known state. Tests that exercise
+    # committed behaviour — retry bookkeeping, coverage arithmetic — would otherwise
+    # drift as state accumulated across runs. Truncation is not an option: audit_event
+    # rejects it by design.
+    command.downgrade(cfg, "base")
     command.upgrade(cfg, "head")
 
     return create_engine(INTEGRATION_DSN, future=True)

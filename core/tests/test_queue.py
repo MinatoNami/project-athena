@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 from athena.queue import claim, enqueue, finish
 
 
@@ -30,7 +32,9 @@ def test_failed_job_retries_until_attempts_are_exhausted(session):
     """
     from athena.db.models import Job
 
-    created = enqueue(session, kind="system.fail", key="retry-probe", payload={}, max_attempts=2)
+    created = enqueue(
+        session, kind="system.fail", key=f"retry-probe-{uuid.uuid4()}", max_attempts=2
+    )
     assert created is not None
     job_id = created.id
     session.commit()
