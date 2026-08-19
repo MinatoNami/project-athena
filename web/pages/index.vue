@@ -55,6 +55,11 @@ async function logout() {
     <p class="sub">Foundations (M0). Inventory, correlation, and investigation arrive in M1–M3.</p>
 
     <div class="card">
+      <h2>Inventory</h2>
+      <p><NuxtLink to="/assets">Assets and coverage →</NuxtLink></p>
+    </div>
+
+    <div class="card">
       <h2>Security posture</h2>
       <p class="muted">
         No assets registered yet, so there is nothing to report. This is
