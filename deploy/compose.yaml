@@ -1,0 +1,117 @@
+name: athena
+
+x-core: &core
+  image: athena-core:${ATHENA_TAG:-dev}
+  build:
+    context: ../core
+  restart: unless-stopped
+  depends_on:
+    db:
+      condition: service_healthy
+  environment: &core-env
+    ATHENA_DB_HOST: db
+    ATHENA_DB_NAME: athena
+    ATHENA_DB_USER: athena
+    ATHENA_DB_PASSWORD_FILE: /run/secrets/db_password
+    ATHENA_MASTER_KEY_FILE: /run/secrets/master_key
+    ATHENA_LOG_LEVEL: ${ATHENA_LOG_LEVEL:-INFO}
+    ATHENA_ENVIRONMENT: ${ATHENA_ENVIRONMENT:-production}
+    ATHENA_COOKIE_SECURE: ${ATHENA_COOKIE_SECURE:-true}
+  secrets: [db_password, master_key]
+  networks: [private]
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: athena
+      POSTGRES_USER: athena
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
+    volumes:
+      - athena-db:/var/lib/postgresql/data
+    networks: [private]          # never published to the host
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U athena -d athena"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    <<: *core
+    restart: "no"
+    command: ["migrate"]
+
+  api:
+    <<: *core
+    command: ["serve"]
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    <<: *core
+    command: ["worker"]
+    environment:
+      <<: *core-env
+      ATHENA_WORKER_CONCURRENCY: ${ATHENA_WORKER_CONCURRENCY:-4}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  scheduler:
+    <<: *core
+    command: ["scheduler"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  executor:
+    image: athena-executor:${ATHENA_TAG:-dev}
+    build:
+      context: ../executor
+    restart: unless-stopped
+    environment:
+      ATHENA_DB_HOST: db
+      ATHENA_DB_NAME: athena
+      ATHENA_DB_USER: athena_executor
+      ATHENA_DB_PASSWORD_FILE: /run/secrets/executor_db_password
+      ATHENA_GRANT_PUBLIC_KEY_FILE: /run/secrets/grant_public_key
+    secrets: [executor_db_password, grant_public_key]
+    networks: [private]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    image: athena-web:${ATHENA_TAG:-dev}
+    build:
+      context: ../web
+    restart: unless-stopped
+    environment:
+      NUXT_ATHENA_API_URL: http://api:8000
+      NUXT_SESSION_SECRET_FILE: /run/secrets/session_secret
+      NUXT_PUBLIC_APP_NAME: ${ATHENA_APP_NAME:-Athena}
+    secrets: [session_secret]
+    ports:
+      - "${ATHENA_WEB_BIND:-127.0.0.1}:${ATHENA_WEB_PORT:-8080}:3000"
+    networks: [private, public]   # the only service on the public network
+    depends_on: [api]
+
+volumes:
+  athena-db:
+
+networks:
+  private:
+    internal: true
+  public: {}
+
+secrets:
+  db_password:          { file: ./secrets/db_password }
+  executor_db_password: { file: ./secrets/executor_db_password }
+  master_key:           { file: ./secrets/master_key }
+  session_secret:       { file: ./secrets/session_secret }
+  grant_public_key:     { file: ./secrets/grant_public_key }
