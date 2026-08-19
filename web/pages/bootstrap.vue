@@ -1,6 +1,8 @@
 <script setup lang="ts">
 /** First-run admin creation. The token is printed once to the API log by
  *  `athena bootstrap` — the deployment ships no credentials of any kind. */
+useHead({ title: 'First run' })
+
 const token = ref('')
 const email = ref('')
 const password = ref('')
@@ -32,8 +34,13 @@ async function submit() {
   <div class="wrap" style="max-width:28rem;padding-top:5rem">
     <h1>Create the first account</h1>
     <p class="sub">
-      Athena ships with no default credentials. Retrieve the single-use bootstrap token
-      from the API log:
+      Athena ships with no default credentials. Retrieve the single-use bootstrap
+      token from the API log.
+    </p>
+    <p class="sub cmds">
+      running locally:
+      <br><code>docker compose exec api athena bootstrap</code>
+      <br><br>on a deployment host:
       <br><code>./deploy/deploy.sh bootstrap</code>
     </p>
     <form class="card" @submit.prevent="submit">
@@ -50,3 +57,7 @@ async function submit() {
     </form>
   </div>
 </template>
+
+<style scoped>
+.cmds { font-size: .85rem; }
+</style>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+useHead({ title: 'Sign in' })
 const email = ref('')
 const password = ref('')
 const error = ref('')

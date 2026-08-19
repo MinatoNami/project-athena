@@ -4,6 +4,14 @@ export default defineNuxtConfig({
   devtools: { enabled: false },
   css: ['~/assets/css/main.css'],
 
+  app: {
+    head: {
+      titleTemplate: (title?: string) => (title ? `${title} · Athena` : 'Athena'),
+      meta: [{ name: 'viewport', content: 'width=device-width, initial-scale=1' }],
+      htmlAttrs: { lang: 'en' },
+    },
+  },
+
   runtimeConfig: {
     // Server-only. The browser never receives a value that can reach core directly.
     athenaApiUrl: process.env.NUXT_ATHENA_API_URL || 'http://127.0.0.1:8000',

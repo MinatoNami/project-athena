@@ -7,6 +7,7 @@ const { data: asset, refresh } = await useAsyncData(`asset-${route.params.id}`, 
   api<any>(`assets/${route.params.id}`),
 )
 const scanning = ref(false)
+useHead({ title: () => asset.value?.display_name || 'Asset' })
 
 async function rescan() {
   scanning.value = true

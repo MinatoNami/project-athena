@@ -1,4 +1,5 @@
 <script setup lang="ts">
+useHead({ title: 'Overview' })
 const { data: me } = await useMe()
 if (!me.value) await navigateTo('/login')
 
