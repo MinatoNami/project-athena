@@ -49,6 +49,12 @@ services:
   api:
     <<: *core
     command: ["serve"]
+    # Published on loopback only, so a node agent running on this host can reach the
+    # enrolment and task endpoints. Still not internet-facing: to enrol nodes on OTHER
+    # machines, expose core deliberately — `tailscale serve` or a reverse proxy with
+    # TLS — rather than widening this bind.
+    ports:
+      - "${ATHENA_API_BIND:-127.0.0.1}:${ATHENA_API_PORT:-8000}:8000"
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz',timeout=3).status==200 else 1)"]
