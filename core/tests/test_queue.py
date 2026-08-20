@@ -87,3 +87,32 @@ def test_a_failed_job_also_frees_its_key_once_exhausted(session):
     session.commit()
 
     assert enqueue(session, kind="system.fail", key=key) is not None
+
+
+def test_one_kind_cannot_occupy_every_worker_slot(session, monkeypatch):
+    """A backfill must not starve everything else. On the deployed host 805 queued
+    correlation jobs held all four slots and image scans never started."""
+    from athena.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "worker_concurrency", 3, raising=False)
+    cap = settings.worker_concurrency - 1  # 2
+
+    marker = uuid.uuid4()
+    for i in range(5):
+        enqueue(session, kind="system.sleep", key=f"flood-{marker}-{i}", priority=1)
+    enqueue(session, kind="system.echo", key=f"other-{marker}", priority=9)
+    session.commit()
+
+    claimed = []
+    for _ in range(cap):
+        job = claim(session, kinds=["system.sleep"])
+        assert job is not None
+        claimed.append(job)
+    session.commit()
+
+    # The flooding kind is now at its cap, so a further claim must skip past it and
+    # reach the lower-priority work instead of blocking on the queue head.
+    nxt = claim(session)
+    assert nxt is not None, "the pool must not stall while one kind is saturated"
+    assert nxt.kind == "system.echo", f"expected the starved kind, got {nxt.kind}"

@@ -60,15 +60,28 @@ def enqueue(
 # Two complete literals rather than an interpolated fragment: nothing is built from
 # a variable, so there is no injection surface to reason about. Values are always
 # bound parameters.
+#
+# The `inflight` term is a fairness cap. Without it a large backfill occupies every
+# worker slot and starves everything else indefinitely — on the deployed host 805
+# queued correlation jobs held all four slots while image scans waited behind them.
+# Capping each kind below the pool size guarantees at least one slot is always
+# reachable by some other kind, whatever the queue looks like.
 _CLAIM_SQL = """
-    WITH candidate AS (
-        SELECT id FROM job
-         WHERE finished_at IS NULL
-           AND run_after <= now()
-           AND (lease_until IS NULL OR lease_until < now())
+    WITH inflight AS (
+        SELECT kind, count(*) AS running
+          FROM job
+         WHERE finished_at IS NULL AND lease_until > now()
+         GROUP BY kind
+    ), candidate AS (
+        SELECT j.id FROM job j
+         LEFT JOIN inflight i ON i.kind = j.kind
+         WHERE j.finished_at IS NULL
+           AND j.run_after <= now()
+           AND (j.lease_until IS NULL OR j.lease_until < now())
+           AND COALESCE(i.running, 0) < :kind_cap
            {kind_clause}
-         ORDER BY priority, run_after
-         FOR UPDATE SKIP LOCKED
+         ORDER BY j.priority, j.run_after
+         FOR UPDATE OF j SKIP LOCKED
          LIMIT 1
     )
     UPDATE job SET
@@ -79,16 +92,19 @@ _CLAIM_SQL = """
     RETURNING id
 """
 CLAIM_ANY = _CLAIM_SQL.format(kind_clause="")
-CLAIM_OF_KIND = _CLAIM_SQL.format(kind_clause="AND kind = ANY(:kinds)")
+CLAIM_OF_KIND = _CLAIM_SQL.format(kind_clause="AND j.kind = ANY(:kinds)")
 
 
 def claim(session: Session, *, kinds: list[str] | None = None) -> Job | None:
     """Claim one runnable job, or None. The caller owns it until the lease expires."""
-    lease = get_settings().job_lease_seconds
+    settings = get_settings()
+    lease = settings.job_lease_seconds
+    # At least one slot stays reachable by another kind, however deep the queue.
+    kind_cap = max(1, settings.worker_concurrency - 1)
+
+    base = {"lease": lease, "kind_cap": kind_cap}
     sql, params = (
-        (CLAIM_OF_KIND, {"lease": lease, "kinds": kinds})
-        if kinds
-        else (CLAIM_ANY, {"lease": lease})
+        (CLAIM_OF_KIND, {**base, "kinds": kinds}) if kinds else (CLAIM_ANY, base)
     )
     row = session.execute(text(sql), params).first()
     if row is None:
