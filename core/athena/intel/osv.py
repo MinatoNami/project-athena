@@ -212,6 +212,7 @@ def parse(advisory: dict[str, Any]) -> NormalisedAdvisory | None:
         ][:50],
         ranges=ranges,
         source="osv",
+        source_record=osv_id,
     )
 
 

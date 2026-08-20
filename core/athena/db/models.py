@@ -414,6 +414,29 @@ class AffectedRange(Base):
     distro: Mapped[str | None] = mapped_column(String(32))
     distro_release: Mapped[str | None] = mapped_column(String(32))
     channel: Mapped[str] = mapped_column(String(16), nullable=False, default="standard")
+    source_record: Mapped[str | None] = mapped_column(Text)
+
+
+class AdvisorySource(Base):
+    """Per-source ingestion state.
+
+    Several records converge on one CVE. Tracking the content hash per source record
+    means a revision reflects that source actually changing, rather than two sources
+    taking turns overwriting each other.
+    """
+
+    __tablename__ = "advisory_source"
+
+    vulnerability_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("vulnerability.id", ondelete="CASCADE"), primary_key=True
+    )
+    source_record: Mapped[str] = mapped_column(Text, primary_key=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    content_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    modified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ingested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class IntelSource(Base):

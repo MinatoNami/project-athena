@@ -44,6 +44,9 @@ class NormalisedAdvisory:
     references: list[dict[str, Any]] = field(default_factory=list)
     ranges: list[NormalisedRange] = field(default_factory=list)
     source: str = "osv"
+    # The originating record id (UBUNTU-CVE-…, GHSA-…). Several records converge on
+    # one CVE, and each owns its own ranges — this is what keeps them apart.
+    source_record: str = ""
 
 
 # Only fields that could change a verdict. A reworded summary must not re-correlate
@@ -51,6 +54,7 @@ class NormalisedAdvisory:
 def content_hash(advisory: NormalisedAdvisory) -> str:
     material = {
         "id": advisory.id,
+        "source_record": advisory.source_record,
         "aliases": sorted(advisory.aliases),
         "cvss_vector": advisory.cvss_vector,
         "cvss_score": advisory.cvss_score,

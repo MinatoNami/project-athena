@@ -192,3 +192,30 @@ def test_two_records_for_one_cve_do_not_collide():
     first = parse({"id": "UBUNTU-CVE-2013-6393", **shared})
     second = parse({"id": "DEBIAN-CVE-2013-6393", **shared})
     assert first.id == second.id == "CVE-2013-6393"
+
+
+def test_each_source_record_is_identified_separately():
+    """Records converging on one CVE must stay distinguishable, or ingesting one
+    deletes the other's ranges."""
+    ubuntu = parse({
+        "id": "UBUNTU-CVE-2014-3613",
+        "upstream": ["CVE-2014-3613"],
+        "affected": [{"package": {"name": "curl", "ecosystem": "Ubuntu:24.04:LTS"},
+                      "ranges": [{"type": "ECOSYSTEM",
+                                  "events": [{"introduced": "0"}, {"fixed": "8.5.0-1"}]}]}],
+    })
+    debian = parse({
+        "id": "DEBIAN-CVE-2014-3613",
+        "upstream": ["CVE-2014-3613"],
+        "affected": [{"package": {"name": "curl", "ecosystem": "Debian:12"},
+                      "ranges": [{"type": "ECOSYSTEM",
+                                  "events": [{"introduced": "0"}, {"fixed": "7.88.1-1"}]}]}],
+    })
+    assert ubuntu.id == debian.id == "CVE-2014-3613"
+    assert ubuntu.source_record == "UBUNTU-CVE-2014-3613"
+    assert debian.source_record == "DEBIAN-CVE-2014-3613"
+    # Different source records must hash differently, or one is treated as the
+    # other's revision and they flip the advisory back and forth on every poll.
+    from athena.intel.model import content_hash
+
+    assert content_hash(ubuntu) != content_hash(debian)

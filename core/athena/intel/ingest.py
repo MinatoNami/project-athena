@@ -10,55 +10,41 @@ import structlog
 from sqlalchemy import delete, select, text
 from sqlalchemy.orm import Session
 
-from athena.db.models import AffectedRange, IntelSource, Vulnerability
+from athena.db.models import AffectedRange, IntelSource
 from athena.intel.model import NormalisedAdvisory, content_hash
 
 log = structlog.get_logger(__name__)
 
 
 def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
-    """Insert or update one advisory. Returns 'new', 'revised', or 'unchanged'.
+    """Ingest one source record. Returns 'new', 'revised', or 'unchanged'.
 
-    A revision bump means something that could change a verdict has changed, so the
-    caller re-correlates. A reworded summary does not qualify — otherwise every
-    upstream edit would re-evaluate the whole estate.
-
-    Written as a database-level upsert rather than get-then-add. Distribution and
-    upstream records converge on the same CVE by design, so one batch routinely
-    contains several records for one id; a read-then-insert races itself and the
-    whole batch dies on a duplicate key.
+    State is tracked per source record, not per vulnerability. Several records
+    converge on one CVE by design — an upstream advisory and each distribution's
+    tracker — and the authority rule needs their ranges side by side. Replacing all
+    ranges on every write made them overwrite each other, so whichever was ingested
+    last won and the others simply vanished.
     """
     digest = content_hash(advisory)
+    source_record = advisory.source_record or advisory.id
+    source = _dominant_source(advisory)
     now = datetime.now(UTC)
 
-    existing = session.execute(
-        select(Vulnerability.content_hash, Vulnerability.revision).where(
-            Vulnerability.id == advisory.id
-        )
-    ).first()
+    known = session.execute(
+        text(
+            "SELECT content_hash FROM advisory_source "
+            " WHERE vulnerability_id = :id AND source_record = :rec"
+        ),
+        {"id": advisory.id, "rec": source_record},
+    ).scalar_one_or_none()
 
-    if existing is not None and existing.content_hash == digest:
-        # Still refresh the descriptive fields; they are free and improve the UI.
-        session.execute(
-            text(
-                "UPDATE vulnerability SET "
-                "  summary = COALESCE(:summary, summary), "
-                "  details = COALESCE(:details, details), "
-                "  modified_at = COALESCE(:modified, modified_at), "
-                "  aliases = ARRAY(SELECT DISTINCT unnest(aliases || :aliases::text[])) "
-                " WHERE id = :id"
-            ),
-            {
-                "id": advisory.id,
-                "summary": advisory.summary,
-                "details": advisory.details,
-                "modified": advisory.modified_at,
-                "aliases": advisory.aliases,
-            },
-        )
+    if known == digest:
         return "unchanged"
 
-    revised = existing is not None
+    is_new_vulnerability = session.execute(
+        text("SELECT 1 FROM vulnerability WHERE id = :id"), {"id": advisory.id}
+    ).first() is None
+
     session.execute(
         text(
             """
@@ -74,15 +60,21 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
             ON CONFLICT (id) DO UPDATE SET
                 aliases     = ARRAY(SELECT DISTINCT unnest(
                                   vulnerability.aliases || EXCLUDED.aliases)),
-                summary     = COALESCE(EXCLUDED.summary, vulnerability.summary),
-                details     = COALESCE(EXCLUDED.details, vulnerability.details),
-                cwe         = EXCLUDED.cwe,
-                cvss_vector = EXCLUDED.cvss_vector,
-                cvss_score  = EXCLUDED.cvss_score,
-                severity    = EXCLUDED.severity,
-                modified_at = COALESCE(EXCLUDED.modified_at, vulnerability.modified_at),
-                withdrawn_at = EXCLUDED.withdrawn_at,
-                "references" = EXCLUDED."references",
+                summary     = COALESCE(vulnerability.summary, EXCLUDED.summary),
+                details     = COALESCE(vulnerability.details, EXCLUDED.details),
+                cwe         = CASE WHEN cardinality(EXCLUDED.cwe) > 0
+                                   THEN EXCLUDED.cwe ELSE vulnerability.cwe END,
+                -- A CVSS vector is better information than a distribution's single
+                -- word, so it is never overwritten by one.
+                cvss_vector = COALESCE(vulnerability.cvss_vector, EXCLUDED.cvss_vector),
+                cvss_score  = COALESCE(vulnerability.cvss_score, EXCLUDED.cvss_score),
+                severity    = COALESCE(vulnerability.severity, EXCLUDED.severity),
+                modified_at = GREATEST(vulnerability.modified_at, EXCLUDED.modified_at),
+                withdrawn_at = COALESCE(EXCLUDED.withdrawn_at, vulnerability.withdrawn_at),
+                "references" = CASE
+                                   WHEN jsonb_array_length(EXCLUDED."references") > 0
+                                   THEN EXCLUDED."references"
+                                   ELSE vulnerability."references" END,
                 revision    = vulnerability.revision + 1,
                 revised_at  = :now,
                 content_hash = EXCLUDED.content_hash
@@ -105,18 +97,56 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
             "now": now,
         },
     )
-    _replace_ranges(session, advisory)
-    return "revised" if revised else "new"
+
+    _replace_ranges(session, advisory, source_record=source_record)
+
+    session.execute(
+        text(
+            """
+            INSERT INTO advisory_source
+                (vulnerability_id, source_record, source, content_hash, modified_at)
+            VALUES (:id, :rec, :source, :hash, :modified)
+            ON CONFLICT (vulnerability_id, source_record) DO UPDATE SET
+                content_hash = EXCLUDED.content_hash,
+                modified_at  = EXCLUDED.modified_at,
+                ingested_at  = now()
+            """
+        ),
+        {
+            "id": advisory.id,
+            "rec": source_record,
+            "source": source,
+            "hash": digest,
+            "modified": advisory.modified_at,
+        },
+    )
+
+    return "new" if is_new_vulnerability else "revised"
 
 
-def _replace_ranges(session: Session, advisory: NormalisedAdvisory) -> None:
-    """Ranges are replaced wholesale.
+def _dominant_source(advisory: NormalisedAdvisory) -> str:
+    """The source this record speaks for, used only for reporting."""
+    for r in advisory.ranges:
+        if r.source:
+            return r.source
+    return advisory.source
 
-    A range that an advisory has retracted must disappear, not linger and keep
-    matching — a stale range is a false positive that nobody can explain.
+
+def _replace_ranges(
+    session: Session, advisory: NormalisedAdvisory, *, source_record: str
+) -> None:
+    """Replace this source record's ranges, and only its own.
+
+    A range the source has retracted must disappear rather than linger and keep
+    matching. But a CVE routinely carries ranges from several records — an upstream
+    advisory and each distribution's tracker — so deleting all of them drops every
+    other source's, which is the bug this replaces.
     """
     session.execute(
-        delete(AffectedRange).where(AffectedRange.vulnerability_id == advisory.id)
+        delete(AffectedRange).where(
+            AffectedRange.vulnerability_id == advisory.id,
+            AffectedRange.source_record == source_record,
+        )
     )
     for r in advisory.ranges:
         session.add(
@@ -132,6 +162,7 @@ def _replace_ranges(session: Session, advisory: NormalisedAdvisory) -> None:
                 distro=r.distro,
                 distro_release=r.distro_release,
                 channel=r.channel,
+                source_record=source_record,
             )
         )
 
