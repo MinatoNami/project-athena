@@ -33,7 +33,16 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -n "$CORE" && -n "$TOKEN" ]] || { echo "usage: install-node.sh --core URL --token TOKEN" >&2; exit 2; }
+# Re-running to upgrade the binary or change settings must not mint a new identity:
+# a second enrolment creates a second node and a duplicate host asset.
+ALREADY_ENROLLED=0
+[[ -s /var/lib/athena-node/node.json ]] && ALREADY_ENROLLED=1
+
+if (( ! ALREADY_ENROLLED )) && [[ -z "$CORE" || -z "$TOKEN" ]]; then
+    echo "usage: install-node.sh --core URL --token TOKEN" >&2
+    echo "       (a token is not needed when this host is already enrolled)" >&2
+    exit 2
+fi
 [[ $EUID -eq 0 ]] || { echo "run as root: the agent needs a service account and a unit file" >&2; exit 1; }
 [[ -f "$BIN_SRC" ]] || { echo "agent binary not found at $BIN_SRC" >&2; exit 1; }
 
@@ -48,11 +57,15 @@ install -m 0755 "$BIN_SRC" /usr/local/bin/athena-node
 install -m 0644 "$UNIT_SRC" /etc/systemd/system/athena-node.service
 install -d -m 0700 -o athena-node -g athena-node /var/lib/athena-node
 
-echo "  enrolling with $CORE"
-# Enrol as the service account so the key is created with the right ownership and
-# never exists as root-owned state the agent then cannot read.
-runuser -u athena-node -- env ATHENA_NODE_STATE=/var/lib/athena-node \
-    /usr/local/bin/athena-node enrol --core "$CORE" --token "$TOKEN"
+if (( ALREADY_ENROLLED )) && [[ -z "$TOKEN" ]]; then
+    echo "  already enrolled; keeping the existing identity"
+else
+    echo "  enrolling with $CORE"
+    # Enrol as the service account so the key is created with the right ownership
+    # and never exists as root-owned state the agent then cannot read.
+    runuser -u athena-node -- env ATHENA_NODE_STATE=/var/lib/athena-node \
+        /usr/local/bin/athena-node enrol --core "$CORE" --token "$TOKEN"
+fi
 
 # The unit ships a default DOCKER_HOST; override or clear it per this install.
 install -d -m 0755 /etc/systemd/system/athena-node.service.d
@@ -67,5 +80,18 @@ else
 fi
 
 systemctl daemon-reload
-systemctl enable --now athena-node
-echo "  athena-node is $(systemctl is-active athena-node)"
+systemctl enable athena-node >/dev/null
+# `enable --now` starts a stopped service but does nothing to a running one, so an
+# upgrade installed the new binary and left the old process serving — the install
+# reported success while changing nothing. Restart unconditionally.
+systemctl restart athena-node
+
+# Report what is actually running, not what was installed.
+sleep 1
+if systemctl is-active --quiet athena-node; then
+    echo "  athena-node is active, version $(/usr/local/bin/athena-node version)"
+else
+    echo "  athena-node FAILED to start:" >&2
+    systemctl --no-pager --lines=10 status athena-node >&2 || true
+    exit 1
+fi
