@@ -21,7 +21,7 @@ if [[ -f "$deploy_dir/.env" ]]; then
 
     ours=""
     if command -v docker >/dev/null 2>&1; then
-        ours="$(cd "$deploy_dir" && docker compose ps --format '{{.Ports}}' 2>/dev/null | tr ',' '\n' | grep -oE ':[0-9]+->' | tr -d ':->' | sort -u)"
+        ours="$(cd "$deploy_dir" && docker compose ps --format '{{.Ports}}' 2>/dev/null | tr ',' '\n' | grep -oE ':[0-9]+->' | grep -oE '[0-9]+' | sort -u)"
     fi
 
     for port in "${ATHENA_WEB_PORT:-8080}" "${ATHENA_API_PORT:-8000}"; do
