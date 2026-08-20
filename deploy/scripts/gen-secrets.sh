@@ -61,12 +61,20 @@ if [[ ! -f .env ]]; then
     cp .env.example .env
     # The Docker socket's group differs between Docker Desktop (0) and a Linux host
     # (the `docker` group). Detect it rather than making the operator look it up.
+    secret_gid="$(id -g)"
+    gid=""
     if [[ -S /var/run/docker.sock ]]; then
         gid="$(stat -c %g /var/run/docker.sock 2>/dev/null || echo 0)"
-        sed -i "s/^DOCKER_SOCKET_GID=.*/DOCKER_SOCKET_GID=${gid}/" .env
     fi
-    sed -i "s/^ATHENA_SECRET_GID=.*/ATHENA_SECRET_GID=$(id -g)/" .env
-    echo "  create  .env (secret gid $(id -g), docker socket gid ${gid:-0})"
+    # Compose rejects duplicate group_add entries, and the two groups coincide on
+    # Docker Desktop (both 0). Membership is already granted by the secret gid in
+    # that case, so point the second entry at nogroup rather than repeating it.
+    if [[ -z "$gid" || "$gid" == "$secret_gid" ]]; then
+        gid=65534
+    fi
+    sed -i "s/^DOCKER_SOCKET_GID=.*/DOCKER_SOCKET_GID=${gid}/" .env
+    sed -i "s/^ATHENA_SECRET_GID=.*/ATHENA_SECRET_GID=${secret_gid}/" .env
+    echo "  create  .env (secret gid ${secret_gid}, docker socket gid ${gid})"
 else
     # An existing .env predating this setting would leave containers unable to read
     # the secrets, which fails as an opaque permission error at startup.

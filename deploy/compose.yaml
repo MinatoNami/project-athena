@@ -92,6 +92,11 @@ services:
     group_add:
       - "${ATHENA_SECRET_GID:-0}"
       - "${DOCKER_SOCKET_GID:-0}"
+    # Vulnerability feeds are fetched from here, so the worker needs egress — the
+    # `private` network is internal-only and cannot resolve DNS. In M3 this becomes
+    # the path routed through the egress gateway, where the data-class policy and
+    # the "what left my network?" log live.
+    networks: [private, egress]
     volumes:
       # Launches sandboxed scanner containers as siblings. Socket access is
       # effectively root on the host: it is the residual risk recorded in
@@ -164,6 +169,8 @@ networks:
   # Carries the loopback-published node channel. Separate from `public` so the node
   # surface and the browser surface are not on the same network by accident.
   nodechannel: {}
+  # Outbound only: vulnerability feeds. Nothing is published on it.
+  egress: {}
   public: {}
 
 secrets:
