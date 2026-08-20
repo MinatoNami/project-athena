@@ -20,6 +20,7 @@ from athena.queue import (
     publish,
 )
 from athena.workers import (
+    intel_jobs,  # noqa: F401  (registers intel.* and correlate.*)
     node_ingest,  # noqa: F401  (registers ingest.node_observation)
     repository,  # noqa: F401  (registers scan.repository)
 )
