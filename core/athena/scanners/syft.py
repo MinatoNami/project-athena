@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import structlog
 
+from athena.config import get_settings
 from athena.inventory.purl import parse_purl
 from athena.inventory.service import ObservedComponent
 from athena.scanners.sandbox import Mount, SandboxResult, SandboxSpec, run_sandboxed
@@ -57,19 +58,40 @@ def scan_directory(path_in_volume: str, *, work_volume: str) -> tuple[SandboxRes
     return result, version
 
 
-def scan_image(reference: str) -> tuple[SandboxResult, str | None]:
-    """Run Syft against an image reference.
+# An image scan exports whole layers, so it needs real scratch space. SCRATCH is the
+# sandbox's own tmpfs, created per invocation and destroyed with the container.
+IMAGE_TMPFS = "4g"
+SCRATCH = "/tmp"  # noqa: S108
 
-    Needs network to pull the image, unlike a directory scan. That is the only
-    reason this differs from scan_directory, and it is why the reference is passed
-    as a fixed argument rather than interpolated into a shell.
+
+def scan_image(reference: str) -> tuple[SandboxResult, str | None]:
+    """Run Syft against an image, reading it from the local daemon.
+
+    Deliberately `docker:` and not `registry:`. Most images on a host are built
+    locally and exist in no registry at all — every scan of one failed trying to pull
+    it. The daemon is reached through the read-only proxy, so this needs no socket
+    access and cannot create anything.
+
+    HOME and the cache directory are pointed at the writable scratch mount: syft
+    fails outright if it cannot create a cache, and the sandbox root is read-only by
+    design.
     """
+    settings = get_settings()
     result = run_sandboxed(
         SandboxSpec(
             image=SYFT_IMAGE,
-            command=["scan", f"registry:{reference}", "-o", "syft-json", "-q"],
-            network="bridge",
+            command=["scan", f"docker:{reference}", "-o", "syft-json", "-q"],
+            network=settings.sandbox_network,
             timeout=SYFT_TIMEOUT,
+            tmpfs_size=IMAGE_TMPFS,
+            # These point at the sandbox's own tmpfs, which is created fresh per
+            # invocation and destroyed with the container — not a shared host /tmp.
+            env={
+                "DOCKER_HOST": settings.docker_proxy_host,
+                "HOME": SCRATCH,
+                "XDG_CACHE_HOME": SCRATCH,
+                "TMPDIR": SCRATCH,
+            },
         )
     )
     version = None

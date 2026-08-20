@@ -86,6 +86,8 @@ services:
       <<: *core-env
       ATHENA_WORKER_CONCURRENCY: ${ATHENA_WORKER_CONCURRENCY:-4}
       ATHENA_WORK_VOLUME: athena-work
+      ATHENA_SANDBOX_NETWORK: athena-nodechannel
+      ATHENA_DOCKER_PROXY_HOST: tcp://docker-proxy:2375
     # Group that owns the Docker socket. 0 on Docker Desktop, usually the `docker`
     # group's gid on a Linux host — `stat -c %g /var/run/docker.sock` to find it.
     # The worker still runs as an unprivileged user; only socket access is granted.
@@ -214,9 +216,12 @@ volumes:
 networks:
   private:
     internal: true
-  # Carries the loopback-published node channel. Separate from `public` so the node
-  # surface and the browser surface are not on the same network by accident.
-  nodechannel: {}
+  # Carries the loopback-published node channel and the read-only Docker proxy.
+  # Separate from `public` so the node surface and the browser surface are not on the
+  # same network by accident. Explicitly named: the worker passes it to `docker run`
+  # for sibling sandbox containers, which cannot resolve a compose-prefixed name.
+  nodechannel:
+    name: athena-nodechannel
   # Outbound only: vulnerability feeds. Nothing is published on it.
   egress: {}
   public: {}

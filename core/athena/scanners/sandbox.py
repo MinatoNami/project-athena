@@ -71,6 +71,9 @@ class SandboxSpec:
     pids: int = DEFAULT_PIDS
     workdir: str | None = None
     env: dict[str, str] = field(default_factory=dict)
+    # Scratch space inside the sandbox. An image scan exports whole layers, so it
+    # needs far more than a filesystem scan does.
+    tmpfs_size: str = "256m"
 
 
 def ensure_image(image: str, *, timeout: int = 600) -> None:
@@ -112,9 +115,9 @@ def run_sandboxed(spec: SandboxSpec) -> SandboxResult:
         "--security-opt", "no-new-privileges",
         "--cap-drop", "ALL",
         "--read-only",
-        # The sandbox container's own scratch space: noexec, nosuid, size-capped,
-        # and destroyed with the container.
-        "--tmpfs", "/tmp:rw,noexec,nosuid,size=256m",  # noqa: S108
+        # The sandbox container's own scratch space: nosuid, size-capped, and
+        # destroyed with the container.
+        "--tmpfs", f"/tmp:rw,nosuid,size={spec.tmpfs_size}",  # noqa: S108
         "--user", "10001:10001",
     ]
     for mount in spec.mounts:
