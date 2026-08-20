@@ -53,10 +53,15 @@ services:
   api:
     <<: *core
     command: ["serve"]
-    # Published on loopback only, so a node agent running on this host can reach the
-    # enrolment and task endpoints. Still not internet-facing: to enrol nodes on OTHER
-    # machines, expose core deliberately — `tailscale serve` or a reverse proxy with
-    # TLS — rather than widening this bind.
+    # Published on loopback only, so a node agent running on this host can enrol and
+    # poll. Not internet-facing: to enrol nodes on OTHER machines, expose core
+    # deliberately — `tailscale serve` or a reverse proxy with TLS — rather than
+    # widening this bind.
+    #
+    # A host port cannot be published from `private` alone: Docker does not run a
+    # proxy for an internal network, so the binding is accepted and silently never
+    # takes effect. Hence the dedicated non-internal `nodechannel` network.
+    networks: [private, nodechannel]
     ports:
       - "${ATHENA_API_BIND:-127.0.0.1}:${ATHENA_API_PORT:-8000}:8000"
     healthcheck:
@@ -156,6 +161,9 @@ volumes:
 networks:
   private:
     internal: true
+  # Carries the loopback-published node channel. Separate from `public` so the node
+  # surface and the browser surface are not on the same network by accident.
+  nodechannel: {}
   public: {}
 
 secrets:

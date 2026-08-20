@@ -97,12 +97,17 @@ preflight() {
     *) die "Unexpected preflight response: $report" ;;
   esac
 
-  local version free_gb
+  local version free_gb busy
   version="$(cut -f2 <<<"$report")"
   free_gb="$(cut -f3 <<<"$report")"
+  busy="$(cut -f4 <<<"$report")"
   ok "Remote ready — $version, ${free_gb}GB free on /"
   if [[ "$free_gb" =~ ^[0-9]+$ ]] && (( free_gb < 5 )); then
     warn "Only ${free_gb}GB free on the remote; image builds may fail."
+  fi
+  if [[ -n "$busy" && "$busy" != "none" ]]; then
+    die "Port(s) ${busy} are already in use on ${HOST}. Change ATHENA_WEB_PORT or
+    ATHENA_API_PORT in ~/${REMOTE_DIR}/deploy/.env, then deploy again."
   fi
 
   if [[ -d "$REPO_ROOT/.git" ]]; then

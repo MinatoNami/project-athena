@@ -1,0 +1,42 @@
+[Unit]
+Description=Athena node agent
+Documentation=https://github.com/MinatoNami/project-athena
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/athena-node run
+Restart=always
+RestartSec=10
+
+# The agent observes; it does not need to change anything on this host, and the
+# capability set contains no execution path. Confine it accordingly.
+User=athena-node
+Group=athena-node
+StateDirectory=athena-node
+StateDirectoryMode=0700
+Environment=ATHENA_NODE_STATE=/var/lib/athena-node
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+
+# A security agent must not degrade the host it protects.
+CPUQuota=50%
+MemoryMax=256M
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target
