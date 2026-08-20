@@ -24,7 +24,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from athena.db.base import Base
@@ -364,5 +364,125 @@ class NodeNonce(Base):
     )
     nonce: Mapped[str] = mapped_column(Text, primary_key=True)
     seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+# ─── vulnerability intelligence (M2) ─────────────────────────────────────────
+
+
+class Vulnerability(Base):
+    __tablename__ = "vulnerability"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    aliases: Mapped[list] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    summary: Mapped[str | None] = mapped_column(Text)
+    details: Mapped[str | None] = mapped_column(Text)
+    cwe: Mapped[list] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    cvss_vector: Mapped[str | None] = mapped_column(Text)
+    cvss_score: Mapped[float | None] = mapped_column(Float)
+    severity: Mapped[str | None] = mapped_column(String(16))
+    epss_score: Mapped[float | None] = mapped_column(Float)
+    epss_percentile: Mapped[float | None] = mapped_column(Float)
+    epss_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    kev: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    kev_ransomware: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    kev_added_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    exploit_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    modified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    references_: Mapped[list] = mapped_column("references", JSONB, nullable=False, default=list)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    revised_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    content_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    first_ingested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class AffectedRange(Base):
+    __tablename__ = "affected_range"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    vulnerability_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("vulnerability.id", ondelete="CASCADE"), nullable=False
+    )
+    ecosystem: Mapped[str] = mapped_column(String(32), nullable=False)
+    package: Mapped[str] = mapped_column(Text, nullable=False)
+    introduced: Mapped[str | None] = mapped_column(Text)
+    fixed: Mapped[str | None] = mapped_column(Text)
+    last_affected: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    authority: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    distro: Mapped[str | None] = mapped_column(String(32))
+    distro_release: Mapped[str | None] = mapped_column(String(32))
+
+
+class IntelSource(Base):
+    __tablename__ = "intel_source"
+
+    name: Mapped[str] = mapped_column(String(32), primary_key=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    cursor: Mapped[str | None] = mapped_column(Text)
+    advisories: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class Finding(Base):
+    __tablename__ = "finding"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    group_key: Mapped[str] = mapped_column(Text, nullable=False)
+    vulnerability_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("vulnerability.id", ondelete="CASCADE"), nullable=False
+    )
+    asset_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("asset.id", ondelete="CASCADE"), nullable=False
+    )
+    component_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("component.id", ondelete="CASCADE"), nullable=False
+    )
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="discovered")
+    match_method: Mapped[str] = mapped_column(String(32), nullable=False)
+    match_confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    matched_range_id: Mapped[int | None] = mapped_column(BigInteger)
+    fixed_version: Mapped[str | None] = mapped_column(Text)
+    risk_score: Mapped[int | None] = mapped_column(SmallInteger)
+    risk_band: Mapped[str | None] = mapped_column(String(16))
+    confidence: Mapped[float | None] = mapped_column(Float)
+    advisory_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    first_seen: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    state_changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_evaluated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint(
+            "vulnerability_id", "asset_id", "component_id", name="finding_instance_uniq"
+        ),
+    )
+
+
+class Evidence(Base):
+    __tablename__ = "evidence"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    finding_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("finding.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    claim: Mapped[str] = mapped_column(Text, nullable=False)
+    value: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    source_ref: Mapped[str | None] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
