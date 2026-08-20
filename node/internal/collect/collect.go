@@ -308,7 +308,14 @@ func Docker() (DockerState, error) {
 			state.Images = append(state.Images, DockerImage{Digest: f[0], Repository: f[1], Tag: f[2]})
 		}
 	} else {
-		return state, fmt.Errorf("docker unavailable: %w", err)
+		// Distinguishing "no Docker here" from "the read-only proxy is unreachable"
+		// matters: the first is a fact about the host, the second is a coverage gap
+		// the operator can fix.
+		host := os.Getenv("DOCKER_HOST")
+		if host == "" {
+			return state, fmt.Errorf("docker unavailable and no DOCKER_HOST set: %w", err)
+		}
+		return state, fmt.Errorf("docker API at %s unreachable: %w", host, err)
 	}
 
 	if out, err := run("docker", "ps", "-a", "--format",

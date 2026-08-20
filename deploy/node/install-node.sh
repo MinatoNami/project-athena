@@ -7,17 +7,18 @@
 # Installs the binary, creates an unprivileged service account, enrols, and starts
 # the agent under systemd. Re-running with a new token re-enrols.
 #
-#   --allow-docker   also add the agent to the docker group, so it can inventory
-#                    images and containers.
+#   --docker-proxy URL   read-only Docker API for container inventory
+#                        (default tcp://127.0.0.1:2375, as published by the stack)
+#   --no-docker          disable container inventory entirely
 #
-# Membership of the docker group is equivalent to root on this host: anyone who can
-# reach the socket can start a privileged container. Athena's agent is read-only by
-# design, so this widens what a compromise of the agent would be worth. Without it,
-# inspect_docker is reported as a failed collection rather than as "no containers" —
-# the gap is visible instead of silent. Opt in deliberately.
+# Container inventory reaches Docker through a read-only proxy rather than through
+# docker group membership, which is equivalent to root on this host. The proxy
+# permits only GET on containers and images, so nothing on this path can create or
+# start anything. If it is unreachable, inspect_docker is recorded as a failed
+# collection rather than as "no containers" — the gap stays visible.
 set -euo pipefail
 
-CORE=""; TOKEN=""; ALLOW_DOCKER=0
+CORE=""; TOKEN=""; DOCKER_PROXY="tcp://127.0.0.1:2375"
 BIN_SRC="$(dirname "${BASH_SOURCE[0]}")/athena-node"
 UNIT_SRC="$(dirname "${BASH_SOURCE[0]}")/athena-node.service"
 
@@ -26,7 +27,8 @@ while [[ $# -gt 0 ]]; do
         --core)   CORE="$2"; shift 2 ;;
         --token)  TOKEN="$2"; shift 2 ;;
         --binary) BIN_SRC="$2"; shift 2 ;;
-        --allow-docker) ALLOW_DOCKER=1; shift ;;
+        --docker-proxy) DOCKER_PROXY="$2"; shift 2 ;;
+        --no-docker) DOCKER_PROXY=""; shift ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -52,16 +54,16 @@ echo "  enrolling with $CORE"
 runuser -u athena-node -- env ATHENA_NODE_STATE=/var/lib/athena-node \
     /usr/local/bin/athena-node enrol --core "$CORE" --token "$TOKEN"
 
-if (( ALLOW_DOCKER )); then
-    if getent group docker >/dev/null; then
-        usermod -aG docker athena-node
-        echo "  added athena-node to the docker group (root-equivalent on this host)"
-    else
-        echo "  no docker group on this host; skipping --allow-docker" >&2
-    fi
+# The unit ships a default DOCKER_HOST; override or clear it per this install.
+install -d -m 0755 /etc/systemd/system/athena-node.service.d
+if [[ -n "$DOCKER_PROXY" ]]; then
+    printf '[Service]\nEnvironment=DOCKER_HOST=%s\n' "$DOCKER_PROXY" \
+        > /etc/systemd/system/athena-node.service.d/docker.conf
+    echo "  container inventory via $DOCKER_PROXY (read-only; no docker group)"
 else
-    echo "  container inventory disabled (pass --allow-docker to enable; it is"
-    echo "  root-equivalent, and the gap is reported rather than hidden)"
+    printf '[Service]\nEnvironment=DOCKER_HOST=\n' \
+        > /etc/systemd/system/athena-node.service.d/docker.conf
+    echo "  container inventory disabled; the gap will be reported, not hidden"
 fi
 
 systemctl daemon-reload

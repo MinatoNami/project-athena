@@ -17,6 +17,10 @@ Group=athena-node
 StateDirectory=athena-node
 StateDirectoryMode=0700
 Environment=ATHENA_NODE_STATE=/var/lib/athena-node
+# Read-only Docker API, so container inventory needs no docker group membership
+# (which would be root-equivalent). Set empty to disable container inventory
+# entirely — the gap is then reported rather than silently absent.
+Environment=DOCKER_HOST=tcp://127.0.0.1:2375
 
 NoNewPrivileges=true
 PrivateTmp=true

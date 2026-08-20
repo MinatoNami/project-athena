@@ -138,6 +138,54 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # Read-only view of the Docker API for the node agent.
+  #
+  # The agent needs to inventory images and containers, which are where most of a
+  # modern estate's vulnerability surface lives. The obvious way — adding the agent
+  # to the docker group — is root-equivalent on the host, and the agent is the one
+  # component that takes input from the network.
+  #
+  # This moves socket access to a component that has no network surface of its own
+  # and permits only GET on containers and images. Even a full compromise of the
+  # proxy cannot create a container, because POST is refused.
+  #
+  # Residual risk: any local user can read container metadata over loopback. That is
+  # a great deal less than root, and it is the trade being made deliberately.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy@sha256:9e4b9e7517a6b660f2cc903a19b257b1852d5b3344794e3ea334ff00ae677ac2
+    restart: unless-stopped
+    environment:
+      # Everything not listed defaults to 0. POST is refused, so nothing can be
+      # created, started, stopped, or deleted through this path.
+      CONTAINERS: 1
+      IMAGES: 1
+      VERSION: 1
+      POST: 0
+      # Explicitly denied, since these are the paths that turn read access into
+      # host compromise.
+      EXEC: 0
+      BUILD: 0
+      COMMIT: 0
+      VOLUMES: 0
+      NETWORKS: 0
+      SECRETS: 0
+      SWARM: 0
+      SYSTEM: 0
+      PLUGINS: 0
+      CONFIGS: 0
+      DISTRIBUTION: 0
+      NODES: 0
+      SERVICES: 0
+      SESSION: 0
+      TASKS: 0
+      INFO: 0
+      AUTH: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "${ATHENA_DOCKER_PROXY_BIND:-127.0.0.1}:${ATHENA_DOCKER_PROXY_PORT:-2375}:2375"
+    networks: [nodechannel]
+
   web:
     image: athena-web:${ATHENA_TAG:-dev}
     build:
