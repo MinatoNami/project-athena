@@ -117,7 +117,10 @@ def run_sandboxed(spec: SandboxSpec) -> SandboxResult:
         "--read-only",
         # The sandbox container's own scratch space: nosuid, size-capped, and
         # destroyed with the container.
-        "--tmpfs", f"/tmp:rw,nosuid,size={spec.tmpfs_size}",  # noqa: S108
+        # mode=1777 matters: Docker mounts a tmpfs root-owned by default, and the
+        # sandbox runs unprivileged with a read-only root — so without it the
+        # scanner has nowhere at all to write and fails with a bare permission error.
+        "--tmpfs", f"/tmp:rw,nosuid,mode=1777,size={spec.tmpfs_size}",  # noqa: S108
         "--user", "10001:10001",
     ]
     for mount in spec.mounts:

@@ -39,14 +39,21 @@ def scan_image(payload: dict[str, Any]) -> dict[str, Any]:
         tag = asset.attributes.get("tag")
         display = asset.display_name
 
-    if not digest or not repository or repository == "<none>":
-        _fail(asset_id, "Image has no resolvable repository reference to pull")
+    if not repository or repository == "<none>":
+        _fail(asset_id, "Image has no repository reference, so it cannot be located")
         return {"status": "failed", "reason": "unreferencable image"}
 
-    # Prefer the digest; fall back to the tag only when there is nothing else, and
-    # record which was used so the result's precision is visible.
-    reference = f"{repository}@{digest}" if digest.startswith("sha256:") else f"{repository}:{tag}"
-    by_digest = reference.count("@") == 1
+    # A locally built image has no resolvable repository digest, so `repo@sha256:…`
+    # does not name anything the daemon can find. Scan by tag when there is one and
+    # record which reference was used, because a tag is a moving pointer and the
+    # precision of the result depends on which was possible.
+    if tag and tag != "<none>":
+        reference, by_digest = f"{repository}:{tag}", False
+    elif digest and digest.startswith("sha256:"):
+        reference, by_digest = f"{repository}@{digest}", True
+    else:
+        _fail(asset_id, "Image has neither a usable tag nor a repository digest")
+        return {"status": "failed", "reason": "unreferencable image"}
 
     try:
         result, tool_version = syft.scan_image(reference)
