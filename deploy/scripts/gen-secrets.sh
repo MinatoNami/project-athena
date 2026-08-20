@@ -19,12 +19,10 @@ SECRET_MODE=640
 gen() {
     local name="$1"; shift
     if [[ -s "secrets/$name" ]]; then
-        chmod "$SECRET_MODE" "secrets/$name"
         echo "  keep    $name"
         return 0
     fi
     ( set -o noclobber; "$@" > "secrets/$name" )
-    chmod "$SECRET_MODE" "secrets/$name"
     echo "  create  $name"
 }
 
@@ -40,9 +38,7 @@ if [[ -s secrets/grant_private_key ]]; then
     echo "  keep    grant keypair"
 else
     ( set -o noclobber; openssl genpkey -algorithm ed25519 -out secrets/grant_private_key )
-    chmod "$SECRET_MODE" secrets/grant_private_key
     openssl pkey -in secrets/grant_private_key -pubout -outform DER | tail -c 32 > secrets/grant_public_key
-    chmod "$SECRET_MODE" secrets/grant_public_key
     echo "  create  grant keypair"
 fi
 
@@ -50,13 +46,16 @@ fi
 # an executor grant authorise different things, and one compromise must not confer
 # the other.
 if [[ -s secrets/node_signing_key ]]; then
-    chmod "$SECRET_MODE" secrets/node_signing_key
     echo "  keep    node signing key"
 else
     ( set -o noclobber; openssl genpkey -algorithm ed25519 -out secrets/node_signing_key )
-    chmod "$SECRET_MODE" secrets/node_signing_key
     echo "  create  node signing key"
 fi
+
+# Applied once, to everything, rather than per branch: the first version set the mode
+# at each creation site and missed the "already exists" paths, so a redeployed host
+# kept 0600 files that its containers could not read.
+chmod "$SECRET_MODE" secrets/* 2>/dev/null || true
 
 if [[ ! -f .env ]]; then
     cp .env.example .env
