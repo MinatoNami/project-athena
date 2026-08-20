@@ -294,6 +294,62 @@ def intel_sources(
     }
 
 
+@router.get("/ai/status")
+def ai_status(
+    _: Principal = Depends(current_principal), session: Session = Depends(db)
+) -> dict[str, Any]:
+    """Whether the model is reachable, and what has left the network.
+
+    On a self-hosted security tool this is the answer to the question that matters
+    most, so it is a first-class view rather than something to reconstruct from logs.
+    """
+    from sqlalchemy import func as sqlfunc
+
+    from athena.db.models import EgressLog
+    from athena.llm import health
+
+    totals = session.execute(
+        select(
+            sqlfunc.count(),
+            sqlfunc.count().filter(EgressLog.blocked.is_(True)),
+            sqlfunc.count().filter(EgressLog.local.is_(False)),
+            sqlfunc.coalesce(sqlfunc.sum(EgressLog.prompt_tokens), 0),
+            sqlfunc.coalesce(sqlfunc.sum(EgressLog.completion_tokens), 0),
+        ).select_from(EgressLog)
+    ).one()
+
+    recent = session.execute(
+        select(EgressLog).order_by(EgressLog.at.desc()).limit(20)
+    ).scalars().all()
+
+    return {
+        "model": health(),
+        "egress": {
+            "calls": totals[0],
+            "blocked": totals[1],
+            # The number that matters in local_only mode: it must stay zero.
+            "left_the_network": totals[2],
+            "prompt_tokens": totals[3],
+            "completion_tokens": totals[4],
+        },
+        "recent": [
+            {
+                "at": e.at,
+                "purpose": e.purpose,
+                "endpoint": e.endpoint,
+                "model": e.model,
+                "local": e.local,
+                "data_classes": e.data_classes,
+                "blocked": e.blocked,
+                "reason": e.reason,
+                "tokens": e.prompt_tokens + e.completion_tokens,
+                "duration_ms": e.duration_ms,
+            }
+            for e in recent
+        ],
+    }
+
+
 @router.post("/intel/refresh", status_code=status.HTTP_202_ACCEPTED)
 def refresh_intel(
     principal: Principal = Depends(current_principal),

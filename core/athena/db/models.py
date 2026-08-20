@@ -523,3 +523,30 @@ class Evidence(Base):
     observed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class EgressLog(Base):
+    """Every outbound model call, including refused ones.
+
+    The payload is never stored — only its digest — so the log can correlate a call
+    without becoming a copy of everything ever sent.
+    """
+
+    __tablename__ = "egress_log"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False)
+    endpoint: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    local: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    data_classes: Mapped[list] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    blocked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    payload_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    bytes_out: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

@@ -67,6 +67,15 @@ class Settings(BaseSettings):
     sandbox_network: str = "athena-nodechannel"
     docker_proxy_host: str = "tcp://docker-proxy:2375"
 
+    # ─── AI layer ───────────────────────────────────────────────────────────
+    # local_only refuses any endpoint that is not demonstrably inside the operator's
+    # own network, so a misconfiguration cannot quietly start shipping inventory to
+    # a hosted provider.
+    ai_mode: str = "local_only"
+    llm_base_url: str = "http://127.0.0.1:1234"
+    llm_model: str = "qwen/qwen3.6-35b-a3b"
+    llm_timeout: float = 300.0
+
     log_level: str = "INFO"
     environment: str = Field(default="production")
 

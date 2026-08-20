@@ -1,6 +1,25 @@
 """AI layer.
 
-Deliberately empty in M0 — it exists so the import-boundary test has something real to
-assert against: `executor` must never be able to import this package.
-Populated in M3 (Technical Design §7).
+Every outbound call goes through athena.llm.gateway. There is deliberately no
+provider client anywhere else in the codebase, so the egress policy cannot be
+bypassed by accident.
 """
+
+from athena.llm.gateway import (
+    Completion,
+    ModelUnavailable,
+    complete,
+    complete_json,
+    health,
+)
+from athena.llm.policy import DataClass, EgressBlocked
+
+__all__ = [
+    "complete",
+    "complete_json",
+    "health",
+    "Completion",
+    "ModelUnavailable",
+    "EgressBlocked",
+    "DataClass",
+]
