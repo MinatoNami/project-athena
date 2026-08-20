@@ -81,12 +81,17 @@ def _sweep_correlation(session, last_run: dict[str, float], now: float) -> None:
 
     from athena.queue import enqueue
 
+    # Only assets that actually carry components are worth correlating. A host with
+    # thousands of packages was being crowded out of the batch by hundreds of service
+    # assets that have none, so the one asset with anything to match never ran.
     rows = session.execute(
         text(
-            "SELECT id::text, extract(epoch FROM last_inventoried_at)::bigint AS stamp "
-            "  FROM asset "
-            " WHERE tombstoned_at IS NULL AND last_inventoried_at IS NOT NULL "
-            " ORDER BY last_inventoried_at DESC LIMIT 200"
+            "SELECT a.id::text, extract(epoch FROM a.last_inventoried_at)::bigint AS stamp "
+            "  FROM asset a "
+            " WHERE a.tombstoned_at IS NULL "
+            "   AND a.last_inventoried_at IS NOT NULL "
+            "   AND EXISTS (SELECT 1 FROM asset_component ac WHERE ac.asset_id = a.id) "
+            " ORDER BY a.last_inventoried_at DESC LIMIT 200"
         )
     ).all()
     for asset_id, stamp in rows:
