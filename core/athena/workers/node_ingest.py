@@ -108,13 +108,20 @@ def _distro_release(data: dict) -> tuple[str | None, str | None]:
     Correlation needs this: a fix in Ubuntu 22.04 says nothing about 24.04, and
     comparing across releases makes a vulnerable host look patched.
     """
+    import re
+
     distro = (data.get("os_id") or "").strip().lower() or None
     release = (data.get("os_version_id") or "").strip() or None
-    if release is None:
-        # Fall back to the pretty name for agents predating os_version_id.
-        import re
 
-        match = re.search(r"(\d+\.\d+)", data.get("os_version") or "")
+    # Agents predating os_id/os_version_id report only the pretty name. Deriving
+    # both from it keeps an older agent fully correlatable rather than leaving the
+    # distribution unknown, which would silently disable distro-specific matching.
+    pretty = (data.get("os_version") or "").strip()
+    if distro is None and pretty:
+        first = pretty.split()[0].lower()
+        distro = first or None
+    if release is None and pretty:
+        match = re.search(r"(\d+\.\d+)", pretty)
         release = match.group(1) if match else None
     return distro, release
 
@@ -161,6 +168,24 @@ def _packages(session, *, asset: Asset, run, data: list) -> dict[str, Any]:
     return {"packages": count}
 
 
+def _process_name(raw: str | None) -> str | None:
+    """Pull the process name out of ss's users field.
+
+    ss renders it as users:(("sshd",pid=123,fd=3)); storing that verbatim made a
+    service asset's name unreadable. Returns None when the agent could not see the
+    owner, which is normal for an unprivileged agent and is recorded rather than
+    guessed at.
+    """
+    if not raw:
+        return None
+    import re
+
+    match = re.search(r'\(\("([^"]+)"', raw)
+    if match:
+        return match.group(1)
+    return raw if raw.replace("-", "").replace("_", "").isalnum() else None
+
+
 def _ports(session, *, asset: Asset, data: list) -> dict[str, Any]:
     """Register listening services as their own assets.
 
@@ -189,12 +214,27 @@ def _ports(session, *, asset: Asset, data: list) -> dict[str, Any]:
         except (IdentityError, ValueError):
             continue
 
+        process = _process_name(entry.get("process"))
         service, _ = register_asset(
             session,
             kind=AssetKind.SERVICE,
             identity_key=key,
-            display_name=f"{entry.get('process') or protocol}:{port}",
-            attributes={"address": address, "protocol": protocol, "port": port},
+            # The bind address is part of the name because it is the exposure fact:
+            # 0.0.0.0:6379 and 127.0.0.1:6379 are very different things to see in a
+            # list. The process name is included when the agent could see it — an
+            # unprivileged agent cannot read other users' socket owners.
+            display_name=(
+                f"{process} {protocol}/{port}"
+                if process
+                else f"{protocol}/{port} on {address or '*'}"
+            ),
+            attributes={
+                "address": address,
+                "protocol": protocol,
+                "port": port,
+                "process": process,
+                "process_known": process is not None,
+            },
         )
         service.exposure = exposure
         service.last_inventoried_at = datetime.now(UTC)

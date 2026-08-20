@@ -106,6 +106,9 @@ def list_findings(
                 "component": f"{component.name} {component.version}",
                 "ecosystem": component.ecosystem,
                 "fixed_version": finding.fixed_version,
+                # A fix only available through Ubuntu Pro is not an upgrade the
+                # operator can necessarily perform.
+                "fix_channel": finding.fix_channel,
                 "state": finding.state,
                 "match_method": finding.match_method,
                 "match_confidence": finding.match_confidence,
@@ -194,6 +197,9 @@ def get_finding(
         "match_method": finding.match_method,
         "match_confidence": finding.match_confidence,
         "fixed_version": finding.fixed_version,
+        "fix_channel": finding.fix_channel,
+        "matched_source": finding.matched_source,
+        "matched_release": finding.matched_release,
         "advisory_revision": finding.advisory_revision,
         "first_seen": finding.first_seen,
         "last_evaluated_at": finding.last_evaluated_at,
@@ -247,7 +253,18 @@ def get_finding(
                 "last_affected": r.last_affected,
                 "distro": r.distro,
                 "distro_release": r.distro_release,
-                "used_for_match": r.id == finding.matched_range_id,
+                "channel": r.channel,
+                # Falls back to the denormalised facts: the referenced row is
+                # replaced whenever the advisory is revised.
+                "used_for_match": (
+                    r.id == finding.matched_range_id
+                    or (
+                        finding.matched_range_id is None
+                        and r.source == finding.matched_source
+                        and r.distro_release == finding.matched_release
+                        and r.fixed == finding.fixed_version
+                    )
+                ),
             }
             for r in ranges
         ],

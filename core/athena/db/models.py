@@ -413,6 +413,7 @@ class AffectedRange(Base):
     authority: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     distro: Mapped[str | None] = mapped_column(String(32))
     distro_release: Mapped[str | None] = mapped_column(String(32))
+    channel: Mapped[str] = mapped_column(String(16), nullable=False, default="standard")
 
 
 class IntelSource(Base):
@@ -454,7 +455,13 @@ class Finding(Base):
     state: Mapped[str] = mapped_column(finding_state_enum, nullable=False, default="discovered")
     match_method: Mapped[str] = mapped_column(String(32), nullable=False)
     match_confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    # matched_range_id is a convenience only: affected_range rows are replaced
+    # wholesale when an advisory is revised, so the identifying facts are kept here
+    # too rather than behind a reference that dangles.
     matched_range_id: Mapped[int | None] = mapped_column(BigInteger)
+    matched_source: Mapped[str | None] = mapped_column(String(32))
+    matched_release: Mapped[str | None] = mapped_column(String(32))
+    fix_channel: Mapped[str | None] = mapped_column(String(16))
     fixed_version: Mapped[str | None] = mapped_column(Text)
     risk_score: Mapped[int | None] = mapped_column(SmallInteger)
     risk_band: Mapped[str | None] = mapped_column(String(16))

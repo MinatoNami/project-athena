@@ -22,6 +22,10 @@ class NormalisedRange:
     authority: Authority = Authority.UPSTREAM_ADVISORY
     distro: str | None = None
     distro_release: str | None = None
+    # How the fix is delivered. "esm" and "fips" are only installable with an Ubuntu
+    # Pro entitlement, so recommending one without saying so is advice the operator
+    # may be unable to follow.
+    channel: str = "standard"
 
 
 @dataclass
@@ -57,7 +61,7 @@ def content_hash(advisory: NormalisedAdvisory) -> str:
         "ranges": sorted(
             (
                 [r.ecosystem, r.package, r.introduced, r.fixed, r.last_affected,
-                 r.source, int(r.authority), r.distro, r.distro_release]
+                 r.source, int(r.authority), r.distro, r.distro_release, r.channel]
                 for r in advisory.ranges
             ),
             key=lambda row: tuple("" if v is None else str(v) for v in row),

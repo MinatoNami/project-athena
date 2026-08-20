@@ -59,6 +59,9 @@ class CandidateFinding:
     match_method: str
     match_confidence: float
     matched_range_id: int | None
+    matched_source: str | None
+    matched_release: str | None
+    fix_channel: str | None
     fixed_version: str | None
     advisory_revision: int
     rationale: str
@@ -211,6 +214,40 @@ def evaluate(
     return False, "none", 0.0, None, rationale, conflicts
 
 
+def _candidate(
+    *,
+    vulnerability_id: str,
+    asset_id,
+    component_id,
+    method: str,
+    confidence: float,
+    matched_range: AffectedRange | None,
+    revision: int,
+    rationale: str,
+    conflicts: list[dict[str, Any]],
+) -> CandidateFinding:
+    """Build a candidate, copying the matched range's identifying facts.
+
+    They are copied rather than referenced because affected_range is replaced
+    wholesale on every advisory revision.
+    """
+    return CandidateFinding(
+        vulnerability_id=vulnerability_id,
+        asset_id=asset_id,
+        component_id=component_id,
+        match_method=method,
+        match_confidence=confidence,
+        matched_range_id=matched_range.id if matched_range else None,
+        matched_source=matched_range.source if matched_range else None,
+        matched_release=matched_range.distro_release if matched_range else None,
+        fix_channel=getattr(matched_range, "channel", None) if matched_range else None,
+        fixed_version=matched_range.fixed if matched_range else None,
+        advisory_revision=revision,
+        rationale=rationale,
+        conflicts=conflicts,
+    )
+
+
 def _ranges_for(session: Session, ecosystem: str, package: str) -> dict[str, list[AffectedRange]]:
     """Every range touching this package, grouped by vulnerability."""
     rows = session.execute(
@@ -247,6 +284,9 @@ def _record(
         existing.match_method = candidate.match_method
         existing.match_confidence = candidate.match_confidence
         existing.matched_range_id = candidate.matched_range_id
+        existing.matched_source = candidate.matched_source
+        existing.matched_release = candidate.matched_release
+        existing.fix_channel = candidate.fix_channel
         existing.fixed_version = candidate.fixed_version
         existing.advisory_revision = candidate.advisory_revision
         existing.last_evaluated_at = now
@@ -267,6 +307,9 @@ def _record(
         match_method=candidate.match_method,
         match_confidence=candidate.match_confidence,
         matched_range_id=candidate.matched_range_id,
+        matched_source=candidate.matched_source,
+        matched_release=candidate.matched_release,
+        fix_channel=candidate.fix_channel,
         fixed_version=candidate.fixed_version,
         advisory_revision=candidate.advisory_revision,
     )
@@ -307,9 +350,18 @@ def _attach_evidence(
             "method": candidate.match_method,
             "confidence": candidate.match_confidence,
             "fixed_version": candidate.fixed_version,
+            "fix_channel": candidate.fix_channel,
         },
         source_ref=f"advisory:{vulnerability.id}@rev{vulnerability.revision}",
     )
+    if candidate.fix_channel and candidate.fix_channel != "standard":
+        add(
+            "fix_availability",
+            f"The only published fix ({candidate.fixed_version}) is delivered through "
+            f"the {candidate.fix_channel.upper()} channel, which needs an Ubuntu Pro "
+            "entitlement. Without one this package cannot be upgraded on this host.",
+            {"channel": candidate.fix_channel, "fixed_version": candidate.fixed_version},
+        )
     for conflict in candidate.conflicts:
         add(
             "source_conflict",
@@ -356,15 +408,14 @@ def correlate_asset(session: Session, asset: Asset) -> dict[str, Any]:
             matched += 1
             _, is_new = _record(
                 session,
-                CandidateFinding(
+                _candidate(
                     vulnerability_id=vuln_id,
                     asset_id=asset.id,
                     component_id=component.id,
-                    match_method=method,
-                    match_confidence=confidence,
-                    matched_range_id=matched_range.id if matched_range else None,
-                    fixed_version=matched_range.fixed if matched_range else None,
-                    advisory_revision=vulnerability.revision,
+                    method=method,
+                    confidence=confidence,
+                    matched_range=matched_range,
+                    revision=vulnerability.revision,
                     rationale=rationale,
                     conflicts=conflicts,
                 ),
@@ -419,15 +470,14 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
             matched += 1
             _, is_new = _record(
                 session,
-                CandidateFinding(
+                _candidate(
                     vulnerability_id=vulnerability_id,
                     asset_id=asset_id,
                     component_id=component.id,
-                    match_method=method,
-                    match_confidence=confidence,
-                    matched_range_id=matched_range.id if matched_range else None,
-                    fixed_version=matched_range.fixed if matched_range else None,
-                    advisory_revision=vulnerability.revision,
+                    method=method,
+                    confidence=confidence,
+                    matched_range=matched_range,
+                    revision=vulnerability.revision,
                     rationale=rationale,
                     conflicts=conflicts,
                 ),

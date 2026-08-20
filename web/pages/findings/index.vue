@@ -145,7 +145,14 @@ function ageLabel(seconds: number | null) {
                   <span class="muted"> · {{ i.tier }}</span>
                 </td>
                 <td><code>{{ i.component }}</code></td>
-                <td>{{ i.fixed_version || '—' }}</td>
+                <td>
+                  {{ i.fixed_version || '—' }}
+                  <span v-if="i.fix_channel && i.fix_channel !== 'standard'"
+                        class="channel"
+                        :title="`Delivered through ${i.fix_channel.toUpperCase()} — needs an Ubuntu Pro entitlement`">
+                    {{ i.fix_channel }}
+                  </span>
+                </td>
                 <td class="muted small">
                   {{ i.match_method }}
                   <span :title="'How the match was made, not whether it is exploitable here'">
@@ -185,4 +192,9 @@ function ageLabel(seconds: number | null) {
 .detail { padding: .2rem .1rem 1rem; }
 .small { font-size: .8rem; }
 .bad { color: var(--crit); font-weight: 600; }
+.channel {
+  font-size: .65rem; text-transform: uppercase; letter-spacing: .04em;
+  border: 1px solid var(--rule); border-radius: 3px; padding: 0 .25rem;
+  color: var(--warn-ink); margin-left: .3rem;
+}
 </style>

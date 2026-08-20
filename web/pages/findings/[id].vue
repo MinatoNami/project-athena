@@ -35,7 +35,18 @@ useHead({ title: () => f.value?.vulnerability?.id || 'Finding' })
           <tr><th>Installed</th>
             <td><code>{{ f.component.name }} {{ f.component.version }}</code>
               <span class="muted"> · {{ f.component.ecosystem }}</span></td></tr>
-          <tr><th>Fixed in</th><td>{{ f.fixed_version || 'no fix recorded' }}</td></tr>
+          <tr><th>Fixed in</th>
+            <td>
+              {{ f.fixed_version || 'no fix recorded' }}
+              <div v-if="f.fix_channel && f.fix_channel !== 'standard'" class="entitlement">
+                Delivered through <strong>{{ f.fix_channel.toUpperCase() }}</strong>.
+                This needs an Ubuntu Pro entitlement — without one, this package
+                cannot be upgraded on this host.
+              </div>
+            </td></tr>
+          <tr v-if="f.matched_source"><th>Matched by</th>
+            <td class="muted">{{ f.matched_source }}<template v-if="f.matched_release">
+              · release {{ f.matched_release }}</template></td></tr>
           <tr><th>Match</th>
             <td>{{ f.match_method }}
               <span class="muted">({{ (f.match_confidence * 100).toFixed(0) }}% — how the
@@ -70,7 +81,10 @@ useHead({ title: () => f.value?.vulnerability?.id || 'Finding' })
             <td><code>{{ r.source }}</code> <span class="muted">auth {{ r.authority }}</span></td>
             <td>{{ r.distro_release || '—' }}</td>
             <td class="muted">{{ r.introduced || '0' }}</td>
-            <td>{{ r.fixed || r.last_affected || '—' }}</td>
+            <td>
+              {{ r.fixed || r.last_affected || '—' }}
+              <span v-if="r.channel && r.channel !== 'standard'" class="channel">{{ r.channel }}</span>
+            </td>
             <td class="muted small">{{ r.used_for_match ? 'used for this match' : '' }}</td>
           </tr>
         </tbody>
@@ -119,4 +133,13 @@ useHead({ title: () => f.value?.vulnerability?.id || 'Finding' })
 .small { font-size: .8rem; }
 .details { display: block; white-space: pre-wrap; font-size: .87rem; color: var(--ink-2); max-height: 22rem; overflow: auto; }
 .refs { padding-left: 1.1rem; margin: .6rem 0 0; }
+.entitlement {
+  margin-top: .35rem; font-size: .82rem; color: var(--ink-2);
+  border-left: 2px solid var(--warn); padding-left: .5rem;
+}
+.channel {
+  font-size: .65rem; text-transform: uppercase; letter-spacing: .04em;
+  border: 1px solid var(--rule); border-radius: 3px; padding: 0 .25rem;
+  color: var(--warn-ink); margin-left: .3rem;
+}
 </style>

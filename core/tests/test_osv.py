@@ -132,3 +132,48 @@ def test_an_ecosystem_with_no_release_keeps_none():
         }
     )
     assert advisory.ranges[0].distro_release is None
+
+
+# ── fix delivery channel ─────────────────────────────────────────────────────
+
+def test_ubuntu_pro_ecosystems_are_marked_esm():
+    """A fix only shipped through Ubuntu Pro is not an upgrade every operator can
+    perform. Presenting it as an ordinary one is advice they cannot follow."""
+    advisory = parse(
+        {
+            "id": "UBUNTU-CVE-10",
+            "affected": [{"package": {"name": "openssl", "ecosystem": "Ubuntu:Pro:18.04:LTS"},
+                          "ranges": [{"type": "ECOSYSTEM",
+                                      "events": [{"introduced": "0"},
+                                                 {"fixed": "1.1.1-1ubuntu2.1~18.04.23+esm9"}]}]}],
+        }
+    )
+    assert advisory.ranges[0].channel == "esm"
+
+
+def test_an_esm_version_is_detected_without_a_pro_ecosystem():
+    """Some records carry the channel only in the version string."""
+    advisory = parse(
+        {
+            "id": "UBUNTU-CVE-11",
+            "affected": [{"package": {"name": "7zip", "ecosystem": "Ubuntu:24.04:LTS"},
+                          "ranges": [{"type": "ECOSYSTEM",
+                                      "events": [{"introduced": "0"},
+                                                 {"fixed": "23.01+dfsg-11ubuntu0.1~esm1"}]}]}],
+        }
+    )
+    assert advisory.ranges[0].channel == "esm"
+    assert advisory.ranges[0].distro_release == "24.04"
+
+
+def test_an_ordinary_fix_is_the_standard_channel():
+    advisory = parse(
+        {
+            "id": "UBUNTU-CVE-12",
+            "affected": [{"package": {"name": "openssl", "ecosystem": "Ubuntu:24.04:LTS"},
+                          "ranges": [{"type": "ECOSYSTEM",
+                                      "events": [{"introduced": "0"},
+                                                 {"fixed": "3.0.13-0ubuntu3.12"}]}]}],
+        }
+    )
+    assert advisory.ranges[0].channel == "standard"

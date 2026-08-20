@@ -277,3 +277,27 @@ def test_a_range_with_no_fix_still_matches():
     )
     assert affected is True
     assert method == "distro_advisory"
+
+
+# ── match provenance ─────────────────────────────────────────────────────────
+
+def test_the_matched_range_facts_are_copied_onto_the_candidate():
+    """affected_range rows are replaced wholesale on every advisory revision, so a
+    finding that only referenced one lost its provenance the moment the advisory
+    changed — and the evidence chain silently stopped showing which range decided it."""
+    from athena.correlation.engine import _candidate
+
+    matched = FakeRange(source="ubuntu", authority=Authority.DISTRO_TRACKER,
+                        introduced="0", fixed="1.2.3~esm1", range_id=99,
+                        distro_release="24.04")
+    matched.channel = "esm"
+
+    candidate = _candidate(
+        vulnerability_id="CVE-2026-1", asset_id="a", component_id="c",
+        method="distro_advisory", confidence=0.95, matched_range=matched,
+        revision=1, rationale="…", conflicts=[],
+    )
+    assert candidate.matched_source == "ubuntu"
+    assert candidate.matched_release == "24.04"
+    assert candidate.fix_channel == "esm"
+    assert candidate.fixed_version == "1.2.3~esm1"

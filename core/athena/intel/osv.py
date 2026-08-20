@@ -50,6 +50,23 @@ def _parse_time(value: str | None) -> datetime | None:
 
 _RELEASE = re.compile(r"^\d+(\.\d+)*$")
 
+# Ubuntu delivers some fixes only through Ubuntu Pro. The ecosystem string carries
+# the channel ("Ubuntu:Pro:18.04:LTS") and the version usually does too (~esm1,
+# fips). Either signal is enough.
+_CHANNEL_MARKERS = {"pro": "esm", "esm": "esm", "fips": "fips", "fips-updates": "fips"}
+_VERSION_MARKERS = (("~esm", "esm"), ("+esm", "esm"), ("fips", "fips"))
+
+
+def _channel(raw_ecosystem: str, fixed: str | None) -> str:
+    for part in raw_ecosystem.split(":")[1:]:
+        if (channel := _CHANNEL_MARKERS.get(part.strip().lower())) is not None:
+            return channel
+    lowered = (fixed or "").lower()
+    for marker, channel in _VERSION_MARKERS:
+        if marker in lowered:
+            return channel
+    return "standard"
+
 
 def _split_ecosystem(raw: str) -> tuple[str | None, str | None, str | None]:
     """"Ubuntu:24.04:LTS" → (deb, ubuntu, 24.04).
@@ -153,6 +170,7 @@ def parse(advisory: dict[str, Any]) -> NormalisedAdvisory | None:
                     introduced=introduced, fixed=fixed, last_affected=last_affected,
                     source=source, authority=authority,
                     distro=distro, distro_release=release,
+                    channel=_channel(raw_ecosystem, fixed),
                 )
             )
 
@@ -165,6 +183,7 @@ def parse(advisory: dict[str, Any]) -> NormalisedAdvisory | None:
                         introduced=version, last_affected=version,
                         source=source, authority=authority,
                         distro=distro, distro_release=release,
+                        channel=_channel(raw_ecosystem, None),
                     )
                 )
 

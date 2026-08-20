@@ -92,6 +92,7 @@ def _replace_ranges(session: Session, advisory: NormalisedAdvisory) -> None:
                 authority=int(r.authority),
                 distro=r.distro,
                 distro_release=r.distro_release,
+                channel=r.channel,
             )
         )
 
