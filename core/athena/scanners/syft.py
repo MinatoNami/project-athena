@@ -57,6 +57,30 @@ def scan_directory(path_in_volume: str, *, work_volume: str) -> tuple[SandboxRes
     return result, version
 
 
+def scan_image(reference: str) -> tuple[SandboxResult, str | None]:
+    """Run Syft against an image reference.
+
+    Needs network to pull the image, unlike a directory scan. That is the only
+    reason this differs from scan_directory, and it is why the reference is passed
+    as a fixed argument rather than interpolated into a shell.
+    """
+    result = run_sandboxed(
+        SandboxSpec(
+            image=SYFT_IMAGE,
+            command=["scan", f"registry:{reference}", "-o", "syft-json", "-q"],
+            network="bridge",
+            timeout=SYFT_TIMEOUT,
+        )
+    )
+    version = None
+    if result.ok:
+        try:
+            version = (result.json().get("descriptor") or {}).get("version")
+        except Exception:  # noqa: BLE001
+            version = None
+    return result, version
+
+
 def parse(document: dict) -> tuple[list[ObservedComponent], list[str], list[str]]:
     """Translate a Syft document. Returns (components, warnings, notes).
 

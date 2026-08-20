@@ -47,6 +47,9 @@ SCHEDULE: list[tuple[str, int, str, dict]] = [
 NODE_SWEEP_INTERVAL = 60
 NONCE_SWEEP_INTERVAL = 300
 CORRELATION_SWEEP_INTERVAL = 300
+# Images change only when something is rebuilt or pulled, and each scan pulls the
+# image, so this is deliberately unhurried.
+IMAGE_SWEEP_INTERVAL = 600
 
 
 def _acquire_leadership(session) -> bool:
@@ -106,6 +109,42 @@ def _sweep_correlation(session, last_run: dict[str, float], now: float) -> None:
         )
 
 
+def _sweep_images(session, last_run: dict[str, float], now: float) -> None:
+    """Queue image scans for images not yet inventoried, or stale.
+
+    Images are registered by the node's Docker inventory but carry no components
+    until something scans them — until then they are correctly reported as unknown,
+    which is honest but not useful.
+    """
+    if now - last_run.get("image-sweep", 0) < IMAGE_SWEEP_INTERVAL:
+        return
+    last_run["image-sweep"] = now
+
+    from sqlalchemy import text
+
+    from athena.queue import enqueue
+
+    rows = session.execute(
+        text(
+            "SELECT id::text FROM asset "
+            " WHERE kind = 'image' AND tombstoned_at IS NULL "
+            "   AND (last_inventoried_at IS NULL "
+            "        OR last_inventoried_at < now() - interval '7 days') "
+            " ORDER BY last_inventoried_at NULLS FIRST LIMIT 20"
+        )
+    ).all()
+    for (asset_id,) in rows:
+        enqueue(
+            session,
+            kind="scan.image",
+            key=asset_id,
+            payload={"asset_id": asset_id},
+            priority=6,
+        )
+    if rows:
+        log.info("scheduler.image_scans", queued=len(rows))
+
+
 def _sweep_nonces(session, last_run: dict[str, float], now: float) -> None:
     """Drop replay nonces that can no longer be replayed."""
     if now - last_run.get("nonce-sweep", 0) < NONCE_SWEEP_INTERVAL:
@@ -144,6 +183,7 @@ def run() -> None:
                 _sweep_nodes(session, last_run, now)
                 _sweep_nonces(session, last_run, now)
                 _sweep_correlation(session, last_run, now)
+                _sweep_images(session, last_run, now)
                 for name, interval, kind, payload in SCHEDULE:
                     if now - last_run.get(name, 0) < interval:
                         continue
