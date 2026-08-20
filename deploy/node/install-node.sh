@@ -6,9 +6,18 @@
 #
 # Installs the binary, creates an unprivileged service account, enrols, and starts
 # the agent under systemd. Re-running with a new token re-enrols.
+#
+#   --allow-docker   also add the agent to the docker group, so it can inventory
+#                    images and containers.
+#
+# Membership of the docker group is equivalent to root on this host: anyone who can
+# reach the socket can start a privileged container. Athena's agent is read-only by
+# design, so this widens what a compromise of the agent would be worth. Without it,
+# inspect_docker is reported as a failed collection rather than as "no containers" —
+# the gap is visible instead of silent. Opt in deliberately.
 set -euo pipefail
 
-CORE=""; TOKEN=""
+CORE=""; TOKEN=""; ALLOW_DOCKER=0
 BIN_SRC="$(dirname "${BASH_SOURCE[0]}")/athena-node"
 UNIT_SRC="$(dirname "${BASH_SOURCE[0]}")/athena-node.service"
 
@@ -17,6 +26,7 @@ while [[ $# -gt 0 ]]; do
         --core)   CORE="$2"; shift 2 ;;
         --token)  TOKEN="$2"; shift 2 ;;
         --binary) BIN_SRC="$2"; shift 2 ;;
+        --allow-docker) ALLOW_DOCKER=1; shift ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -41,6 +51,18 @@ echo "  enrolling with $CORE"
 # never exists as root-owned state the agent then cannot read.
 runuser -u athena-node -- env ATHENA_NODE_STATE=/var/lib/athena-node \
     /usr/local/bin/athena-node enrol --core "$CORE" --token "$TOKEN"
+
+if (( ALLOW_DOCKER )); then
+    if getent group docker >/dev/null; then
+        usermod -aG docker athena-node
+        echo "  added athena-node to the docker group (root-equivalent on this host)"
+    else
+        echo "  no docker group on this host; skipping --allow-docker" >&2
+    fi
+else
+    echo "  container inventory disabled (pass --allow-docker to enable; it is"
+    echo "  root-equivalent, and the gap is reported rather than hidden)"
+fi
 
 systemctl daemon-reload
 systemctl enable --now athena-node
