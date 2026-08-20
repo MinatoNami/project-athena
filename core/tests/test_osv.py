@@ -177,3 +177,18 @@ def test_an_ordinary_fix_is_the_standard_channel():
         }
     )
     assert advisory.ranges[0].channel == "standard"
+
+
+def test_two_records_for_one_cve_do_not_collide():
+    """A Debian record and an Ubuntu record for the same flaw both canonicalise to
+    the CVE, so one ingest batch routinely holds several records for one id.
+    Read-then-insert raced itself and killed the whole batch on a duplicate key."""
+    shared = {
+        "upstream": ["CVE-2013-6393"],
+        "affected": [{"package": {"name": "libyaml", "ecosystem": "Ubuntu:24.04:LTS"},
+                      "ranges": [{"type": "ECOSYSTEM",
+                                  "events": [{"introduced": "0"}, {"fixed": "1.0"}]}]}],
+    }
+    first = parse({"id": "UBUNTU-CVE-2013-6393", **shared})
+    second = parse({"id": "DEBIAN-CVE-2013-6393", **shared})
+    assert first.id == second.id == "CVE-2013-6393"

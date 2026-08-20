@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Any
 
@@ -21,53 +22,91 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
     A revision bump means something that could change a verdict has changed, so the
     caller re-correlates. A reworded summary does not qualify — otherwise every
     upstream edit would re-evaluate the whole estate.
+
+    Written as a database-level upsert rather than get-then-add. Distribution and
+    upstream records converge on the same CVE by design, so one batch routinely
+    contains several records for one id; a read-then-insert races itself and the
+    whole batch dies on a duplicate key.
     """
     digest = content_hash(advisory)
-    existing = session.get(Vulnerability, advisory.id)
     now = datetime.now(UTC)
 
-    if existing is None:
-        session.add(
-            Vulnerability(
-                id=advisory.id,
-                aliases=advisory.aliases,
-                summary=advisory.summary,
-                details=advisory.details,
-                cwe=advisory.cwe,
-                cvss_vector=advisory.cvss_vector,
-                cvss_score=advisory.cvss_score,
-                severity=advisory.severity,
-                published_at=advisory.published_at,
-                modified_at=advisory.modified_at,
-                withdrawn_at=advisory.withdrawn_at,
-                references_=advisory.references,
-                revision=1,
-                content_hash=digest,
-            )
+    existing = session.execute(
+        select(Vulnerability.content_hash, Vulnerability.revision).where(
+            Vulnerability.id == advisory.id
         )
-        session.flush()
-        _replace_ranges(session, advisory)
-        return "new"
+    ).first()
 
-    # Always refresh descriptive fields; they are free and improve the UI.
-    existing.summary = advisory.summary or existing.summary
-    existing.details = advisory.details or existing.details
-    existing.aliases = sorted(set(existing.aliases) | set(advisory.aliases))
-    existing.references_ = advisory.references or existing.references_
-    existing.modified_at = advisory.modified_at or existing.modified_at
-
-    if existing.content_hash == digest:
+    if existing is not None and existing.content_hash == digest:
+        # Still refresh the descriptive fields; they are free and improve the UI.
+        session.execute(
+            text(
+                "UPDATE vulnerability SET "
+                "  summary = COALESCE(:summary, summary), "
+                "  details = COALESCE(:details, details), "
+                "  modified_at = COALESCE(:modified, modified_at), "
+                "  aliases = ARRAY(SELECT DISTINCT unnest(aliases || :aliases::text[])) "
+                " WHERE id = :id"
+            ),
+            {
+                "id": advisory.id,
+                "summary": advisory.summary,
+                "details": advisory.details,
+                "modified": advisory.modified_at,
+                "aliases": advisory.aliases,
+            },
+        )
         return "unchanged"
 
-    existing.cvss_vector = advisory.cvss_vector
-    existing.cvss_score = advisory.cvss_score
-    existing.severity = advisory.severity
-    existing.withdrawn_at = advisory.withdrawn_at
-    existing.content_hash = digest
-    existing.revision += 1
-    existing.revised_at = now
+    revised = existing is not None
+    session.execute(
+        text(
+            """
+            INSERT INTO vulnerability (
+                id, aliases, summary, details, cwe, cvss_vector, cvss_score, severity,
+                published_at, modified_at, withdrawn_at, "references",
+                revision, revised_at, content_hash
+            ) VALUES (
+                :id, :aliases, :summary, :details, :cwe, :vector, :score, :severity,
+                :published, :modified, :withdrawn, CAST(:refs AS jsonb),
+                1, NULL, :hash
+            )
+            ON CONFLICT (id) DO UPDATE SET
+                aliases     = ARRAY(SELECT DISTINCT unnest(
+                                  vulnerability.aliases || EXCLUDED.aliases)),
+                summary     = COALESCE(EXCLUDED.summary, vulnerability.summary),
+                details     = COALESCE(EXCLUDED.details, vulnerability.details),
+                cwe         = EXCLUDED.cwe,
+                cvss_vector = EXCLUDED.cvss_vector,
+                cvss_score  = EXCLUDED.cvss_score,
+                severity    = EXCLUDED.severity,
+                modified_at = COALESCE(EXCLUDED.modified_at, vulnerability.modified_at),
+                withdrawn_at = EXCLUDED.withdrawn_at,
+                "references" = EXCLUDED."references",
+                revision    = vulnerability.revision + 1,
+                revised_at  = :now,
+                content_hash = EXCLUDED.content_hash
+            """
+        ),
+        {
+            "id": advisory.id,
+            "aliases": advisory.aliases,
+            "summary": advisory.summary,
+            "details": advisory.details,
+            "cwe": advisory.cwe,
+            "vector": advisory.cvss_vector,
+            "score": advisory.cvss_score,
+            "severity": advisory.severity,
+            "published": advisory.published_at,
+            "modified": advisory.modified_at,
+            "withdrawn": advisory.withdrawn_at,
+            "refs": json.dumps(advisory.references, default=str),
+            "hash": digest,
+            "now": now,
+        },
+    )
     _replace_ranges(session, advisory)
-    return "revised"
+    return "revised" if revised else "new"
 
 
 def _replace_ranges(session: Session, advisory: NormalisedAdvisory) -> None:
