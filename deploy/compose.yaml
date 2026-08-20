@@ -19,6 +19,10 @@ x-core: &core
     ATHENA_ENVIRONMENT: ${ATHENA_ENVIRONMENT:-production}
     ATHENA_COOKIE_SECURE: ${ATHENA_COOKIE_SECURE:-true}
   secrets: [db_password, master_key, node_signing_key]
+  # Compose bind-mounts file secrets with their host ownership, so the container user
+  # must share a group with them. See deploy/scripts/gen-secrets.sh.
+  group_add:
+    - "${ATHENA_SECRET_GID:-0}"
   networks: [private]
 
 services:
@@ -81,6 +85,7 @@ services:
     # group's gid on a Linux host — `stat -c %g /var/run/docker.sock` to find it.
     # The worker still runs as an unprivileged user; only socket access is granted.
     group_add:
+      - "${ATHENA_SECRET_GID:-0}"
       - "${DOCKER_SOCKET_GID:-0}"
     volumes:
       # Launches sandboxed scanner containers as siblings. Socket access is
@@ -116,6 +121,8 @@ services:
       ATHENA_DB_PASSWORD_FILE: /run/secrets/executor_db_password
       ATHENA_GRANT_PUBLIC_KEY_FILE: /run/secrets/grant_public_key
     secrets: [executor_db_password, grant_public_key]
+    group_add:
+      - "${ATHENA_SECRET_GID:-0}"
     networks: [private]
     depends_on:
       migrate:
@@ -131,6 +138,8 @@ services:
       NUXT_SESSION_SECRET_FILE: /run/secrets/session_secret
       NUXT_PUBLIC_APP_NAME: ${ATHENA_APP_NAME:-Athena}
     secrets: [session_secret]
+    group_add:
+      - "${ATHENA_SECRET_GID:-0}"
     ports:
       - "${ATHENA_WEB_BIND:-127.0.0.1}:${ATHENA_WEB_PORT:-8080}:3000"
     networks: [private, public]   # the only service on the public network

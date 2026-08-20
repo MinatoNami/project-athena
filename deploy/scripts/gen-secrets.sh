@@ -9,14 +9,22 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."   # deploy/
 mkdir -p secrets
 chmod 700 secrets
 
+# Secrets are mounted into containers by Docker Compose, which — outside swarm —
+# bind-mounts the host file with its host ownership and ignores uid/gid/mode. The
+# containers run as an unprivileged user that is not the file owner, so the files are
+# group-readable and the containers join the owning group (see ATHENA_SECRET_GID).
+# Deliberately not world-readable, and deliberately not chowned, which would need root.
+SECRET_MODE=640
+
 gen() {
     local name="$1"; shift
     if [[ -s "secrets/$name" ]]; then
+        chmod "$SECRET_MODE" "secrets/$name"
         echo "  keep    $name"
         return 0
     fi
     ( set -o noclobber; "$@" > "secrets/$name" )
-    chmod 600 "secrets/$name"
+    chmod "$SECRET_MODE" "secrets/$name"
     echo "  create  $name"
 }
 
@@ -32,9 +40,9 @@ if [[ -s secrets/grant_private_key ]]; then
     echo "  keep    grant keypair"
 else
     ( set -o noclobber; openssl genpkey -algorithm ed25519 -out secrets/grant_private_key )
-    chmod 600 secrets/grant_private_key
+    chmod "$SECRET_MODE" secrets/grant_private_key
     openssl pkey -in secrets/grant_private_key -pubout -outform DER | tail -c 32 > secrets/grant_public_key
-    chmod 600 secrets/grant_public_key
+    chmod "$SECRET_MODE" secrets/grant_public_key
     echo "  create  grant keypair"
 fi
 
@@ -42,10 +50,11 @@ fi
 # an executor grant authorise different things, and one compromise must not confer
 # the other.
 if [[ -s secrets/node_signing_key ]]; then
+    chmod "$SECRET_MODE" secrets/node_signing_key
     echo "  keep    node signing key"
 else
     ( set -o noclobber; openssl genpkey -algorithm ed25519 -out secrets/node_signing_key )
-    chmod 600 secrets/node_signing_key
+    chmod "$SECRET_MODE" secrets/node_signing_key
     echo "  create  node signing key"
 fi
 
@@ -56,10 +65,16 @@ if [[ ! -f .env ]]; then
     if [[ -S /var/run/docker.sock ]]; then
         gid="$(stat -c %g /var/run/docker.sock 2>/dev/null || echo 0)"
         sed -i "s/^DOCKER_SOCKET_GID=.*/DOCKER_SOCKET_GID=${gid}/" .env
-        echo "  create  .env (docker socket gid ${gid})"
-    else
-        echo "  create  .env (from .env.example)"
     fi
+    sed -i "s/^ATHENA_SECRET_GID=.*/ATHENA_SECRET_GID=$(id -g)/" .env
+    echo "  create  .env (secret gid $(id -g), docker socket gid ${gid:-0})"
 else
-    echo "  keep    .env"
+    # An existing .env predating this setting would leave containers unable to read
+    # the secrets, which fails as an opaque permission error at startup.
+    if ! grep -q "^ATHENA_SECRET_GID=" .env; then
+        echo "ATHENA_SECRET_GID=$(id -g)" >> .env
+        echo "  update  .env (added secret gid $(id -g))"
+    else
+        echo "  keep    .env"
+    fi
 fi
