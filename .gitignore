@@ -1,28 +1,91 @@
-# secrets — generated on the deployment host, never committed
+# ─── secrets ─────────────────────────────────────────────────────────────────
+# Generated on the deployment host and never committed. Losing deploy/secrets/
+# master_key makes every stored secret unrecoverable, so it is backed up out of
+# band rather than tracked here.
 deploy/secrets/
 deploy/.env
+deploy/.env.*
+!deploy/.env.example
 *.key
 *.pem
+*.p12
+*.pfx
+secrets/
 
-# python
+# ─── python ──────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
+*$py.class
 .venv/
+venv/
+.python-version
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
 *.egg-info/
 build/
 dist/
 
-# node / nuxt
+# ─── node / nuxt ─────────────────────────────────────────────────────────────
 node_modules/
 .nuxt/
 .output/
+.nitro/
 .data/
-*.log
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
 
-# local
-.DS_Store
+# ─── go ──────────────────────────────────────────────────────────────────────
+# The agent binary is built per target architecture and shipped, never committed.
+# deploy/node/athena-node is what the installer expects to find beside it.
+node/athena-node
+node/cmd/athena-node/athena-node
+deploy/node/athena-node
+deploy/node/athena-node-*
+*.test
+vendor/
+
+# ─── runtime and local state ─────────────────────────────────────────────────
+*.log
+*.pid
+*.sock
+*.sqlite
+*.sqlite3
 .env
 .env.local
+.env.*.local
+
+# Intelligence bundles for air-gapped import: large, regenerated, never tracked.
+athena-intel-*.tar.zst
+*.zip
+
+# Scratch space for local experiments.
+scratch/
+tmp/
+.tmp/
+
+# ─── editors and operating systems ───────────────────────────────────────────
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+desktop.ini
+
+# ─── agent tooling ───────────────────────────────────────────────────────────
+# Per-developer Claude Code state. .claude/settings.json is shared when a project
+# chooses to track it; local overrides never are.
+.claude/settings.local.json
+.claude/state/
