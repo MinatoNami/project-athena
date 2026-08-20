@@ -83,8 +83,11 @@ def upgrade() -> None:
         sa.Column("advisories", sa.Integer, nullable=False, server_default="0"),
     )
 
-    finding_state = pg.ENUM(*FINDING_STATES, name="finding_state")
-    finding_state.create(op.get_bind(), checkfirst=True)
+    # Created explicitly, then referenced with create_type=False: otherwise
+    # create_table emits a second CREATE TYPE and the migration fails on a fresh
+    # database.
+    pg.ENUM(*FINDING_STATES, name="finding_state").create(op.get_bind(), checkfirst=True)
+    finding_state = pg.ENUM(*FINDING_STATES, name="finding_state", create_type=False)
 
     op.create_table(
         "finding",
