@@ -56,15 +56,20 @@ async function logout() {
     <p class="sub">Foundations (M0). Inventory, correlation, and investigation arrive in M1–M3.</p>
 
     <div class="card">
-      <h2>Inventory</h2>
-      <p><NuxtLink to="/assets">Assets and coverage →</NuxtLink></p>
+      <h2>Where to look</h2>
+      <p><NuxtLink to="/findings">Findings →</NuxtLink>
+        <span class="muted"> packages matching a published advisory</span></p>
+      <p><NuxtLink to="/assets">Assets and coverage →</NuxtLink>
+        <span class="muted"> what Athena knows about, and how recently</span></p>
     </div>
 
     <div class="card">
       <h2>Security posture</h2>
       <p class="muted">
-        No assets registered yet, so there is nothing to report. This is
-        <strong>not observed</strong>, not a clean result — asset registration lands in M1.
+        Findings are candidate matches from version comparison. Athena does not yet
+        assess whether an affected component is running, reachable, or exploitable
+        here, so it deliberately shows no posture score — a number without that
+        context would be worse than none.
       </p>
     </div>
 
