@@ -50,3 +50,40 @@ def test_failed_job_retries_until_attempts_are_exhausted(session):
     assert job.finished_at is not None, "exhausted attempts must terminate the job"
     assert job.succeeded is False
     assert job.last_error == "second failure"
+
+
+def test_a_finished_job_does_not_reserve_its_key_forever(session):
+    """Deduplication is about not queueing outstanding work twice. Covering finished
+    rows meant the scheduler — which buckets keys by interval — could never re-enqueue
+    a task after one run, so all scheduled work silently stopped."""
+    key = f"hourly-poll-{uuid.uuid4()}"
+
+    first = enqueue(session, kind="system.echo", key=key)
+    assert first is not None
+    session.commit()
+
+    assert enqueue(session, kind="system.echo", key=key) is None, "still pending"
+
+    job = session.get(type(first), first.id)
+    finish(session, job, succeeded=True, result={})
+    session.commit()
+
+    again = enqueue(session, kind="system.echo", key=key)
+    assert again is not None, "a completed job must free its key for the next cycle"
+    assert again.id != first.id
+
+
+def test_a_failed_job_also_frees_its_key_once_exhausted(session):
+    """A failure must not suppress the task for the rest of the bucket."""
+    key = f"failing-poll-{uuid.uuid4()}"
+
+    first = enqueue(session, kind="system.fail", key=key, max_attempts=1)
+    assert first is not None
+    session.commit()
+
+    job = session.get(type(first), first.id)
+    job.attempts = 1
+    finish(session, job, succeeded=False, error="boom")
+    session.commit()
+
+    assert enqueue(session, kind="system.fail", key=key) is not None

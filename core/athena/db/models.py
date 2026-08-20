@@ -86,14 +86,10 @@ class BootstrapToken(Base):
 
 class Job(Base):
     __tablename__ = "job"
+    # Uniqueness is enforced by a partial index on pending rows only — see
+    # migration 0007. A finished job must not reserve its key forever.
     __table_args__ = (
-        UniqueConstraint("kind", "key", name="job_kind_key_uniq"),
-        Index(
-            "job_claimable_idx",
-            "priority",
-            "run_after",
-            postgresql_where=None,
-        ),
+        Index("job_claimable_idx", "priority", "run_after"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)

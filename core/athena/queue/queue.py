@@ -27,14 +27,19 @@ def enqueue(
     run_after: datetime | None = None,
     max_attempts: int = 5,
 ) -> Job | None:
-    """Enqueue idempotently. Returns None when an identical job is already pending."""
+    """Enqueue idempotently. Returns None when an identical job is already pending.
+
+    Deduplication covers pending work only. A finished job must not reserve its key
+    forever: the scheduler buckets keys by interval, so a completed or failed poll
+    would otherwise block every later poll with the same key.
+    """
     row = session.execute(
         text(
             """
             INSERT INTO job (kind, key, payload, priority, run_after, max_attempts)
             VALUES (:kind, :key, CAST(:payload AS jsonb), :priority,
                     COALESCE(:run_after, now()), :max_attempts)
-            ON CONFLICT (kind, key) DO NOTHING
+            ON CONFLICT (kind, key) WHERE finished_at IS NULL DO NOTHING
             RETURNING id
             """
         ),
