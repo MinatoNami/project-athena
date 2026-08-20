@@ -8,6 +8,7 @@ That is exactly what the authority rule needs to work.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
 
@@ -47,20 +48,52 @@ def _parse_time(value: str | None) -> datetime | None:
         return None
 
 
+_RELEASE = re.compile(r"^\d+(\.\d+)*$")
+
+
 def _split_ecosystem(raw: str) -> tuple[str | None, str | None, str | None]:
-    """"Ubuntu:24.04:LTS" → (deb, ubuntu, 24.04)."""
-    parts = raw.split(":")
-    base = parts[0].strip().lower()
-    release = parts[1].strip() if len(parts) > 1 else None
+    """"Ubuntu:24.04:LTS" → (deb, ubuntu, 24.04).
+
+    The release is not always the second segment: Ubuntu ESM advisories arrive as
+    "Ubuntu:Pro:18.04:LTS", which naively yields a release of "Pro" and then matches
+    no host at all. The first version-shaped segment is taken instead.
+    """
+    parts = [p.strip() for p in raw.split(":")]
+    base = parts[0].lower()
+    release = next((p for p in parts[1:] if _RELEASE.match(p)), None)
     return ECOSYSTEM_MAP.get(base), DISTRO_OF.get(base), release
 
 
-def _severity(advisory: dict[str, Any]) -> tuple[str | None, float | None]:
-    """Prefer a CVSS v3/v4 vector; fall back to the database_specific label."""
+QUALITATIVE = {"negligible", "low", "medium", "moderate", "high", "critical"}
+
+# Distro severity words map onto Athena's bands. "moderate" is SUSE/Red Hat's word
+# for medium; treating it as unknown would leave most distro advisories unlabelled.
+SEVERITY_ALIASES = {"moderate": "medium", "negligible": "low", "important": "high"}
+
+
+def _severity(advisory: dict[str, Any]) -> tuple[str | None, str | None]:
+    """(CVSS vector, qualitative label).
+
+    Ecosystem advisories carry a CVSS vector; distribution trackers usually carry a
+    single word instead ({"type": "Ubuntu", "score": "medium"}). Reading only the
+    vector left every Ubuntu finding with no severity at all, which is unusable for
+    triage even before real risk scoring exists.
+    """
+    vector = label = None
     for entry in advisory.get("severity") or []:
-        if entry.get("type", "").upper().startswith("CVSS_V") and entry.get("score"):
-            return entry["score"], None
-    return None, None
+        score = (entry.get("score") or "").strip()
+        if not score:
+            continue
+        if entry.get("type", "").upper().startswith("CVSS_V"):
+            vector = vector or score
+        elif score.lower() in QUALITATIVE:
+            label = label or SEVERITY_ALIASES.get(score.lower(), score.lower())
+
+    if label is None:
+        db_specific = (advisory.get("database_specific") or {}).get("severity")
+        if isinstance(db_specific, str) and db_specific.lower() in QUALITATIVE:
+            label = SEVERITY_ALIASES.get(db_specific.lower(), db_specific.lower())
+    return vector, label
 
 
 def parse(advisory: dict[str, Any]) -> NormalisedAdvisory | None:
@@ -69,13 +102,25 @@ def parse(advisory: dict[str, Any]) -> NormalisedAdvisory | None:
     if not osv_id:
         return None
 
-    aliases = [a for a in advisory.get("aliases") or [] if a]
-    # Prefer the CVE as the canonical id so every source converges on one row.
+    # Distribution records put the CVE in `upstream` rather than `aliases`
+    # (UBUNTU-CVE-2014-3613 upstream ["CVE-2014-3613"]), so all three are considered.
+    # Converging on the CVE is what lets an upstream advisory and a distro tracker
+    # for the same flaw merge into one row with both sets of ranges — which is
+    # exactly what the authority rule needs to compare them.
+    aliases = [
+        a
+        for a in (
+            (advisory.get("aliases") or [])
+            + (advisory.get("upstream") or [])
+            + (advisory.get("related") or [])
+        )
+        if a
+    ]
     canonical = next((a for a in aliases if a.upper().startswith("CVE-")), osv_id)
     if canonical != osv_id:
         aliases = [a for a in aliases if a != canonical] + [osv_id]
 
-    vector, _ = _severity(advisory)
+    vector, label = _severity(advisory)
     ranges: list[NormalisedRange] = []
 
     for affected in advisory.get("affected") or []:
@@ -137,7 +182,7 @@ def parse(advisory: dict[str, Any]) -> NormalisedAdvisory | None:
             c for c in (advisory.get("database_specific") or {}).get("cwe_ids") or [] if c
         ],
         cvss_vector=vector,
-        severity=(advisory.get("database_specific") or {}).get("severity"),
+        severity=label,
         published_at=_parse_time(advisory.get("published")),
         modified_at=_parse_time(advisory.get("modified")),
         withdrawn_at=_parse_time(advisory.get("withdrawn")),

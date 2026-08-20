@@ -23,6 +23,11 @@ from athena.queue import enqueue
 router = APIRouter(tags=["findings"])
 
 
+# Rank for ordering. Distribution advisories rarely carry CVSS, so without this the
+# list ties at zero and degenerates to alphabetical order by CVE id.
+SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "unknown": 0}
+
+
 def _severity_of(v: Vulnerability) -> str:
     """A coarse label until real risk scoring arrives in M3.
 
@@ -101,11 +106,18 @@ def list_findings(
             }
         )
 
-    # KEV first, then CVSS: the only ordering that is defensible before M3, since
-    # nothing here knows whether a service is running or reachable.
+    # Known-exploited first, then severity, then CVSS, then most recent. This is the
+    # only ordering defensible before M3: nothing here knows whether a service is
+    # running or reachable, so it cannot claim to rank by risk.
     ordered = sorted(
         groups.values(),
-        key=lambda g: (not g["kev"], -(g["cvss_score"] or 0), g["vulnerability_id"]),
+        key=lambda g: (
+            not g["kev"],
+            -SEVERITY_RANK.get(g["provisional_severity"], 0),
+            -(g["cvss_score"] or 0),
+            -(g["epss_score"] or 0),
+            g["vulnerability_id"],
+        ),
     )[:limit]
     for group in ordered:
         group["instance_count"] = len(group["instances"])
