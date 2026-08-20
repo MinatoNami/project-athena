@@ -240,6 +240,10 @@ def _record(
 
     now = datetime.now(UTC)
     if existing is not None:
+        # A fix appearing later moves the finding back into actionable work.
+        if existing.state == "no_fix_available" and candidate.fixed_version:
+            existing.state = "discovered"
+            existing.state_changed_at = datetime.now(UTC)
         existing.match_method = candidate.match_method
         existing.match_confidence = candidate.match_confidence
         existing.matched_range_id = candidate.matched_range_id
@@ -248,12 +252,18 @@ def _record(
         existing.last_evaluated_at = now
         return existing, False
 
+    # A distribution routinely publishes an advisory before, or without, a fix.
+    # Those are real findings but nothing can be done about them, and mixing them
+    # with actionable work is the volume-over-action failure the product exists to
+    # avoid. The lifecycle already has a state for it.
+    state = "discovered" if candidate.fixed_version else "no_fix_available"
+
     finding = Finding(
         group_key=candidate.vulnerability_id,
         vulnerability_id=candidate.vulnerability_id,
         asset_id=candidate.asset_id,
         component_id=candidate.component_id,
-        state="discovered",
+        state=state,
         match_method=candidate.match_method,
         match_confidence=candidate.match_confidence,
         matched_range_id=candidate.matched_range_id,

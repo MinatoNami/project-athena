@@ -5,10 +5,14 @@ const { data: me } = await useMe()
 if (!me.value) await navigateTo('/login')
 
 const kevOnly = ref(false)
+const includeNoFix = ref(false)
 const { data, refresh, pending } = await useAsyncData(
   'findings',
-  () => api<any>(`findings?limit=100${kevOnly.value ? '&kev_only=true' : ''}`),
-  { watch: [kevOnly] },
+  () => api<any>(
+    `findings?limit=100${kevOnly.value ? '&kev_only=true' : ''}` +
+    `${includeNoFix.value ? '&include_no_fix=true' : ''}`,
+  ),
+  { watch: [kevOnly, includeNoFix] },
 )
 const { data: intel } = await useAsyncData('intel', () => api<any>('intel/sources'))
 
@@ -80,11 +84,25 @@ function ageLabel(seconds: number | null) {
         <h2 style="margin:0">
           {{ data?.group_count ?? 0 }} vulnerabilities
         </h2>
-        <label class="toggle">
-          <input v-model="kevOnly" type="checkbox">
-          Known-exploited only
-        </label>
+        <div class="toggles">
+          <label class="toggle">
+            <input v-model="kevOnly" type="checkbox">
+            Known-exploited only
+          </label>
+          <label v-if="data?.no_fix_available_count" class="toggle">
+            <input v-model="includeNoFix" type="checkbox">
+            Include {{ data.no_fix_available_count }} with no fix
+          </label>
+        </div>
       </div>
+
+      <p v-if="data?.no_fix_available_count && !includeNoFix" class="muted denom">
+        {{ data.no_fix_available_count }} further
+        {{ data.no_fix_available_count === 1 ? 'vulnerability has' : 'vulnerabilities have' }}
+        no published fix, so
+        {{ data.no_fix_available_count === 1 ? 'it is' : 'they are' }} held back from this
+        list rather than hidden — nothing can be done about them yet.
+      </p>
 
       <p v-if="data?.coverage" class="muted denom">
         Across {{ data.coverage.of_assets_observed }} of
@@ -150,6 +168,7 @@ function ageLabel(seconds: number | null) {
   color: var(--ink-2);
 }
 .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: .5rem; }
+.toggles { display: flex; gap: 1.1rem; }
 .toggle { display: flex; gap: .4rem; align-items: center; font-size: .85rem; margin: 0; }
 .toggle input { width: auto; }
 .denom { margin: 0 0 1rem; font-size: .85rem; }

@@ -264,3 +264,16 @@ def test_content_hash_changes_when_a_range_changes():
         id="X", ranges=[NormalisedRange(ecosystem="pypi", package="requests", fixed="2.32.0")]
     )
     assert content_hash(before) != content_hash(after)
+
+
+# ── no fix available ─────────────────────────────────────────────────────────
+
+def test_a_range_with_no_fix_still_matches():
+    """Distributions publish advisories before a fix exists. The match is real."""
+    ranges = [FakeRange(source="ubuntu", authority=Authority.DISTRO_TRACKER,
+                        introduced="0", fixed=None)]
+    affected, method, *_ = evaluate(
+        ecosystem="deb", package="bluez", version="5.72-0ubuntu5.5", ranges=ranges
+    )
+    assert affected is True
+    assert method == "distro_advisory"

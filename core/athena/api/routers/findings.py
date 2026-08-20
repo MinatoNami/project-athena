@@ -50,6 +50,7 @@ def list_findings(
     state: str | None = None,
     asset_id: str | None = None,
     kev_only: bool = False,
+    include_no_fix: bool = False,
     limit: int = Query(default=100, le=500),
     _: Principal = Depends(current_principal),
     session: Session = Depends(db),
@@ -58,6 +59,9 @@ def list_findings(
 
     One CVE affecting forty hosts is one row with forty instances, not forty rows.
     """
+    # Default view is work that can actually be done. Findings a distribution has
+    # published no fix for are real, but they are not action — they are shown on
+    # request, and counted separately so they are never silently hidden.
     stmt = (
         select(Finding, Vulnerability, Asset, Component)
         .join(Vulnerability, Vulnerability.id == Finding.vulnerability_id)
@@ -66,6 +70,8 @@ def list_findings(
     )
     if state:
         stmt = stmt.where(Finding.state == state)
+    elif not include_no_fix:
+        stmt = stmt.where(Finding.state != "no_fix_available")
     if asset_id:
         stmt = stmt.where(Finding.asset_id == asset_id)
     if kev_only:
@@ -122,6 +128,11 @@ def list_findings(
     for group in ordered:
         group["instance_count"] = len(group["instances"])
 
+    no_fix_count = session.execute(
+        select(func.count(func.distinct(Finding.vulnerability_id)))
+        .where(Finding.state == "no_fix_available")
+    ).scalar_one()
+
     total_assets = session.execute(
         select(func.count()).select_from(Asset).where(Asset.tombstoned_at.is_(None))
     ).scalar_one()
@@ -134,6 +145,9 @@ def list_findings(
     return {
         "groups": ordered,
         "group_count": len(groups),
+        # Surfaced, never hidden: the operator can see how much is being held back
+        # and why.
+        "no_fix_available_count": no_fix_count,
         # Findings are only as complete as the inventory behind them.
         "coverage": {"of_assets_observed": observed, "of_assets_total": total_assets},
         # Stated explicitly so nobody reads these as assessed risk.
