@@ -24,7 +24,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, ENUM, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from athena.db.base import Base
@@ -430,6 +430,17 @@ class IntelSource(Base):
     advisories: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
+# Mirrors the finding_state enum created in migration 0006. create_type=False: the
+# migration owns the type, and SQLAlchemy must not try to create it again.
+FINDING_STATES = (
+    "discovered", "investigating", "confirmed", "remediation_found", "patch_prepared",
+    "awaiting_approval", "remediating", "verifying", "resolved",
+    "false_positive", "mitigated", "accepted_risk", "deferred", "no_fix_available",
+    "regressed",
+)
+finding_state_enum = ENUM(*FINDING_STATES, name="finding_state", create_type=False)
+
+
 class Finding(Base):
     __tablename__ = "finding"
 
@@ -444,7 +455,7 @@ class Finding(Base):
     component_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("component.id", ondelete="CASCADE"), nullable=False
     )
-    state: Mapped[str] = mapped_column(String(32), nullable=False, default="discovered")
+    state: Mapped[str] = mapped_column(finding_state_enum, nullable=False, default="discovered")
     match_method: Mapped[str] = mapped_column(String(32), nullable=False)
     match_confidence: Mapped[float] = mapped_column(Float, nullable=False)
     matched_range_id: Mapped[int | None] = mapped_column(BigInteger)

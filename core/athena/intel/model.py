@@ -52,12 +52,15 @@ def content_hash(advisory: NormalisedAdvisory) -> str:
         "cvss_score": advisory.cvss_score,
         "severity": advisory.severity,
         "withdrawn": advisory.withdrawn_at.isoformat() if advisory.withdrawn_at else None,
+        # Sorted so the hash is order-independent. Bounds are frequently absent, so
+        # the key coerces None rather than comparing None against str.
         "ranges": sorted(
-            [
+            (
                 [r.ecosystem, r.package, r.introduced, r.fixed, r.last_affected,
-                 r.source, int(r.authority)]
+                 r.source, int(r.authority), r.distro, r.distro_release]
                 for r in advisory.ranges
-            ]
+            ),
+            key=lambda row: tuple("" if v is None else str(v) for v in row),
         ),
     }
     encoded = json.dumps(material, sort_keys=True, separators=(",", ":"), default=str)

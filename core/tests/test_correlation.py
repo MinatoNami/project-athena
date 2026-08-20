@@ -222,3 +222,45 @@ def test_release_agnostic_ranges_still_apply():
         ranges=ranges, distro_release=None,
     )
     assert affected is True
+
+
+# ── advisory hashing ─────────────────────────────────────────────────────────
+
+def test_content_hash_tolerates_absent_range_bounds():
+    """Most real ranges have no last_affected, and many have no fixed version.
+    Sorting them directly compared None against str and raised, which failed
+    ingestion of every advisory carrying an open-ended range."""
+    from athena.intel.model import NormalisedAdvisory, NormalisedRange, content_hash
+
+    advisory = NormalisedAdvisory(
+        id="CVE-2026-0001",
+        ranges=[
+            NormalisedRange(ecosystem="deb", package="openssl", introduced="0", fixed=None),
+            NormalisedRange(ecosystem="deb", package="openssl", introduced="0", fixed="1.2"),
+        ],
+    )
+    assert len(content_hash(advisory)) == 64
+
+
+def test_content_hash_is_order_independent():
+    """Range order varies between fetches; a hash that changed with it would report
+    every advisory as revised on every poll."""
+    from athena.intel.model import NormalisedAdvisory, NormalisedRange, content_hash
+
+    a = NormalisedRange(ecosystem="pypi", package="requests", introduced="0", fixed="2.31.0")
+    b = NormalisedRange(ecosystem="pypi", package="urllib3", introduced="0", fixed="1.26.5")
+    assert content_hash(NormalisedAdvisory(id="X", ranges=[a, b])) == content_hash(
+        NormalisedAdvisory(id="X", ranges=[b, a])
+    )
+
+
+def test_content_hash_changes_when_a_range_changes():
+    from athena.intel.model import NormalisedAdvisory, NormalisedRange, content_hash
+
+    before = NormalisedAdvisory(
+        id="X", ranges=[NormalisedRange(ecosystem="pypi", package="requests", fixed="2.31.0")]
+    )
+    after = NormalisedAdvisory(
+        id="X", ranges=[NormalisedRange(ecosystem="pypi", package="requests", fixed="2.32.0")]
+    )
+    assert content_hash(before) != content_hash(after)
