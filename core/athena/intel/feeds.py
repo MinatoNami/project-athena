@@ -10,7 +10,10 @@ from __future__ import annotations
 import csv
 import gzip
 import io
+import json
+import tempfile
 import zipfile
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -36,40 +39,48 @@ class FeedError(RuntimeError):
     pass
 
 
-def _client() -> httpx.Client:
+def _client(timeout: float | None = None) -> httpx.Client:
     return httpx.Client(
-        timeout=TIMEOUT,
+        timeout=httpx.Timeout(timeout, connect=15.0) if timeout else TIMEOUT,
         headers={"User-Agent": USER_AGENT},
         follow_redirects=True,
     )
 
 
-def fetch_osv_ecosystem(ecosystem: str, *, limit: int | None = None) -> list[dict[str, Any]]:
-    """Download one OSV ecosystem archive and return its advisory records."""
+def fetch_osv_ecosystem(
+    ecosystem: str, *, limit: int | None = None, timeout: float = 1800.0
+) -> Iterator[dict[str, Any]]:
+    """Stream one OSV ecosystem archive, yielding advisory records.
+
+    Streamed to a temporary file and yielded lazily rather than held in memory: the
+    Ubuntu archive is hundreds of megabytes and tens of thousands of advisories, and
+    buffering it defeats the batching the caller does downstream.
+    """
     url = OSV_ECOSYSTEM_ZIP.format(ecosystem=ecosystem)
     log.info("intel.fetch", source="osv", ecosystem=ecosystem)
 
-    try:
-        with _client() as client:
-            response = client.get(url)
-            response.raise_for_status()
-            payload = response.content
-    except httpx.HTTPError as exc:
-        raise FeedError(f"OSV {ecosystem}: {exc}") from exc
+    with tempfile.NamedTemporaryFile(suffix=".zip") as spool:
+        try:
+            with _client(timeout) as client, client.stream("GET", url) as response:
+                response.raise_for_status()
+                for chunk in response.iter_bytes(chunk_size=1 << 20):
+                    spool.write(chunk)
+        except httpx.HTTPError as exc:
+            raise FeedError(f"OSV {ecosystem}: {exc}") from exc
 
-    records: list[dict[str, Any]] = []
-    import json
+        spool.flush()
+        size_mb = round(spool.tell() / (1 << 20), 1)
+        log.info("intel.fetched", source="osv", ecosystem=ecosystem, size_mb=size_mb)
 
-    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-        names = [n for n in archive.namelist() if n.endswith(".json")]
-        if limit:
-            names = names[:limit]
-        for name in names:
-            try:
-                records.append(json.loads(archive.read(name)))
-            except (json.JSONDecodeError, KeyError):
-                continue    # one malformed record must not fail the whole ecosystem
-    return records
+        with zipfile.ZipFile(spool.name) as archive:
+            names = [n for n in archive.namelist() if n.endswith(".json")]
+            if limit:
+                names = names[:limit]
+            for name in names:
+                try:
+                    yield json.loads(archive.read(name))
+                except (json.JSONDecodeError, KeyError, zipfile.BadZipFile):
+                    continue    # one malformed record must not fail the ecosystem
 
 
 def fetch_kev() -> list[dict[str, Any]]:

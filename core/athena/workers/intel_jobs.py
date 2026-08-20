@@ -35,27 +35,43 @@ def poll_osv(payload: dict[str, Any]) -> dict[str, Any]:
     ecosystem = payload.get("ecosystem") or "PyPI"
     limit = payload.get("limit")
 
+    counts = {"new": 0, "revised": 0, "unchanged": 0}
+    changed: list[str] = []
+    records = skipped = 0
+    batch: list = []
+
+    def flush(pending: list) -> None:
+        if not pending:
+            return
+        with session_scope() as session:
+            for advisory in pending:
+                outcome = upsert_advisory(session, advisory)
+                counts[outcome] += 1
+                if outcome in ("new", "revised"):
+                    changed.append(advisory.id)
+        pending.clear()
+
     try:
-        records = feeds.fetch_osv_ecosystem(ecosystem, limit=limit)
+        # Committed in batches as the archive streams, so a backfill of tens of
+        # thousands of advisories makes visible progress and never holds one
+        # transaction open for the whole download.
+        for record_ in feeds.fetch_osv_ecosystem(ecosystem, limit=limit):
+            records += 1
+            parsed, skipped_here = parse_many([record_])
+            skipped += skipped_here
+            batch.extend(parsed)
+            if len(batch) >= BATCH:
+                flush(batch)
+                log.info("intel.progress", ecosystem=ecosystem, records=records, **counts)
+        flush(batch)
     except feeds.FeedError as exc:
+        flush(batch)
         with session_scope() as session:
             record_source_result(
                 session, name=f"osv:{ecosystem}".lower(), succeeded=False, error=str(exc)
             )
         log.warning("intel.fetch_failed", source="osv", ecosystem=ecosystem, error=str(exc))
-        return {"status": "failed", "ecosystem": ecosystem, "error": str(exc)}
-
-    advisories, skipped = parse_many(records)
-    counts = {"new": 0, "revised": 0, "unchanged": 0}
-    changed: list[str] = []
-
-    for start in range(0, len(advisories), BATCH):
-        with session_scope() as session:
-            for advisory in advisories[start : start + BATCH]:
-                outcome = upsert_advisory(session, advisory)
-                counts[outcome] += 1
-                if outcome in ("new", "revised"):
-                    changed.append(advisory.id)
+        return {"status": "failed", "ecosystem": ecosystem, "error": str(exc), **counts}
 
     with session_scope() as session:
         record_source_result(
@@ -77,7 +93,7 @@ def poll_osv(payload: dict[str, Any]) -> dict[str, Any]:
 
     log.info(
         "intel.ingested", source="osv", ecosystem=ecosystem,
-        records=len(records), skipped=skipped, **counts,
+        records=records, skipped=skipped, **counts,
     )
     return {"status": "ok", "ecosystem": ecosystem, "skipped": skipped, **counts}
 
