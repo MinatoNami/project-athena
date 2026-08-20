@@ -71,6 +71,8 @@ type Info struct {
 	HardwareUUID string `json:"hardware_uuid,omitempty"`
 	OS           string `json:"os"`
 	OSVersion    string `json:"os_version,omitempty"`
+	OSID         string `json:"os_id,omitempty"`
+	OSVersionID  string `json:"os_version_id,omitempty"`
 	Kernel       string `json:"kernel,omitempty"`
 	Arch         string `json:"arch"`
 	CollectedAt  string `json:"collected_at"`
@@ -88,9 +90,20 @@ func SystemInfo() (Info, error) {
 	if kernel, err := run("uname", "-r"); err == nil {
 		info.Kernel = strings.TrimSpace(kernel)
 	}
+	// ID and VERSION_ID are reported alongside the pretty name because correlation
+	// needs the release: a fix in Ubuntu 22.04 says nothing about 24.04, and
+	// parsing a human-readable string on the server is the wrong place for it.
 	for _, line := range strings.Split(osRelease(), "\n") {
-		if strings.HasPrefix(line, "PRETTY_NAME=") {
-			info.OSVersion = strings.Trim(strings.TrimPrefix(line, "PRETTY_NAME="), `"`)
+		value := func(prefix string) string {
+			return strings.Trim(strings.TrimPrefix(line, prefix), `"`)
+		}
+		switch {
+		case strings.HasPrefix(line, "PRETTY_NAME="):
+			info.OSVersion = value("PRETTY_NAME=")
+		case strings.HasPrefix(line, "ID="):
+			info.OSID = value("ID=")
+		case strings.HasPrefix(line, "VERSION_ID="):
+			info.OSVersionID = value("VERSION_ID=")
 		}
 	}
 	return info, nil

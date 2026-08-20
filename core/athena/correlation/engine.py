@@ -77,12 +77,32 @@ def _method_for(ecosystem: str, authority: Authority) -> str:
     return "purl_exact_range"
 
 
+def _applies_to_release(r: AffectedRange, distro_release: str | None) -> bool:
+    """Whether a distro range describes the release actually installed.
+
+    OSV returns ranges for every supported release of a distribution under the same
+    package. Ubuntu 22.04 fixed openssl in 3.0.2-0ubuntu1.12 while 24.04 fixed it in
+    3.0.13-0ubuntu3.12; comparing a 24.04 host against the 22.04 range makes a
+    vulnerable host look patched, because 3.0.13 sorts above 3.0.2.
+
+    A range with no release attached applies everywhere. A host whose release is
+    unknown is not matched against release-specific ranges at all — an unknown
+    release is a coverage gap, not a licence to guess.
+    """
+    if r.distro_release is None:
+        return True
+    if distro_release is None:
+        return False
+    return r.distro_release.split(":")[0] == distro_release
+
+
 def evaluate(
     *,
     ecosystem: str,
     package: str,
     version: str,
     ranges: list[AffectedRange],
+    distro_release: str | None = None,
 ) -> tuple[bool, str, float, AffectedRange | None, str, list[dict[str, Any]]]:
     """Decide whether one component is affected, given every range for it.
 
@@ -95,6 +115,22 @@ def evaluate(
     """
     normalised = normalise_name(ecosystem, package)
     conflicts: list[dict[str, Any]] = []
+
+    if is_distro_ecosystem(ecosystem):
+        wrong_release = [r for r in ranges if not _applies_to_release(r, distro_release)]
+        if wrong_release and distro_release is None:
+            conflicts.append(
+                {
+                    "source": "release",
+                    "says": "unknown",
+                    "note": (
+                        "the asset's distribution release is unknown, so "
+                        f"{len(wrong_release)} release-specific range(s) could not be "
+                        "applied"
+                    ),
+                }
+            )
+        ranges = [r for r in ranges if _applies_to_release(r, distro_release)]
 
     authoritative = [r for r in ranges if is_authoritative(ecosystem, Authority(r.authority))]
     advisory_only = [r for r in ranges if r not in authoritative]
@@ -273,8 +309,15 @@ def _attach_evidence(
         )
 
 
+def release_of(asset: Asset) -> str | None:
+    """The distribution release an asset runs, if it is known."""
+    attributes = asset.attributes or {}
+    return attributes.get("distro_release")
+
+
 def correlate_asset(session: Session, asset: Asset) -> dict[str, Any]:
     """Match every component on one asset against known advisories."""
+    distro_release = release_of(asset)
     rows = session.execute(
         select(Component)
         .join(AssetComponent, AssetComponent.component_id == Component.id)
@@ -295,6 +338,7 @@ def correlate_asset(session: Session, asset: Asset) -> dict[str, Any]:
                 package=component.name,
                 version=component.version,
                 ranges=ranges,
+                distro_release=distro_release,
             )
             if not affected:
                 continue
@@ -351,11 +395,13 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
 
         for component, asset_id in installed:
             candidates += 1
+            asset = session.get(Asset, asset_id)
             affected, method, confidence, matched_range, rationale, conflicts = evaluate(
                 ecosystem=ecosystem,
                 package=package,
                 version=component.version,
                 ranges=package_ranges,
+                distro_release=release_of(asset) if asset else None,
             )
             if not affected:
                 continue

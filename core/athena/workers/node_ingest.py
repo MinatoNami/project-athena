@@ -102,19 +102,42 @@ def _apply(session, *, asset: Asset, run, capability: str, data: Any) -> dict[st
     return {"ignored": capability}
 
 
+def _distro_release(data: dict) -> tuple[str | None, str | None]:
+    """(distro, release) from os-release, e.g. ("ubuntu", "24.04").
+
+    Correlation needs this: a fix in Ubuntu 22.04 says nothing about 24.04, and
+    comparing across releases makes a vulnerable host look patched.
+    """
+    distro = (data.get("os_id") or "").strip().lower() or None
+    release = (data.get("os_version_id") or "").strip() or None
+    if release is None:
+        # Fall back to the pretty name for agents predating os_version_id.
+        import re
+
+        match = re.search(r"(\d+\.\d+)", data.get("os_version") or "")
+        release = match.group(1) if match else None
+    return distro, release
+
+
 def _system_info(session, *, asset: Asset, data: dict) -> dict[str, Any]:
     data = data or {}
+    distro, release = _distro_release(data)
     asset.attributes = {
         **asset.attributes,
         "os": data.get("os"),
         "os_version": data.get("os_version"),
+        "distro": distro,
+        "distro_release": release,
         "kernel": data.get("kernel"),
         "arch": data.get("arch"),
         "hostname": data.get("hostname"),
     }
     if data.get("hostname"):
         asset.display_name = data["hostname"]
-    return {"os": data.get("os_version") or data.get("os") or "unknown"}
+    return {
+        "os": data.get("os_version") or data.get("os") or "unknown",
+        "distro_release": release or "unknown",
+    }
 
 
 def _packages(session, *, asset: Asset, run, data: list) -> dict[str, Any]:

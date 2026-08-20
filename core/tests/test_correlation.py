@@ -18,13 +18,14 @@ class FakeRange:
     """A stand-in for an AffectedRange row, so these stay pure unit tests."""
 
     def __init__(self, *, source, authority, introduced=None, fixed=None,
-                 last_affected=None, range_id=1):
+                 last_affected=None, range_id=1, distro_release=None):
         self.id = range_id
         self.source = source
         self.authority = int(authority)
         self.introduced = introduced
         self.fixed = fixed
         self.last_affected = last_affected
+        self.distro_release = distro_release
 
 
 # ── the backport rule ────────────────────────────────────────────────────────
@@ -53,7 +54,8 @@ def test_upstream_range_alone_cannot_condemn_a_distro_package():
 
 def test_distro_tracker_decides_for_a_distro_package():
     ranges = [
-        FakeRange(source="osv", authority=Authority.UPSTREAM_ADVISORY, introduced="0", fixed="3.2.0"),
+        FakeRange(source="osv", authority=Authority.UPSTREAM_ADVISORY,
+                  introduced="0", fixed="3.2.0"),
         FakeRange(source="ubuntu", authority=Authority.DISTRO_TRACKER,
                   introduced="0", fixed="3.0.13-0ubuntu3.12", range_id=2),
     ]
@@ -154,3 +156,69 @@ def test_package_name_normalisation_is_applied_in_the_rationale():
         ecosystem="pypi", package="Flask_SQLAlchemy", version="2.5.1", ranges=ranges
     )
     assert "flask-sqlalchemy" in rationale
+
+
+# ── distribution release ─────────────────────────────────────────────────────
+
+def test_a_fix_in_another_release_does_not_clear_this_host():
+    """OSV returns ranges for every supported Ubuntu release under one package.
+    Ubuntu 22.04 fixed openssl in 3.0.2-0ubuntu1.12 and 24.04 in 3.0.13-0ubuntu3.12.
+    Comparing a 24.04 host against the 22.04 range makes a vulnerable host look
+    patched, because 3.0.13 sorts above 3.0.2."""
+    ranges = [
+        FakeRange(source="ubuntu", authority=Authority.DISTRO_TRACKER,
+                  introduced="0", fixed="3.0.2-0ubuntu1.12"),
+        FakeRange(source="ubuntu", authority=Authority.DISTRO_TRACKER,
+                  introduced="0", fixed="3.0.13-0ubuntu3.12", range_id=2),
+    ]
+    ranges[0].distro_release = "22.04"
+    ranges[1].distro_release = "24.04"
+
+    affected, method, _, matched, *_ = evaluate(
+        ecosystem="deb", package="openssl", version="3.0.13-0ubuntu3.11",
+        ranges=ranges, distro_release="24.04",
+    )
+    assert affected is True, "the 24.04 host is behind the 24.04 fix"
+    assert matched.distro_release == "24.04", "the wrong release must not be used"
+
+
+def test_the_matching_release_can_clear_a_host():
+    ranges = [
+        FakeRange(source="ubuntu", authority=Authority.DISTRO_TRACKER,
+                  introduced="0", fixed="3.0.13-0ubuntu3.12"),
+    ]
+    ranges[0].distro_release = "24.04"
+    affected, *_ = evaluate(
+        ecosystem="deb", package="openssl", version="3.0.13-0ubuntu3.12",
+        ranges=ranges, distro_release="24.04",
+    )
+    assert affected is False
+
+
+def test_an_unknown_release_is_a_gap_not_a_guess():
+    """Matching a host of unknown release against release-specific ranges would be
+    guessing. The gap is recorded instead."""
+    ranges = [
+        FakeRange(source="ubuntu", authority=Authority.DISTRO_TRACKER,
+                  introduced="0", fixed="3.0.13-0ubuntu3.12"),
+    ]
+    ranges[0].distro_release = "24.04"
+    affected, method, _, _, _, conflicts = evaluate(
+        ecosystem="deb", package="openssl", version="3.0.13-0ubuntu3.11",
+        ranges=ranges, distro_release=None,
+    )
+    assert affected is False
+    assert any(c.get("says") == "unknown" for c in conflicts)
+
+
+def test_release_agnostic_ranges_still_apply():
+    ranges = [
+        FakeRange(source="ubuntu", authority=Authority.DISTRO_TRACKER,
+                  introduced="0", fixed="3.0.13-0ubuntu3.12"),
+    ]
+    ranges[0].distro_release = None
+    affected, *_ = evaluate(
+        ecosystem="deb", package="openssl", version="3.0.13-0ubuntu3.11",
+        ranges=ranges, distro_release=None,
+    )
+    assert affected is True
