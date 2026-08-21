@@ -486,6 +486,7 @@ class Finding(Base):
     matched_release: Mapped[str | None] = mapped_column(String(32))
     fix_channel: Mapped[str | None] = mapped_column(String(16))
     fixed_version: Mapped[str | None] = mapped_column(Text)
+    investigation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     risk_score: Mapped[int | None] = mapped_column(SmallInteger)
     risk_band: Mapped[str | None] = mapped_column(String(16))
     confidence: Mapped[float | None] = mapped_column(Float)
@@ -550,3 +551,34 @@ class EgressLog(Base):
     prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class InvestigationRecord(Base):
+    """A completed investigation, keyed by the facts that could change its answer.
+
+    Stores everything needed to replay the conclusion: the model, the prompt hash,
+    and the ordered tool calls. A verdict nobody can reconstruct is not evidence.
+    """
+
+    __tablename__ = "investigation"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    fingerprint: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    vulnerability_id: Mapped[str] = mapped_column(Text, nullable=False)
+    advisory_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    verdict: Mapped[str] = mapped_column(String(16), nullable=False)
+    verdict_confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    signals: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    rationale: Mapped[str | None] = mapped_column(Text)
+    uncertainties: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    corrections: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    tool_calls: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    reused: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

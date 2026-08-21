@@ -22,6 +22,7 @@ from athena.queue import (
 from athena.workers import (
     image,  # noqa: F401  (registers scan.image)
     intel_jobs,  # noqa: F401  (registers intel.* and correlate.*)
+    investigate,  # noqa: F401  (registers investigate.finding)
     node_ingest,  # noqa: F401  (registers ingest.node_observation)
     repository,  # noqa: F401  (registers scan.repository)
 )
