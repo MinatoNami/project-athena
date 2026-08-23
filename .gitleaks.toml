@@ -1,0 +1,18 @@
+# Gitleaks configuration.
+#
+# Athena's own secret detector is tested against synthetic credentials, which look
+# exactly like real ones by design — that is the point of the test. They are
+# assembled at runtime so no credential-shaped literal exists in the file, and this
+# allowlist is the second layer, so a scan of this repository stays clean and a real
+# leak is never buried in familiar noise.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic credentials used to test the secret detector"
+paths = ['''core/tests/test_egress\.py''']
+
+[[allowlists]]
+description = "Test-only database password, labelled as such, used by CI"
+regexes = ['''test-only-not-a-secret''']
