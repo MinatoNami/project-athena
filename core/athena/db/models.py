@@ -449,6 +449,10 @@ class IntelSource(Base):
 
     name: Mapped[str] = mapped_column(String(32), primary_key=True)
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The moment that never moves. `last_success_at` is overwritten on every poll, so
+    # it can never answer "since when has Athena been watching" — which is the start
+    # line detection latency has to be measured from.
+    first_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
     cursor: Mapped[str | None] = mapped_column(Text)

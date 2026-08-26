@@ -83,6 +83,15 @@ class Settings(BaseSettings):
     # Local hours during which only urgent notifications send; everything else waits
     # for the digest. Empty disables it. Format "22:00-07:00", crossing midnight.
     notify_quiet_hours: str = ""
+
+    # --- service levels -----------------------------------------------------
+    # Days a finding of each band may stay open before it is late. These are
+    # defaults chosen to be argued with, not derived from the PRD — it sets targets
+    # for detection and accuracy but says nothing about how long a confirmed finding
+    # may sit. Change them rather than quietly ignoring them.
+    sla_days_critical: int = 7
+    sla_days_high: int = 30
+    sla_days_medium: int = 90
     # Point this at a MagicDNS name rather than a tailnet IP where the model lives on
     # another machine: tailnet addresses are reassigned on reconnect, and a stale one
     # presents as an unreachable model rather than as a configuration error.

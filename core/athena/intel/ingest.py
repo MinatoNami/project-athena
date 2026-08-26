@@ -232,6 +232,10 @@ def record_source_result(
     source.last_attempt_at = now
     if succeeded:
         source.last_success_at = now
+        # Set once and never moved: this is the start line detection latency is
+        # measured from, and a moving one would make the metric meaningless.
+        if source.first_success_at is None:
+            source.first_success_at = now
         source.last_error = None
         source.advisories = (source.advisories or 0) + advisories
         if cursor:
