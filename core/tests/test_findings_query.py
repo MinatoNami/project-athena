@@ -222,3 +222,16 @@ def test_the_queue_count_matches_what_the_queue_returns(session, estate):
     page = query_findings(session, FindingQuery(needs_attention=True, limit=100))
     assert page.matching_group_count == len(page.groups)
     assert page.facets["needs_attention"]["matching"] == len(page.groups)
+
+
+def test_every_facet_respects_group_level_filters(session, estate):
+    """Exposure used to be counted outside the group aggregate, so it never saw the
+    HAVING clauses: filtering to an empty population still reported the full estate
+    as matching on exposure while every other facet correctly reported none."""
+    page = query_findings(session, FindingQuery(assessed=False, limit=100))
+    assert page.matching_group_count == page.facets["unassessed"]["matching"]
+    for name, counts in page.facets.items():
+        assert counts["matching"] <= page.matching_group_count, (
+            f"facet {name} claims more matches than the query returned"
+        )
+        assert counts["matching"] <= counts["total"], name

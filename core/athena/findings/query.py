@@ -191,6 +191,13 @@ _AGG = (
     func.max(func.coalesce(Vulnerability.cvss_score, 0.0)).label("cvss"),
     func.max(func.coalesce(Vulnerability.epss_score, 0.0)).label("epss"),
     func.max(Vulnerability.published_at).label("published_at"),
+    # Exposure is a property of the instance, rolled up as "does any instance have
+    # it". Counting it outside this aggregate meant it never saw the HAVING clauses,
+    # so a group-level filter left the exposure counts untouched.
+    *[
+        func.max(case((Asset.exposure == value, 1), else_=0)).label(f"exposure_{value}")
+        for value in ("internet", "internal", "isolated", "unknown")
+    ],
 )
 
 
@@ -289,25 +296,15 @@ def _facet_counts(session: Session, query: FindingQuery, *, with_facets: bool) -
             func.count()
             .filter((sub.c.worst_rank >= 2) | (sub.c.kev > 0))
             .label("needs_attention"),
+            *[
+                func.count().filter(sub.c[f"exposure_{value}"] > 0).label(f"exposure:{value}")
+                for value in ("internet", "internal", "isolated", "unknown")
+            ],
             func.coalesce(func.sum(sub.c.instance_count), 0).label("instances"),
             func.coalesce(func.sum(sub.c.investigated_count), 0).label("assessed_instances"),
         ).select_from(sub)
     ).one()
     return dict(row._mapping)
-
-
-def _exposure_counts(session: Session, query: FindingQuery, *, with_facets: bool) -> dict[str, int]:
-    """Exposure is a property of the asset, so it is counted over distinct groups."""
-    stmt = _base(query)
-    if with_facets:
-        for pred in _facet_predicates(query):
-            stmt = stmt.where(pred)
-    rows = session.execute(
-        stmt.with_only_columns(
-            Asset.exposure, func.count(func.distinct(Finding.group_key))
-        ).group_by(Asset.exposure)
-    ).all()
-    return {exposure: count for exposure, count in rows}
 
 
 # ── the query ────────────────────────────────────────────────────────────────
@@ -340,20 +337,15 @@ def query_findings(session: Session, query: FindingQuery) -> Page:
 
     totals = _facet_counts(session, query, with_facets=False)
     matching = _facet_counts(session, query, with_facets=True)
-    exposure_totals = _exposure_counts(session, query, with_facets=False)
-    exposure_matching = _exposure_counts(session, query, with_facets=True)
 
     facets = {
         name: {"total": totals.get(name, 0), "matching": matching.get(name, 0)}
         for name in (
-            "assessed", "unassessed", "kev", "has_fix", "no_fix", "spread", "needs_attention",
+            "assessed", "unassessed", "kev", "has_fix", "no_fix", "spread",
+            "needs_attention", "exposure:internet", "exposure:internal",
+            "exposure:isolated", "exposure:unknown",
         )
     }
-    for exposure in set(exposure_totals) | set(exposure_matching):
-        facets[f"exposure:{exposure}"] = {
-            "total": exposure_totals.get(exposure, 0),
-            "matching": exposure_matching.get(exposure, 0),
-        }
 
     return Page(
         groups=groups,

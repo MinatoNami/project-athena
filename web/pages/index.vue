@@ -36,6 +36,18 @@ const { data, pending, error, refresh } = await useAsyncData(
 const { data: coverage } = await useAsyncData('today-coverage', () =>
   api<any>('coverage').catch(() => null),
 )
+
+/**
+ * Estate-wide totals, fetched separately from whichever tab is open.
+ *
+ * The strip and the all-clear state are denominators — "assessed, out of how many"
+ * — and taking them from the current tab's response made an empty queue report
+ * "0 of 0 findings assessed" while 537 were in fact assessed. A denominator that
+ * shrinks to match the filter is not a denominator.
+ */
+const { data: estate } = await useAsyncData('today-estate', () =>
+  api<any>('findings?limit=1').catch(() => null),
+)
 const { data: unclassified } = await useAsyncData('today-unclassified', () =>
   api<any>('assets/unclassified').catch(() => null),
 )
@@ -80,7 +92,7 @@ const rows = computed(() =>
 
 /** Tab counts are the server's, so they count the estate rather than the download. */
 const tabs = computed(() => {
-  const f = data.value?.facets ?? {}
+  const f = estate.value?.facets ?? {}
   return [
     { id: 'needs', label: 'Needs you', count: f.needs_attention?.total ?? 0 },
     { id: 'waiting', label: 'Waiting on Athena', count: f.unassessed?.total ?? 0 },
@@ -140,9 +152,9 @@ const heldBack = computed(() => {
       <div class="page-title">
         <h1>Today</h1>
         <p v-if="!pending">
-          <template v-if="data?.facets?.needs_attention?.total">
-            {{ data.facets.needs_attention.total }}
-            {{ data.facets.needs_attention.total === 1 ? 'vulnerability needs' : 'vulnerabilities need' }}
+          <template v-if="estate?.facets?.needs_attention?.total">
+            {{ estate.facets.needs_attention.total }}
+            {{ estate.facets.needs_attention.total === 1 ? 'vulnerability needs' : 'vulnerabilities need' }}
             a person. Everything else is either handled or still being looked at.
           </template>
           <template v-else>Nothing is waiting on you right now.</template>
@@ -153,7 +165,7 @@ const heldBack = computed(() => {
       </div>
     </div>
 
-    <CoverageStrip :coverage="coverage" :findings="data" />
+    <CoverageStrip :coverage="coverage" :findings="estate" />
 
     <div class="tabs">
       <button
@@ -176,7 +188,7 @@ const heldBack = computed(() => {
         </StateBlock>
 
         <StateBlock
-          v-else-if="!rows.length && tab === 'needs' && !data?.group_count"
+          v-else-if="!rows.length && tab === 'needs' && !estate?.group_count"
           kind="never" title="Athena has not looked yet"
         >
           No findings exist because nothing has been matched yet — <strong>not because you
@@ -191,8 +203,8 @@ const heldBack = computed(() => {
           kind="clean" title="Nothing needs you"
           :stats="[
             { value: `${coverage?.assets_fresh ?? 0} / ${coverage?.assets_total ?? 0}`, label: 'assets inventoried' },
-            { value: `${(data?.assessed_count ?? 0).toLocaleString()}`, label: 'findings assessed' },
-            { value: `${(data?.instance_count ?? 0).toLocaleString()}`, label: 'findings total' },
+            { value: `${(estate?.assessed_count ?? 0).toLocaleString()}`, label: 'findings assessed' },
+            { value: `${(estate?.instance_count ?? 0).toLocaleString()}`, label: 'findings total' },
           ]"
         >
           Every assessed finding landed below the band that needs a person. The counts

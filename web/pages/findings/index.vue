@@ -61,12 +61,14 @@ const { data: intel, refresh: refreshIntelData } = await useAsyncData('intel', (
   api<any>('intel/sources'),
 )
 
-// A new filter set is a new list, not more of the old one.
+// A new filter set is a new list, not more of the old one. `immediate` matters:
+// the first payload arrives with the server-rendered page, before this watcher
+// exists, so without it the list stayed empty while the header counted 137.
 watch(data, value => {
   pages.value = value?.groups ?? []
   cursor.value = value?.next_cursor ?? null
   expanded.value = null
-})
+}, { immediate: true })
 
 useEvents(['findings'], refresh)
 
