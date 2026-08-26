@@ -29,7 +29,9 @@ from athena.investigation.loop import context_fingerprint
 
 EVAL_ADVISORY_PREFIX = "EVAL-"
 EVAL_IDENTITY_PREFIX = "eval:"
-EVAL_SCAN_RUN = uuid.UUID("00000000-0000-0000-0000-0000000eva15")
+# Fixed sentinel: every eval-seeded AssetComponent traces to the same "scan run",
+# which makes eval rows recognisable in the database without a join.
+EVAL_SCAN_RUN = uuid.UUID("00000000-0000-0000-0000-00000000e7a1")
 
 
 def _asset(session, case, *, kind: str, suffix: str, spec: dict[str, Any]) -> Asset:
