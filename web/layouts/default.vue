@@ -37,6 +37,7 @@ const items = computed(() => [
   { to: '/', label: 'Today', glyph: 'today' },
   { to: '/findings', label: 'Findings', glyph: 'findings', count: nav.value?.findings?.group_count },
   { to: '/assets', label: 'Assets', glyph: 'assets', count: nav.value?.coverage?.assets_total },
+  { to: '/metrics', label: 'Metrics', glyph: 'metrics' },
   { to: '/activity', label: 'Activity', glyph: 'activity' },
 ])
 
