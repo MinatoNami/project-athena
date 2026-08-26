@@ -215,3 +215,24 @@ def test_an_unparsable_quiet_window_fails_open():
     want, never one they needed."""
     assert not in_quiet_hours(datetime.now(UTC), "not a time range")
     assert not in_quiet_hours(datetime.now(UTC), "")
+
+
+
+def test_the_inbox_leads_with_what_matters(session):
+    """Everything dispatched in one pass shares a timestamp, so ordering by time
+    alone buried an exploited flaw under whatever routine work went out beside it."""
+    from athena.api.routers.notifications import list_notifications
+
+    tag = uuid.uuid4().hex[:8]
+    for n in range(12):
+        emit(session, kind="finding.assessed", group_key=f"order-{tag}-{n}",
+             title=f"routine {n}", body="")
+    emit(session, kind="finding.assessed", group_key=f"order-{tag}-urgent",
+         title="exploited", body="", urgency="urgent")
+    session.flush()
+    dispatch(session)
+    session.flush()
+
+    listed = list_notifications(unread_only=False, limit=50, _=None, session=session)
+    ours = [n for n in listed["notifications"] if f"order-{tag}" in str(n["title"]) or n["title"] == "exploited"]
+    assert ours and ours[0]["urgency"] == "urgent", "the urgent notification was not first"

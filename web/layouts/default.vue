@@ -93,6 +93,8 @@ async function logout() {
       </ul>
 
       <div class="railfoot">
+        <NotificationBell />
+
         <NuxtLink to="/findings" class="status" :class="{ warn: intelStale }">
           <span class="dot" :class="intelStale ? 'down' : 'live'" />
           Intelligence {{ intelLabel }}

@@ -54,7 +54,16 @@ def list_notifications(
     stmt = (
         select(Notification)
         .where(Notification.state.in_(("sent", "digested", "read")))
-        .order_by(Notification.sent_at.desc().nullslast(), Notification.created_at.desc())
+        # Urgent first, then unread, then recency. Ordering by time alone buries an
+        # actively exploited flaw under whatever routine assessments happened to be
+        # dispatched in the same pass — they all carry the same timestamp, so the
+        # tie-break was effectively arbitrary.
+        .order_by(
+            (Notification.urgency != "urgent"),
+            Notification.read_at.is_not(None),
+            Notification.sent_at.desc().nullslast(),
+            Notification.created_at.desc(),
+        )
         .limit(limit)
     )
     if unread_only:
