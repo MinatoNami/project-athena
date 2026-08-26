@@ -53,6 +53,8 @@ def list_findings(
     asset_id: str | None = None,
     kev_only: bool = False,
     include_no_fix: bool = False,
+    include_suppressed: bool = False,
+    include_baseline: bool = False,
     q: str | None = None,
     assessed: bool | None = None,
     exposure: str | None = None,
@@ -86,6 +88,8 @@ def list_findings(
             state=state,
             asset_id=asset_id,
             include_no_fix=include_no_fix,
+            include_suppressed=include_suppressed,
+            include_baseline=include_baseline,
             q=q,
             assessed=assessed,
             # `kev_only` predates the facet set and is kept so existing callers and
@@ -131,6 +135,10 @@ def list_findings(
         # Each facet carries both numbers for the same reason.
         "facets": page.facets,
         "no_fix_available_count": no_fix_count,
+        # Both are held back rather than hidden, and both are one parameter away.
+        "suppressed_group_count": page.suppressed_group_count,
+        "baseline_group_count": page.baseline_group_count,
+        "unbaselined_asset_count": page.unbaselined_asset_count,
         "coverage": {"of_assets_observed": observed, "of_assets_total": total_assets},
         "caveat": (
             f"{page.assessed_count} of {page.instance_count} findings have been "

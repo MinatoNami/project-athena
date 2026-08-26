@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -16,6 +17,7 @@ from athena.db.models import (
     Finding,
     MergeCandidate,
     ScanRun,
+    Vulnerability,
 )
 from athena.inventory.identity import AssetKind, IdentityError, identity_for
 from athena.inventory.service import coverage, is_stale, register_asset
@@ -347,8 +349,6 @@ def rescan(
             f"Scanning {asset.kind} assets is not implemented yet",
         )
 
-    from datetime import UTC, datetime
-
     job = enqueue(
         session,
         kind="scan.repository",
@@ -438,3 +438,136 @@ def classify(
             priority=2,
         )
     return {"assets_changed": changed, "rescore_queued": job is not None}
+
+
+# ── baselines ────────────────────────────────────────────────────────────────
+
+
+class BaselineRequest(BaseModel):
+    asset_id: str | None = None
+    # Refuses by default when a line has already been drawn: moving a baseline
+    # forward accepts everything found since, which is a different decision from
+    # drawing one for the first time and should be asked for on purpose.
+    move_existing: bool = False
+
+
+def _baseline_preview(session: Session, asset_id: str | None) -> dict[str, Any]:
+    """What a baseline would accept, counted before it is drawn."""
+    from athena.findings.query import _is_new
+
+    stmt = (
+        select(func.count(func.distinct(Finding.group_key)), func.count())
+        .select_from(Finding)
+        .join(Asset, Asset.id == Finding.asset_id)
+        .join(Vulnerability, Vulnerability.id == Finding.vulnerability_id)
+        .where(Asset.tombstoned_at.is_(None), _is_new())
+    )
+    if asset_id:
+        stmt = stmt.where(Finding.asset_id == asset_id)
+    groups, findings = session.execute(stmt).one()
+
+    assets = select(func.count()).select_from(Asset).where(
+        Asset.tombstoned_at.is_(None), Asset.baseline_at.is_(None)
+    )
+    if asset_id:
+        assets = assets.where(Asset.id == asset_id)
+    return {
+        "vulnerabilities": groups,
+        "findings": findings,
+        "assets_without_baseline": session.execute(assets).scalar_one(),
+    }
+
+
+@router.get("/baseline")
+def baseline_status(
+    asset_id: str | None = None,
+    _: Principal = Depends(current_principal),
+    session: Session = Depends(db),
+) -> dict[str, Any]:
+    """What is currently baselined, and what drawing one now would accept."""
+    baselined = session.execute(
+        select(func.count())
+        .select_from(Asset)
+        .where(Asset.tombstoned_at.is_(None), Asset.baseline_at.is_not(None))
+    ).scalar_one()
+    total = session.execute(
+        select(func.count()).select_from(Asset).where(Asset.tombstoned_at.is_(None))
+    ).scalar_one()
+    return {
+        "assets_baselined": baselined,
+        "assets_total": total,
+        "would_accept": _baseline_preview(session, asset_id),
+    }
+
+
+@router.post("/baseline")
+def capture_baseline(
+    body: BaselineRequest,
+    principal: Principal = Depends(current_principal),
+    session: Session = Depends(db),
+) -> dict[str, Any]:
+    """Draw a line under what is already here.
+
+    Nothing is hidden or deleted: pre-existing findings stay listed, counted, and one
+    filter away. Known-exploited findings and anything measured at high or above stay
+    in the default view regardless — a baseline that swallowed those would be doing
+    the wall of red's job quietly.
+    """
+    stmt = select(Asset).where(Asset.tombstoned_at.is_(None))
+    if body.asset_id:
+        stmt = stmt.where(Asset.id == body.asset_id)
+    assets = session.execute(stmt).scalars().all()
+    if body.asset_id and not assets:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such asset")
+
+    already = [a for a in assets if a.baseline_at is not None]
+    if already and not body.move_existing:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{len(already)} of these assets already have a baseline. Moving it forward "
+            "accepts everything found since, which is a different decision from drawing "
+            "one for the first time — re-send with move_existing to do that.",
+        )
+
+    accepted = _baseline_preview(session, body.asset_id)
+    now = datetime.now(UTC)
+    for asset in assets:
+        asset.baseline_at = now
+        asset.baseline_by = principal.actor
+
+    record(
+        session,
+        actor=principal.actor,
+        action="BASELINE_CAPTURED",
+        subject=f"asset:{body.asset_id}" if body.asset_id else "estate",
+        detail={
+            "assets": len(assets),
+            "moved_existing": len(already),
+            "accepted": accepted,
+        },
+    )
+    return {"assets_baselined": len(assets), "accepted": accepted, "at": now}
+
+
+@router.delete("/baseline")
+def clear_baseline(
+    asset_id: str | None = None,
+    principal: Principal = Depends(current_principal),
+    session: Session = Depends(db),
+) -> dict[str, Any]:
+    """Undo it. Everything previously set aside as pre-existing comes back."""
+    stmt = select(Asset).where(Asset.tombstoned_at.is_(None), Asset.baseline_at.is_not(None))
+    if asset_id:
+        stmt = stmt.where(Asset.id == asset_id)
+    assets = session.execute(stmt).scalars().all()
+    for asset in assets:
+        asset.baseline_at = None
+        asset.baseline_by = None
+    record(
+        session,
+        actor=principal.actor,
+        action="BASELINE_CLEARED",
+        subject=f"asset:{asset_id}" if asset_id else "estate",
+        detail={"assets": len(assets)},
+    )
+    return {"assets_cleared": len(assets)}

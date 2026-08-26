@@ -82,6 +82,10 @@ class FindingQuery:
     # Suppressed findings are excluded by default and counted separately — held
     # back, never hidden, the same treatment as findings with no published fix.
     include_suppressed: bool = False
+    # Pre-existing findings are excluded by default and counted separately. A
+    # baseline is a lens, not a dismissal: nothing is hidden and nothing needed a
+    # reason, so unlike suppression it takes one parameter to see all of it again.
+    include_baseline: bool = False
 
     # Facets.
     q: str | None = None
@@ -126,6 +130,8 @@ class Page:
     instance_count: int = 0
     assessed_count: int = 0
     suppressed_group_count: int = 0
+    baseline_group_count: int = 0
+    unbaselined_asset_count: int = 0
     facets: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
@@ -149,7 +155,25 @@ def _base(query: FindingQuery) -> Select:
         stmt = stmt.where(Finding.asset_id == query.asset_id)
     if not query.include_suppressed:
         stmt = stmt.where(~_suppressed_exists())
+    if not query.include_baseline:
+        stmt = stmt.where(_is_new())
     return stmt
+
+
+def _is_new() -> Any:
+    """Not part of the backlog this asset was accepted with.
+
+    The escape clause is the important half. A known-exploited flaw, or one measured
+    at high or critical, is not "state I inherited and accepted" — it is an emergency
+    that happens to be old, and a baseline that swallowed it would be doing exactly
+    what the wall of red does, only quietly.
+    """
+    return or_(
+        Asset.baseline_at.is_(None),
+        Finding.first_seen > Asset.baseline_at,
+        Vulnerability.kev.is_(True),
+        _BAND_RANK >= 3,
+    )
 
 
 def _suppressed_exists() -> Any:
@@ -370,6 +394,25 @@ def query_findings(session: Session, query: FindingQuery) -> Page:
         .where(_suppressed_exists())
     ).scalar_one()
 
+    # Held back, never hidden: the size of the inherited backlog stays a number on
+    # the page rather than something to go looking for.
+    baselined = session.execute(
+        select(func.count(func.distinct(Finding.group_key)))
+        .select_from(Finding)
+        .join(Asset, Asset.id == Finding.asset_id)
+        .join(Vulnerability, Vulnerability.id == Finding.vulnerability_id)
+        .where(~_is_new())
+    ).scalar_one()
+
+    # Assets carrying findings that nobody has drawn a line under yet. This is what
+    # tells the UI whether offering a baseline would do anything.
+    unbaselined = session.execute(
+        select(func.count(func.distinct(Asset.id)))
+        .select_from(Asset)
+        .join(Finding, Finding.asset_id == Asset.id)
+        .where(Asset.baseline_at.is_(None), Asset.tombstoned_at.is_(None))
+    ).scalar_one()
+
     facets = {
         name: {"total": totals.get(name, 0), "matching": matching.get(name, 0)}
         for name in (
@@ -390,6 +433,8 @@ def query_findings(session: Session, query: FindingQuery) -> Page:
         instance_count=matching["instances"],
         assessed_count=matching["assessed_instances"],
         suppressed_group_count=suppressed,
+        baseline_group_count=baselined,
+        unbaselined_asset_count=unbaselined,
         facets=facets,
     )
 

@@ -184,6 +184,11 @@ class Asset(Base):
     # NULL means never successfully inventoried. The UI must render that as unknown,
     # never as clean.
     last_inventoried_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The moment this asset's existing backlog was accepted as "what was already
+    # here". Findings first seen at or before it are pre-existing; later ones are
+    # new. Null means no baseline, so everything counts as new.
+    baseline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    baseline_by: Mapped[str | None] = mapped_column(Text)
     tombstoned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (UniqueConstraint("kind", "identity_key", name="asset_identity_uniq"),)
