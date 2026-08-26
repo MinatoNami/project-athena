@@ -17,8 +17,21 @@ if (!me.value) await navigateTo('/login')
 const tab = ref<'needs' | 'waiting' | 'cleared'>('needs')
 const open = ref<string | null>(null)
 
-const { data, pending, error, refresh } = await useAsyncData('today', () =>
-  api<any>('findings?limit=300'),
+/**
+ * Three populations, each asked for by name rather than carved out of one
+ * over-fetched list. The counts beside the tabs are then the server's, which means
+ * they describe the estate rather than however much happened to be downloaded.
+ */
+const QUERIES = {
+  needs: 'needs_attention=true&sort=risk&limit=50',
+  waiting: 'assessed=false&sort=risk&limit=50',
+  cleared: 'assessed=true&sort=risk&limit=50',
+}
+
+const { data, pending, error, refresh } = await useAsyncData(
+  'today',
+  () => api<any>(`findings?${QUERIES[tab.value]}`),
+  { watch: [tab] },
 )
 const { data: coverage } = await useAsyncData('today-coverage', () =>
   api<any>('coverage').catch(() => null),
@@ -28,10 +41,6 @@ const { data: unclassified } = await useAsyncData('today-unclassified', () =>
 )
 
 useEvents(['findings'], refresh)
-
-const BAND_RANK: Record<string, number> = {
-  critical: 4, high: 3, medium: 2, low: 1, informational: 0,
-}
 
 /**
  * One entry per decision, not per row in the database.
@@ -63,41 +72,25 @@ const instances = computed(() => {
   return [...collapsed.values()]
 })
 
-/**
- * Needs a person: assessed and consequential, or flagged as exploited. Deliberately
- * not "everything not yet closed" — a queue that never empties is a queue nobody opens.
- */
-const needs = computed(() =>
-  instances.value
-    .filter((i: any) => {
-      if (i.triage_disposition === 'deprioritise') return false
-      if (i.investigated) return (BAND_RANK[i.risk_band] ?? 0) >= 2
-      return i.group.kev
-    })
-    .sort((a: any, b: any) => (b.risk_score ?? 0) - (a.risk_score ?? 0)),
-)
-
-const waiting = computed(() =>
-  instances.value.filter((i: any) => !i.investigated && !i.group.kev),
-)
-
-const cleared = computed(() =>
-  instances.value.filter(
-    (i: any) =>
-      i.triage_disposition === 'deprioritise' ||
-      (i.investigated && (BAND_RANK[i.risk_band] ?? 0) < 2),
-  ),
-)
-
 const rows = computed(() =>
-  ({ needs: needs.value, waiting: waiting.value, cleared: cleared.value }[tab.value]).slice(0, 60),
+  tab.value === 'needs'
+    ? instances.value
+    : instances.value.filter((i: any) => i.triage_disposition !== 'deprioritise'),
 )
 
-const tabs = computed(() => [
-  { id: 'needs', label: 'Needs you', count: needs.value.length },
-  { id: 'waiting', label: 'Waiting on Athena', count: waiting.value.length },
-  { id: 'cleared', label: 'Cleared', count: cleared.value.length },
-])
+/** Tab counts are the server's, so they count the estate rather than the download. */
+const tabs = computed(() => {
+  const f = data.value?.facets ?? {}
+  return [
+    { id: 'needs', label: 'Needs you', count: f.needs_attention?.total ?? 0 },
+    { id: 'waiting', label: 'Waiting on Athena', count: f.unassessed?.total ?? 0 },
+    { id: 'cleared', label: 'Cleared', count: f.assessed?.total ?? 0 },
+  ]
+})
+
+const truncated = computed(() =>
+  (data.value?.matching_group_count ?? 0) > (data.value?.groups?.length ?? 0),
+)
 
 /** Why this sits where it does — assembled from what was actually established. */
 function reason(i: any) {
@@ -147,9 +140,10 @@ const heldBack = computed(() => {
       <div class="page-title">
         <h1>Today</h1>
         <p v-if="!pending">
-          <template v-if="needs.length">
-            {{ needs.length }} {{ needs.length === 1 ? 'finding needs' : 'findings need' }} a person.
-            Everything else is either handled or still being looked at.
+          <template v-if="data?.facets?.needs_attention?.total">
+            {{ data.facets.needs_attention.total }}
+            {{ data.facets.needs_attention.total === 1 ? 'vulnerability needs' : 'vulnerabilities need' }}
+            a person. Everything else is either handled or still being looked at.
           </template>
           <template v-else>Nothing is waiting on you right now.</template>
         </p>
@@ -182,7 +176,7 @@ const heldBack = computed(() => {
         </StateBlock>
 
         <StateBlock
-          v-else-if="!rows.length && tab === 'needs' && !instances.length"
+          v-else-if="!rows.length && tab === 'needs' && !data?.group_count"
           kind="never" title="Athena has not looked yet"
         >
           No findings exist because nothing has been matched yet — <strong>not because you
@@ -265,6 +259,12 @@ const heldBack = computed(() => {
             </div>
           </div>
         </div>
+
+        <p v-if="truncated" class="truncated">
+          Showing the {{ rows.length }} highest-ranked of
+          {{ (data?.matching_group_count ?? 0).toLocaleString() }}.
+          <NuxtLink to="/findings">See all in Findings →</NuxtLink>
+        </p>
       </div>
 
       <aside class="rail">
@@ -342,6 +342,7 @@ const heldBack = computed(() => {
 .facts .gap { color: var(--warn-ink); }
 .rowacts { display: flex; gap: .5rem; }
 
+.truncated { margin: .4rem 0 0; font-size: .76rem; color: var(--ink-muted); }
 .card { border: 1px solid var(--rule); border-radius: 9px; background: var(--surface); padding: .85rem .9rem; }
 .card p { margin: .5rem 0 .6rem; font-size: .8rem; line-height: 1.5; color: var(--ink-2); }
 .card p strong { color: var(--ink); font-weight: 600; }

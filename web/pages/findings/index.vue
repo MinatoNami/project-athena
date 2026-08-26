@@ -2,10 +2,14 @@
 /**
  * Findings, grouped by vulnerability.
  *
- * The old page was a hundred-row accordion with two checkboxes and no search. This
- * one filters on facets that carry their own counts, because a filter that hides its
- * denominator turns "nothing here" into a false all-clear — the exact failure this
- * product exists to avoid.
+ * Filtering, sorting and paging are the server's job now. They used to happen in the
+ * browser over whatever the API returned, which meant the counts beside each facet
+ * described the page rather than the estate, and the page was itself an arbitrary
+ * slice once the estate outgrew it.
+ *
+ * Each facet shows two numbers when they differ: how many survive the current
+ * filters, and how many exist at all. A count that silently means "of what you can
+ * currently see" is how a filtered view comes to read as a complete one.
  */
 useHead({ title: 'Findings' })
 
@@ -14,21 +18,69 @@ if (!me.value) await navigateTo('/login')
 
 const includeNoFix = ref(false)
 const query = ref('')
+const debounced = ref('')
 const facets = ref<string[]>([])
-const sort = ref<'risk' | 'spread'>('risk')
+const sort = ref<'risk' | 'spread' | 'recent'>('risk')
 const expanded = ref<string | null>(null)
 const refreshing = ref(false)
+const pages = ref<any[]>([])
+const cursor = ref<string | null>(null)
+const loadingMore = ref(false)
+
+let debounceTimer: ReturnType<typeof setTimeout> | undefined
+watch(query, value => {
+  clearTimeout(debounceTimer)
+  debounceTimer = setTimeout(() => (debounced.value = value), 250)
+})
+
+/** Facet id → the query parameter it sets. Kept in one place so the chips, the
+    request and the counts cannot drift apart. */
+const FACET_PARAM: Record<string, string> = {
+  assessed: 'assessed=true',
+  unassessed: 'assessed=false',
+  kev: 'kev_only=true',
+  has_fix: 'has_fix=true',
+  no_fix: 'has_fix=false',
+  'exposure:internet': 'exposure=internet',
+}
+
+const params = computed(() => {
+  const parts = [`limit=50`, `sort=${sort.value}`]
+  if (includeNoFix.value) parts.push('include_no_fix=true')
+  if (debounced.value.trim()) parts.push(`q=${encodeURIComponent(debounced.value.trim())}`)
+  for (const id of facets.value) if (FACET_PARAM[id]) parts.push(FACET_PARAM[id])
+  return parts.join('&')
+})
 
 const { data, pending, error, refresh } = await useAsyncData(
   'findings',
-  () => api<any>(`findings?limit=300${includeNoFix.value ? '&include_no_fix=true' : ''}`),
-  { watch: [includeNoFix] },
+  () => api<any>(`findings?${params.value}`),
+  { watch: [params] },
 )
 const { data: intel, refresh: refreshIntelData } = await useAsyncData('intel', () =>
   api<any>('intel/sources'),
 )
 
+// A new filter set is a new list, not more of the old one.
+watch(data, value => {
+  pages.value = value?.groups ?? []
+  cursor.value = value?.next_cursor ?? null
+  expanded.value = null
+})
+
 useEvents(['findings'], refresh)
+
+async function loadMore() {
+  if (!cursor.value || loadingMore.value) return
+  loadingMore.value = true
+  try {
+    const next = await api<any>(`findings?${params.value}&cursor=${encodeURIComponent(cursor.value)}`)
+    pages.value = [...pages.value, ...(next.groups ?? [])]
+    cursor.value = next.next_cursor ?? null
+  } finally {
+    loadingMore.value = false
+  }
+}
 
 async function refreshIntel() {
   refreshing.value = true
@@ -40,70 +92,55 @@ async function refreshIntel() {
   }
 }
 
-const groups = computed(() => data.value?.groups ?? [])
+const shown = computed(() => pages.value)
 
-const PREDICATES: Record<string, (g: any) => boolean> = {
-  assessed: g => (g.investigated_count ?? 0) > 0,
-  unassessed: g => (g.investigated_count ?? 0) === 0,
-  kev: g => !!g.kev,
-  fixable: g => (g.instances ?? []).some((i: any) => !!i.fixed_version),
-  nofix: g => (g.instances ?? []).every((i: any) => !i.fixed_version),
-  spread: g => (g.instance_count ?? 0) > 1,
-}
-
-function matches(g: any) {
-  const q = query.value.trim().toLowerCase()
-  if (q && !`${g.vulnerability_id} ${g.summary ?? ''}`.toLowerCase().includes(q)) return false
-  return facets.value.every(f => PREDICATES[f]?.(g) ?? true)
-}
-
-const shown = computed(() => {
-  const list = groups.value.filter(matches)
-  return sort.value === 'spread'
-    ? [...list].sort((a, b) => (b.instance_count ?? 0) - (a.instance_count ?? 0))
-    : list
-})
-
-/** Counts are computed over everything, not over what survives the current filters —
-    a facet whose count changes as you tick it cannot tell you what you are excluding. */
-function count(id: string) {
-  return groups.value.filter(PREDICATES[id]).length
+function facetCount(id: string) {
+  return data.value?.facets?.[id] ?? { total: 0, matching: 0 }
 }
 
 const facetGroups = computed(() => [
   {
     label: 'Assessment',
     options: [
-      { id: 'assessed', label: 'Investigated', n: count('assessed') },
-      { id: 'unassessed', label: 'Not yet looked at', n: count('unassessed') },
+      { id: 'assessed', label: 'Investigated' },
+      { id: 'unassessed', label: 'Not yet looked at' },
     ],
   },
   {
     label: 'Exploitation',
-    options: [{ id: 'kev', label: 'Known-exploited', n: count('kev') }],
+    options: [
+      { id: 'kev', label: 'Known-exploited' },
+      { id: 'exposure:internet', label: 'Internet-facing' },
+    ],
   },
   {
     label: 'Fix',
     options: [
-      { id: 'fixable', label: 'Fix published', n: count('fixable') },
-      { id: 'nofix', label: 'No fix yet', n: count('nofix') },
+      { id: 'has_fix', label: 'Fix published' },
+      { id: 'no_fix', label: 'No fix yet' },
     ],
-  },
-  {
-    label: 'Reach',
-    options: [{ id: 'spread', label: 'More than one asset', n: count('spread') }],
   },
 ])
 
 function toggle(id: string) {
+  // Opposing facets are mutually exclusive: holding both asks for nothing.
+  const opposite: Record<string, string> = {
+    assessed: 'unassessed', unassessed: 'assessed', has_fix: 'no_fix', no_fix: 'has_fix',
+  }
   const at = facets.value.indexOf(id)
-  if (at === -1) facets.value.push(id)
-  else facets.value.splice(at, 1)
+  if (at !== -1) {
+    facets.value.splice(at, 1)
+    return
+  }
+  const other = facets.value.indexOf(opposite[id] ?? '')
+  if (other !== -1) facets.value.splice(other, 1)
+  facets.value.push(id)
 }
 
 function clearAll() {
   facets.value = []
   query.value = ''
+  debounced.value = ''
 }
 
 function ageLabel(seconds: number | null) {
@@ -170,11 +207,16 @@ function instanceLines(g: any) {
           <button
             v-for="o in fg.options" :key="o.id" class="facet"
             :class="{ on: facets.includes(o.id) }" :aria-pressed="facets.includes(o.id)"
+            :title="`${facetCount(o.id).matching} of ${facetCount(o.id).total} match the current filters`"
             @click="toggle(o.id)"
           >
             <span class="box">{{ facets.includes(o.id) ? '✓' : '' }}</span>
             <span class="fname">{{ o.label }}</span>
-            <span class="mono tnum fn">{{ o.n }}</span>
+            <span class="mono tnum fn">
+              {{ facetCount(o.id).matching }}<span
+                v-if="facetCount(o.id).matching !== facetCount(o.id).total"
+                class="denom">/{{ facetCount(o.id).total }}</span>
+            </span>
           </button>
         </div>
 
@@ -198,17 +240,18 @@ function instanceLines(g: any) {
       <section class="results">
         <div class="resulthead">
           <span class="n">
-            {{ shown.length.toLocaleString() }}
-            {{ shown.length === 1 ? 'vulnerability' : 'vulnerabilities' }}
+            {{ (data?.matching_group_count ?? 0).toLocaleString() }}
+            {{ data?.matching_group_count === 1 ? 'vulnerability' : 'vulnerabilities' }}
           </span>
           <span class="of">
-            {{ shown.length === groups.length
+            {{ data && data.matching_group_count === data.group_count
               ? 'no filters applied'
-              : `of ${groups.length.toLocaleString()}` }}
+              : `of ${(data?.group_count ?? 0).toLocaleString()}` }}
           </span>
           <div class="seg">
             <button :class="{ on: sort === 'risk' }" @click="sort = 'risk'">Risk</button>
             <button :class="{ on: sort === 'spread' }" @click="sort = 'spread'">Spread</button>
+            <button :class="{ on: sort === 'recent' }" @click="sort = 'recent'">Newest</button>
           </div>
         </div>
 
@@ -220,7 +263,7 @@ function instanceLines(g: any) {
         </StateBlock>
 
         <StateBlock
-          v-else-if="!groups.length" kind="never" title="Athena has not looked yet"
+          v-else-if="!data?.group_count" kind="never" title="Athena has not looked yet"
         >
           No advisories have been matched against your inventory. This list is empty
           because nothing has been checked — <strong>not because you are clean</strong>.
@@ -230,8 +273,8 @@ function instanceLines(g: any) {
           v-else-if="!shown.length" kind="empty" title="Nothing matches those filters"
         >
           That is a statement about the filters, not about your estate.
-          {{ groups.length.toLocaleString() }} vulnerabilities are still here with them
-          cleared.
+          {{ (data?.group_count ?? 0).toLocaleString() }} vulnerabilities are still here
+          with them cleared.
           <template #actions><button class="btn" @click="clearAll">Clear filters</button></template>
         </StateBlock>
 
@@ -306,6 +349,16 @@ function instanceLines(g: any) {
             </table>
           </div>
         </div>
+
+        <div v-if="cursor" class="more">
+          <button class="btn" :disabled="loadingMore" @click="loadMore">
+            {{ loadingMore ? 'Loading…' : 'Load more' }}
+          </button>
+          <span class="moremeta">
+            Showing {{ shown.length.toLocaleString() }} of
+            {{ (data?.matching_group_count ?? 0).toLocaleString() }}
+          </span>
+        </div>
       </section>
     </div>
   </div>
@@ -343,6 +396,10 @@ function instanceLines(g: any) {
 .facet.on .box { background: var(--ink); border-color: var(--ink); color: var(--surface); }
 .fname { flex-grow: 1; }
 .fn { font-size: .7rem; color: var(--ink-muted); }
+.denom { opacity: .6; }
+.more { padding: .7rem .85rem; border-top: 1px solid var(--rule);
+        display: flex; align-items: center; gap: .8rem; }
+.moremeta { font-size: .74rem; color: var(--ink-muted); }
 .toggle { flex-direction: row; align-items: flex-start; gap: .45rem; font-size: .76rem;
           color: var(--ink-2); padding: 0 .5rem; margin: 0; line-height: 1.4; }
 .toggle input { width: auto; margin-top: .15rem; }
