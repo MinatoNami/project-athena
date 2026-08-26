@@ -304,7 +304,10 @@ def report(cases: list[Case], runs: list[dict[str, Result]], violations: list[st
         verdicts = Counter(a.verdict or "—" for a in attempts)
         bands = Counter(a.band or "—" for a in attempts)
         scores = [a.risk_score for a in attempts if a.risk_score is not None]
-        unstable = len(verdicts) > 1 or len(bands) > 1
+        usable = [a for a in attempts if a.status == "ok"]
+        unstable = len(usable) > 1 and (
+            len({a.verdict for a in usable}) > 1 or len({a.band for a in usable}) > 1
+        )
 
         def fmt(counter: Counter) -> str:
             return " ".join(
@@ -351,7 +354,8 @@ def report(cases: list[Case], runs: list[dict[str, Result]], violations: list[st
     })
     unstable_cases = sorted({
         cid for cid, attempts in per_case.items()
-        if len({a.verdict for a in attempts}) > 1 or len({a.band for a in attempts}) > 1
+        if len(usable := [a for a in attempts if a.status == "ok"]) > 1
+        and (len({a.verdict for a in usable}) > 1 or len({a.band for a in usable}) > 1)
     })
     # Discrimination is judged on the worst repeat: a ranking that separates cases
     # only sometimes does not separate them.
