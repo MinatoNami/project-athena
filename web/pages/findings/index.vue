@@ -43,10 +43,15 @@ function ageLabel(seconds: number | null) {
     <h1>Findings</h1>
     <p class="sub">Packages that match a published advisory. Grouped by vulnerability.</p>
 
-    <!-- Stated up front, not buried. These are version matches, not assessed risk. -->
+    <!-- Two populations now live here, and conflating them would undo the point:
+         findings with a measured band behind them, and findings that are still only
+         version matches. -->
     <div class="caveat">
-      <strong>Not yet investigated.</strong>
-      {{ data?.caveat }}
+      <strong>Mixed.</strong>
+      Findings marked with a band have been investigated — the component was checked
+      against this asset and the risk scored on what was found. Findings marked
+      <em>unassessed</em> are version matches only: nothing has checked whether the
+      component runs, is reachable, or is exploitable here.
     </div>
 
     <div v-if="intel" class="card">
@@ -119,10 +124,22 @@ function ageLabel(seconds: number | null) {
 
       <div v-for="g in data?.groups ?? []" :key="g.group_key" class="finding">
         <div class="row" @click="expanded = expanded === g.group_key ? null : g.group_key">
-          <SeverityChip :severity="g.provisional_severity" :kev="g.kev" />
+          <SeverityChip
+            v-if="g.worst_band"
+            :severity="g.worst_band"
+            :kev="g.kev"
+          />
+          <span v-else class="unassessed" title="Version match only — not investigated">
+            unassessed
+            <span v-if="g.kev" class="kev-flag">KEV</span>
+          </span>
           <code class="cve">{{ g.vulnerability_id }}</code>
-          <span class="count">{{ g.instance_count }}
-            {{ g.instance_count === 1 ? 'asset' : 'assets' }}</span>
+          <span class="count">
+            {{ g.instance_count }} {{ g.instance_count === 1 ? 'asset' : 'assets' }}
+            <template v-if="g.investigated_count">
+              · {{ g.investigated_count }} assessed
+            </template>
+          </span>
           <span class="summary">{{ g.summary || '—' }}</span>
           <span class="chev">{{ expanded === g.group_key ? '▾' : '▸' }}</span>
         </div>
@@ -136,7 +153,7 @@ function ageLabel(seconds: number | null) {
           </p>
           <table>
             <thead>
-              <tr><th>asset</th><th>component</th><th>fixed in</th><th>match</th></tr>
+              <tr><th>asset</th><th>component</th><th>fixed in</th><th>assessment</th></tr>
             </thead>
             <tbody>
               <tr v-for="i in g.instances" :key="i.finding_id">
@@ -153,11 +170,27 @@ function ageLabel(seconds: number | null) {
                     {{ i.fix_channel }}
                   </span>
                 </td>
-                <td class="muted small">
-                  {{ i.match_method }}
-                  <span :title="'How the match was made, not whether it is exploitable here'">
-                    ({{ (i.match_confidence * 100).toFixed(0) }}%)
-                  </span>
+                <td class="small">
+                  <template v-if="i.investigated">
+                    <SeverityChip :severity="i.risk_band" />
+                    <span class="muted"> {{ i.risk_score }}/100</span>
+                    <span v-if="i.confidence != null" class="muted">
+                      · confidence {{ (i.confidence * 100).toFixed(0) }}%
+                    </span>
+                  </template>
+                  <template v-else-if="i.triage_disposition === 'deprioritise'">
+                    <span class="muted" :title="i.triage_reason">
+                      triaged as lower priority · not investigated
+                    </span>
+                  </template>
+                  <template v-else-if="i.triage_disposition === 'investigate'">
+                    <span class="muted">queued for investigation</span>
+                  </template>
+                  <template v-else>
+                    <span class="muted" :title="'How the match was made, not whether it is exploitable here'">
+                      {{ i.match_method }} ({{ (i.match_confidence * 100).toFixed(0) }}%)
+                    </span>
+                  </template>
                 </td>
               </tr>
             </tbody>
@@ -189,6 +222,15 @@ function ageLabel(seconds: number | null) {
 .count { font-size: .8rem; color: var(--ink-muted); }
 .summary { font-size: .87rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chev { color: var(--ink-muted); }
+.unassessed {
+  font-size: .72rem; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--ink-muted); border: 1px dashed var(--rule);
+  border-radius: 4px; padding: .14rem .4rem; white-space: nowrap;
+}
+.kev-flag {
+  background: var(--sev-critical); color: var(--sev-on-dark);
+  padding: 0 .22rem; border-radius: 3px; margin-left: .25rem;
+}
 .detail { padding: .2rem .1rem 1rem; }
 .small { font-size: .8rem; }
 .bad { color: var(--crit); font-weight: 600; }

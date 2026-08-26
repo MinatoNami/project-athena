@@ -85,6 +85,9 @@ def list_findings(
             finding.group_key,
             {
                 "group_key": finding.group_key,
+                "worst_band": None,
+                "worst_score": None,
+                "investigated_count": 0,
                 "vulnerability_id": vulnerability.id,
                 "summary": vulnerability.summary,
                 "provisional_severity": _severity_of(vulnerability),
@@ -99,6 +102,15 @@ def list_findings(
         group["instances"].append(
             {
                 "finding_id": str(finding.id),
+                # An investigated finding has a real band and a confidence behind it.
+                # One that has not been looked at has neither, and must not borrow the
+                # advisory's severity to look as though it had.
+                "investigated": finding.risk_band is not None,
+                "risk_band": finding.risk_band,
+                "risk_score": finding.risk_score,
+                "confidence": finding.confidence,
+                "triage_disposition": finding.triage_disposition,
+                "triage_reason": finding.triage_reason,
                 "asset_id": str(asset.id),
                 "asset": asset.display_name,
                 "asset_kind": asset.kind,
@@ -118,9 +130,23 @@ def list_findings(
     # Known-exploited first, then severity, then CVSS, then most recent. This is the
     # only ordering defensible before M3: nothing here knows whether a service is
     # running or reachable, so it cannot claim to rank by risk.
+    # Roll the per-instance assessment up to the group. Risk is scored per instance,
+    # so the group takes the worst of them rather than an average that would hide it.
+    band_rank = {"critical": 4, "high": 3, "medium": 2, "low": 1, "informational": 0}
+    for group in groups.values():
+        assessed = [i for i in group["instances"] if i["investigated"]]
+        group["investigated_count"] = len(assessed)
+        if assessed:
+            worst = max(assessed, key=lambda i: band_rank.get(i["risk_band"], -1))
+            group["worst_band"] = worst["risk_band"]
+            group["worst_score"] = worst["risk_score"]
+
     ordered = sorted(
         groups.values(),
         key=lambda g: (
+            # Assessed findings rank above unassessed ones: a measured band is a
+            # stronger claim than an advisory's opinion, in either direction.
+            -band_rank.get(g["worst_band"] or "", -1),
             not g["kev"],
             -SEVERITY_RANK.get(g["provisional_severity"], 0),
             -(g["cvss_score"] or 0),
@@ -268,7 +294,54 @@ def get_finding(
             }
             for r in ranges
         ],
-        "not_yet_investigated": finding.state == "discovered",
+        "not_yet_investigated": finding.risk_band is None,
+        "risk_band": finding.risk_band,
+        "risk_score": finding.risk_score,
+        "confidence": finding.confidence,
+        "triage": (
+            {
+                "disposition": finding.triage_disposition,
+                "reason": finding.triage_reason,
+                "confidence": finding.triage_confidence,
+                "at": finding.triaged_at,
+            }
+            if finding.triage_disposition
+            else None
+        ),
+        "investigation": _investigation_of(session, finding),
+    }
+
+
+def _investigation_of(session: Session, finding: Finding) -> dict[str, Any] | None:
+    """The stored investigation, so a verdict can be argued with rather than taken.
+
+    Includes the signals, the corrections applied to them, and how many other
+    findings share this answer — a reused verdict is a different claim from one
+    reached for this asset alone.
+    """
+    from athena.db.models import InvestigationRecord
+
+    if finding.investigation_id is None:
+        return None
+    stored = session.get(InvestigationRecord, finding.investigation_id)
+    if stored is None:
+        return None
+
+    return {
+        "verdict": stored.verdict,
+        "confidence": stored.verdict_confidence,
+        "rationale": stored.rationale,
+        "uncertainties": stored.uncertainties,
+        # Where the model asserted something it could not support and code overruled
+        # it. Shown, not hidden: it is the clearest signal of how much to trust this.
+        "corrections": stored.corrections,
+        "signals": stored.signals,
+        "model": stored.model,
+        "tools_called": sorted({c.get("tool") for c in (stored.tool_calls or []) if c.get("tool")}),
+        "tokens": stored.prompt_tokens + stored.completion_tokens,
+        "duration_ms": stored.duration_ms,
+        "shared_with_findings": stored.reused,
+        "at": stored.created_at,
     }
 
 

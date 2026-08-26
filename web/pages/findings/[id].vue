@@ -7,6 +7,25 @@ const { data: f } = await useAsyncData(`finding-${route.params.id}`, () =>
   api<any>(`findings/${route.params.id}`),
 )
 useHead({ title: () => f.value?.vulnerability?.id || 'Finding' })
+
+const riskEvidence = computed(() =>
+  (f.value?.evidence || []).find((e: any) => e.kind === 'risk'),
+)
+const riskFactors = computed(() => riskEvidence.value?.value?.factors || null)
+const riskOverrides = computed(() => riskEvidence.value?.value?.overrides || [])
+
+function formatSignal(value: any) {
+  if (value === true) return 'yes'
+  if (value === false) return 'no'
+  return String(value)
+}
+
+// "unknown" is a legitimate answer, not a failure — it reads as neither yes nor no.
+function signalClass(value: any) {
+  if (value === true) return 'sig-yes'
+  if (value === false) return 'sig-no'
+  return 'muted'
+}
 </script>
 
 <template>
@@ -14,15 +33,103 @@ useHead({ title: () => f.value?.vulnerability?.id || 'Finding' })
     <NuxtLink to="/findings" class="muted">← Findings</NuxtLink>
     <h1>{{ f.vulnerability.id }}</h1>
     <p class="sub">
-      <SeverityChip :severity="f.vulnerability.provisional_severity" :kev="f.vulnerability.kev" />
+      <SeverityChip
+        v-if="f.risk_band"
+        :severity="f.risk_band"
+        :kev="f.vulnerability.kev"
+      />
+      <span v-else class="unassessed">unassessed</span>
+      <span v-if="f.risk_score != null" class="muted"> {{ f.risk_score }}/100</span>
       <span style="margin-left:.6rem">{{ f.vulnerability.summary || 'No summary published.' }}</span>
     </p>
 
     <div v-if="f.not_yet_investigated" class="caveat">
       <strong>Candidate match only.</strong>
-      This is a version comparison. Athena has not checked whether the affected
-      component is running, reachable, or exploitable on this asset — that
-      investigation is not built yet.
+      This is a version comparison. Nothing has checked whether the affected component
+      runs, is reachable, or is exploitable on this asset.
+      <template v-if="f.triage?.disposition === 'deprioritise'">
+        Triage judged a full investigation unlikely to change the picture, so it has
+        not been queued — but that is a judgement about priority, not a conclusion
+        that the finding does not apply.
+      </template>
+      <template v-else-if="f.triage?.disposition === 'investigate'">
+        Queued for investigation.
+      </template>
+    </div>
+
+    <div v-if="f.investigation" class="card">
+      <h2>Verdict</h2>
+      <p class="verdict-line">
+        <strong>{{ f.investigation.verdict.replace('_', ' ') }}</strong>
+        <span class="muted">
+          · confidence {{ (f.investigation.confidence * 100).toFixed(0) }}%
+          · {{ f.investigation.model }}
+        </span>
+      </p>
+      <UntrustedText v-if="f.investigation.rationale" :text="f.investigation.rationale" class="rationale" />
+
+      <p class="muted small">
+        Established by calling {{ f.investigation.tools_called.join(', ') || 'no tools' }}
+        · {{ f.investigation.tokens.toLocaleString() }} tokens
+        · {{ (f.investigation.duration_ms / 1000).toFixed(1) }}s
+        <template v-if="f.investigation.shared_with_findings">
+          · this answer is shared with {{ f.investigation.shared_with_findings }} other
+          finding(s) whose relevant facts are identical
+        </template>
+      </p>
+
+      <!-- Where the model asserted something it could not support and code overruled
+           it. The clearest available signal of how much to trust this verdict, so it
+           is shown rather than tucked away. -->
+      <div v-if="f.investigation.corrections?.length" class="corrections">
+        <strong>{{ f.investigation.corrections.length }} claim(s) were not supported by
+          evidence and were downgraded:</strong>
+        <ul>
+          <li v-for="(c, i) in f.investigation.corrections" :key="i">{{ c }}</li>
+        </ul>
+      </div>
+
+      <div v-if="f.investigation.uncertainties?.length" class="uncertain">
+        <strong>Not determined:</strong>
+        <ul>
+          <li v-for="(u, i) in f.investigation.uncertainties" :key="i">
+            <UntrustedText :text="u" />
+          </li>
+        </ul>
+      </div>
+
+      <table class="signals">
+        <thead><tr><th>signal</th><th>value</th><th>confidence</th><th>from</th></tr></thead>
+        <tbody>
+          <tr v-for="(sig, name) in f.investigation.signals" :key="name">
+            <td>{{ String(name).replace(/_/g, ' ') }}</td>
+            <td>
+              <span :class="signalClass(sig.value)">{{ formatSignal(sig.value) }}</span>
+            </td>
+            <td class="muted">{{ (sig.confidence * 100).toFixed(0) }}%</td>
+            <td class="muted small">{{ (sig.evidence || []).join(', ') || '—' }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div v-if="riskFactors" class="card">
+      <h2>Why this score</h2>
+      <p class="muted small">
+        Risk is a deterministic function of these factors. The model supplies the
+        values; the number is arithmetic, not a judgement.
+      </p>
+      <table class="kv">
+        <tbody>
+          <tr v-for="(v, k) in riskFactors" :key="k">
+            <th>{{ String(k).replace(/_/g, ' ') }}</th>
+            <td>{{ typeof v === 'number' ? v.toFixed(3) : v }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <ul v-if="riskOverrides.length" class="overrides">
+        <li v-for="(o, i) in riskOverrides" :key="i">{{ o }}</li>
+      </ul>
     </div>
 
     <div class="card">
@@ -133,6 +240,23 @@ useHead({ title: () => f.value?.vulnerability?.id || 'Finding' })
 .small { font-size: .8rem; }
 .details { display: block; white-space: pre-wrap; font-size: .87rem; color: var(--ink-2); max-height: 22rem; overflow: auto; }
 .refs { padding-left: 1.1rem; margin: .6rem 0 0; }
+.unassessed {
+  font-size: .72rem; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--ink-muted); border: 1px dashed var(--rule);
+  border-radius: 4px; padding: .14rem .4rem;
+}
+.verdict-line { margin: 0 0 .5rem; font-size: 1rem; }
+.rationale { display: block; font-size: .9rem; color: var(--ink-2); margin-bottom: .7rem; }
+.corrections {
+  border-left: 3px solid var(--warn); padding: .5rem .8rem; margin: .8rem 0;
+  font-size: .85rem; background: var(--plane); border-radius: 4px;
+}
+.corrections ul, .uncertain ul { margin: .3rem 0 0; padding-left: 1.1rem; }
+.uncertain { font-size: .85rem; color: var(--ink-2); margin: .8rem 0; }
+.signals { margin-top: .9rem; }
+.sig-yes { color: var(--crit); font-weight: 600; }
+.sig-no { color: var(--good); }
+.overrides { margin: .7rem 0 0; padding-left: 1.1rem; font-size: .85rem; color: var(--ink-2); }
 .entitlement {
   margin-top: .35rem; font-size: .82rem; color: var(--ink-2);
   border-left: 2px solid var(--warn); padding-left: .5rem;
