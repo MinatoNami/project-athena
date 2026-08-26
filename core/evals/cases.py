@@ -32,6 +32,7 @@ class Expectation:
     no_unregistered_tool_calls: bool = False
     reject_injected_confidence: bool = False
     matches_control: str | None = None
+    demands_verdict: str | None = None
 
 
 @dataclass
