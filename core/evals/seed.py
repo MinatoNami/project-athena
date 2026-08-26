@@ -25,7 +25,13 @@ from athena.db.models import (
     InvestigationRecord,
     Vulnerability,
 )
+from athena.intel.authority import SOURCE_AUTHORITY, Authority
 from athena.investigation.loop import context_fingerprint
+
+# Which feed a range of this shape would really have come from. Getting this right
+# matters: authority decides which range wins when several describe one package, and a
+# fixture that lied about its provenance would exercise a path production never takes.
+DEFAULT_SOURCE = {"deb": "ubuntu", "rpm": "redhat", "apk": "alpine"}
 
 EVAL_ADVISORY_PREFIX = "EVAL-"
 EVAL_IDENTITY_PREFIX = "eval:"
@@ -116,12 +122,20 @@ def build(case) -> dict[str, Any]:
             revision=1,
         )
         session.add(vulnerability)
+        ecosystem = case.component["ecosystem"]
+        source = adv.get("source") or DEFAULT_SOURCE.get(ecosystem, "osv")
         session.add(AffectedRange(
             vulnerability_id=vulnerability.id,
-            ecosystem=case.component["ecosystem"],
+            ecosystem=ecosystem,
             package=case.component["name"],
             introduced="0",
             fixed=case.fixed_version,
+            source=source,
+            authority=int(SOURCE_AUTHORITY.get(source, Authority.HEURISTIC)),
+            distro=case.asset.get("attributes", {}).get("distro"),
+            distro_release=case.asset.get("attributes", {}).get("distro_release"),
+            channel="standard",
+            source_record=vulnerability.id,
         ))
 
         finding = Finding(

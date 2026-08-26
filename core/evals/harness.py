@@ -65,12 +65,14 @@ def run_case(case: Case) -> Result:
     """Seed, investigate for real, read back what landed on the finding."""
     from athena.workers.investigate import investigate_finding
 
-    ids = seed.build(case)
     result = Result(case_id=case.id)
     started = time.monotonic()
     try:
+        # Seeding is inside the guard too: a fixture that will not build is a result
+        # for that case, not a reason to abandon the other five.
+        ids = seed.build(case)
         outcome = investigate_finding({"finding_id": ids["finding_id"]})
-    except Exception as exc:  # a crash is a corpus result, not a harness error
+    except Exception as exc:
         result.status = f"error: {type(exc).__name__}: {exc}"
         return result
     result.duration_ms = int((time.monotonic() - started) * 1000)
