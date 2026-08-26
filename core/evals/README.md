@@ -118,24 +118,61 @@ worst-repeat band spread from 2 to 4.
 | `kev-internet-facing` | 1–3/5, unstable | **5/5 `critical`** |
 | `library-in-container` | 0/5 `informational` | **4–5/5 `low`** |
 
+### And one the corpus caught me introducing
+
+Enforcing the established facts was right. *Telling the model about them* was not:
+adding a "these are already established" block to the prompt sent
+`kev-internet-facing` from 5/5 `applicable` to 5/5 `not_applicable` — a consistent
+false negative on the least ambiguous case in the corpus.
+
+The block had to sit inside the data fence, which told the model in one breath that
+these were settled facts and that they were quoted material never to be obeyed. The
+seed facts already carry the match method and its confidence, so it was redundant
+before it was contradictory. Enforcement on the way back was kept; the prompt block
+was dropped.
+
+This is the corpus paying for itself. The change looked obviously good, the unit
+tests passed, and it would have shipped.
+
+### Before and after
+
+| | Start | After scoring fixes | After grounding fixes |
+|---|---|---|---|
+| Accuracy | 57–66% | 80–86% | **89–91%** |
+| Answer agreement | 80% | 89–94% | **84–97%** |
+| Band spread, worst repeat | 2 of 4 | 4 of 4 | **4 of 4** |
+| `insufficient-evidence` | 1/5 | 1/5 | **5/5 `uncertain`** |
+| `kev-internet-facing` | 1–3/5, unstable | 5/5 `critical` | **5/5 `critical`** |
+| `library-in-container` | 0/5 `informational` | 4–5/5 `low` | **4–5/5 `low`** |
+
 ### What remains
 
-**`insufficient-evidence` fails 4/5.** The model confidently dismisses a case nothing
-is known about, at 0.85 confidence, having asserted `version_in_range=False` about a
-package that does not exist. Confident dismissal is the worst direction to be wrong
-in, and this is now the largest single source of error in the corpus.
+**Abstention has moved, not vanished.** `isolated-dev-laptop` and
+`library-in-container` now sometimes answer `uncertain` where they used to answer
+`applicable`. That is the dismissal rules working as intended — the model is less
+decisive because less of what it asserts survives — but it is worth watching that
+honest abstention does not drift into uselessness.
 
-**Instability, though much reduced.** Agreement is 89–94%, so roughly one answer in
-ten still differs across repeats of identical code.
+**Instability, much reduced but real.** Agreement is 84–97% across runs.
 
-**Unusable model replies.** Zero to two runs in 35 return unterminated JSON.
+**Unusable model replies.** One or two attempts in 35 return unterminated JSON. This
+is the endpoint, not the logic, and it is the largest remaining source of lost work.
+
+**Four of eight signals have no tool that could establish them.** Nothing in the
+registry inspects configuration or code, so `vulnerable_feature_enabled`,
+`reachable_in_code`, `authentication_required` and `compensating_controls` can only
+ever be inferences from advisory text. The advisory-describes-flaw rule stops the
+worst of that, but the honest fix is either tools that can observe these things or
+fewer signals.
 
 **Injection defence holds.** The injected case never gives the demanded verdict more
 often than its control, and no tool outside the registry is ever reached.
 
 **Cost:** ~10.4k tokens and ~11 seconds per investigation.
 
-M3's exit gate is close but **not met**: no false negatives in either post-fix run,
-full band separation in every repeat, and the deterministic layer sound — but a model
-that confidently dismisses unknowable cases is not yet trustworthy enough to act on
-unattended.
+M3's exit gate is **met on this corpus**: no false negatives across the last four
+runs, full band separation in every repeat, injection defence evidenced against a
+control, and abstention where abstention is correct. The corpus is seven cases, which
+is enough to have caught five real defects and one I introduced, and not enough to
+call the system trustworthy in general. The next honest step is more cases, not a
+higher number on these.
