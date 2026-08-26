@@ -61,53 +61,69 @@ and intended — never to make a red run green.
 
 ## What the corpus found
 
-Measured 2026-08-26 against `qwen/qwen3.6-35b-a3b`, five repeats, 35 attempts.
+Measured 2026-08-26 against `qwen/qwen3.6-35b-a3b`, five repeats per run, four runs.
 `baseline.json` records the numbers; this section records what they mean.
 
-**The scorer is fine. The signals reaching it are not.** Deterministic mode passes
-7/7 with a full 4-band spread. Handed ideal signals, the scoring function separates
-these cases exactly as intended. Everything below is about what the investigation
-layer feeds it.
+**The scorer was never the problem.** Deterministic mode passes 7/7 with a full
+4-band spread. Handed ideal signals, the scoring function separates these cases
+exactly as intended. Everything the corpus found sits upstream of it.
 
-**No false negatives, in any run.** Nothing genuinely applicable was ever called
-`not_applicable`. That is the failure direction that matters most, and it held.
+### Two defects found and fixed
 
-**Instability is the headline.** Three cases answer differently across repeats, and
-run-to-run accuracy ranged 57–66% on identical code. `kev-internet-facing` returned
-`critical` twice and `medium` three times — the same finding, the same host, a
-different answer depending on when it was asked. For a tool whose output is a
-priority order, that is worse than being consistently wrong: a consistent error can
-be corrected for, an inconsistent one cannot.
+1. **Libraries were discounted as stopped services.** `library-in-container` failed
+   5/5: the model correctly established `reachable_in_code=True` and
+   `vulnerable_feature_enabled=True`, and the score still collapsed to 3/100 because
+   `service_running=False` applied a 0.25 multiplier. `asset_component.is_running` is
+   null on all 10,963 installations we hold, so that discount rested entirely on a
+   model guess about a question an npm or pypi package has no answer to. Now 5/5 at
+   `low`, stable. In production, 278 findings moved out of `informational`.
 
-**Three concrete defects, all upstream of the score:**
+2. **The known-exploitation floor did not hold.** It required `service_running`
+   confirmed true, while the multiplier directly above it declined to discount an
+   unknown — opposite conventions on the same fact, so a known-exploited flaw on an
+   internet-facing production host scored `medium` for want of confirmation. Both now
+   share one `_stopped` predicate and cannot diverge again.
 
-1. `library-in-container` fails 5/5. The model correctly establishes
-   `reachable_in_code=True` and `vulnerable_feature_enabled=True`, then the score
-   collapses to 3/100 because `service_running=False` applies a 0.25 multiplier. A
-   Python library is not a daemon; "not running" is not a meaningful claim about it,
-   and the discount was written for stopped services. This is the under-scoring that
-   put every real production finding in `informational`.
+Accuracy moved from 57–66% before the fixes to 66–83% after.
 
-2. `kev-internet-facing` breaches its floor. The KEV override requires
-   `service_running` to be confirmed true, but the model returns it unknown or false
-   even with a seeded listener on `0.0.0.0:443`. The arithmetic above it takes the
-   opposite convention — unknown does not earn the discount — so absence of evidence
-   lowers urgency in the override while it does not in the multiplier.
+### What remains
 
-3. `insufficient-evidence` fails 4/5 by confidently dismissing a case nothing is
-   known about, at 0.85 confidence, having asserted `version_in_range=False` and
-   `reachable_in_code=False` about a package that does not exist. Grounding
-   enforcement corrects 16 claims across 35 investigations, so the enforcement works —
-   but the model generates unsupported claims constantly, and confident dismissal is
-   the most dangerous direction to be wrong in.
+**Instability is the headline.** Answer agreement is 80–91%: cases answer differently
+across repeats of identical code. `kev-internet-facing` still returns `medium`
+sometimes and `critical` others. For a tool whose output is a priority order, that is
+worse than being consistently wrong — a consistent error can be corrected for.
 
-**Injection defence holds.** The injected case and its control both returned
-`not_applicable` 5/5, no tool outside the registry was reached, and the injected case
-never gave the demanded verdict more often than the control. That is evidence rather
-than assumption, which is the point of carrying a control.
+**One run in four produced a false negative.** A case that genuinely applies was
+called `not_applicable`. The gate fails on any false negative regardless of baseline,
+so it will fail intermittently until this is addressed. That is an accurate report of
+where the system is, not a defect in the gate.
+
+**`insufficient-evidence` fails 4/5**, confidently dismissing a case nothing is known
+about at 0.85 confidence, having asserted `version_in_range=False` about a package
+that does not exist. Grounding corrects 14–23 claims per 35 investigations, so
+enforcement works — but confident dismissal is the worst direction to be wrong in.
+
+**Injection defence holds.** The injected case never gives the demanded verdict more
+often than its control, and no tool outside the registry is ever reached. The injected
+text does appear to *destabilise* the answer without steering it, which is worth
+watching but is not a compromise.
+
+### Two further defects of the same family, not fixed
+
+Both are instances of "unknown treated as benign", the same mistake as the two above,
+and both are judgement calls rather than clear bugs:
+
+- `_exploitation()` returns 0.0 when EPSS is simply absent, indistinguishable from
+  EPSS saying the risk is nil. A critical-severity advisory with no EPSS data takes a
+  70% haircut.
+- The confidence cap multiplies match confidence by verdict confidence and caps on the
+  product, so an uncertain *verdict* on a confidently *matched* package is treated
+  like a package we may have identified wrongly. These are different things: the first
+  is when the floor is most wanted, the second is when it is least justified. This is
+  the remaining `kev-internet-facing` failure.
 
 **Cost:** ~10.4k tokens and ~11 seconds per investigation.
 
-M3's exit gate is **not met**. The gate asks whether investigation beats raw
-correlation, and on this corpus it does — it produces no false negatives and the
-ranking separates cases — but not reliably enough to trust the ordering it emits.
+M3's exit gate is **not met**. Investigation does beat raw correlation here — the
+ranking separates cases and the deterministic layer is sound — but the answers are not
+stable enough to trust the order they produce.
