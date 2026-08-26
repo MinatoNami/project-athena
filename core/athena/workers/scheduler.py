@@ -50,6 +50,9 @@ CORRELATION_SWEEP_INTERVAL = 300
 # Images change only when something is rebuilt or pulled, and each scan pulls the
 # image, so this is deliberately unhurried.
 IMAGE_SWEEP_INTERVAL = 600
+# Each sweep queues a batch; the queue's fairness cap keeps investigation from
+# occupying every worker slot while it drains.
+TRIAGE_SWEEP_INTERVAL = 120
 
 
 def _acquire_leadership(session) -> bool:
@@ -107,6 +110,58 @@ def _sweep_correlation(session, last_run: dict[str, float], now: float) -> None:
             payload={"asset_id": asset_id},
             priority=5,
         )
+
+
+def _sweep_triage(session, last_run: dict[str, float], now: float) -> None:
+    """Hand untriaged findings to triage, most consequential first.
+
+    Triage decides which earn a full investigation and enqueues those itself, so this
+    sweep only has to feed it. Ordering by exploitation and severity means that if the
+    budget runs out, what got done was the part that mattered.
+    """
+    if now - last_run.get("triage-sweep", 0) < TRIAGE_SWEEP_INTERVAL:
+        return
+    last_run["triage-sweep"] = now
+
+    from sqlalchemy import text
+
+    from athena.config import get_settings
+    from athena.llm.budget import current
+    from athena.queue import enqueue
+
+    budget = current(session)
+    if budget.exhausted:
+        # Logged rather than silent: an operator must be able to tell "we stopped
+        # looking" from "there was nothing to find".
+        log.warning("scheduler.ai_budget_exhausted", **budget.as_dict())
+        return
+
+    batch = min(get_settings().triage_batch, budget.remaining)
+    rows = session.execute(
+        text(
+            """
+            SELECT f.id::text
+              FROM finding f
+              JOIN vulnerability v ON v.id = f.vulnerability_id
+             WHERE f.state = 'discovered'
+               AND f.triage_disposition IS NULL
+             ORDER BY v.kev DESC,
+                      COALESCE(v.cvss_score, 0) DESC,
+                      COALESCE(v.epss_score, 0) DESC,
+                      f.first_seen
+             LIMIT :batch
+            """
+        ),
+        {"batch": batch},
+    ).all()
+
+    for (finding_id,) in rows:
+        enqueue(
+            session, kind="triage.finding", key=finding_id,
+            payload={"finding_id": finding_id}, priority=6,
+        )
+    if rows:
+        log.info("scheduler.triage_queued", count=len(rows), budget_remaining=budget.remaining)
 
 
 def _sweep_images(session, last_run: dict[str, float], now: float) -> None:
@@ -184,6 +239,7 @@ def run() -> None:
                 _sweep_nonces(session, last_run, now)
                 _sweep_correlation(session, last_run, now)
                 _sweep_images(session, last_run, now)
+                _sweep_triage(session, last_run, now)
                 for name, interval, kind, payload in SCHEDULE:
                     if now - last_run.get(name, 0) < interval:
                         continue

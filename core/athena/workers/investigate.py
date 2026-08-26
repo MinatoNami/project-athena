@@ -94,6 +94,18 @@ def _load(finding_id: str) -> dict[str, Any] | None:
         if finding is None or finding.state not in ("discovered", "investigating"):
             return None
 
+        # An uncertain verdict returns the finding to `discovered`, which is correct —
+        # it has not been settled. But without this guard a sweep would investigate it
+        # again on every pass, forever, at 40 seconds a time. Re-investigation happens
+        # when the advisory changes, not because the answer was inconclusive.
+        vuln_for_guard = session.get(Vulnerability, finding.vulnerability_id)
+        if (
+            finding.investigation_id is not None
+            and vuln_for_guard is not None
+            and finding.advisory_revision >= vuln_for_guard.revision
+        ):
+            return None
+
         asset = session.get(Asset, finding.asset_id)
         component = session.get(Component, finding.component_id)
         vulnerability = session.get(Vulnerability, finding.vulnerability_id)

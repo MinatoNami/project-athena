@@ -78,6 +78,14 @@ class Settings(BaseSettings):
     llm_base_url: str = "http://127.0.0.1:1234"
     llm_model: str = "qwen/qwen3.6-35b-a3b"
     llm_timeout: float = 300.0
+    # A local model has no invoice but does have wall-clock. Capped on calls rather
+    # than tokens because that is what an operator can reason about. On exhaustion
+    # work queues rather than being dropped.
+    ai_budget_calls: int = 2000
+    ai_budget_window_hours: int = 24
+    # How many findings each sweep hands to triage. Small enough that the queue stays
+    # legible and other work keeps moving.
+    triage_batch: int = 40
 
     log_level: str = "INFO"
     environment: str = Field(default="production")
