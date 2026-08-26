@@ -71,6 +71,26 @@ REACHABILITY_WEIGHT = {
 # Qualitative severities, for advisories that carry a word instead of a CVSS vector.
 SEVERITY_SCORE = {"critical": 9.5, "high": 7.5, "medium": 5.0, "low": 2.5}
 
+# Exploitation pressure to assume when no EPSS score exists. Above an advisory
+# measured as negligible, far below one measured as likely. An advisory usually lacks
+# a score because it is new, and new is when exploitation is most likely to follow —
+# so reading the absence as "nil" gets it backwards exactly when it matters.
+EPSS_UNKNOWN = 0.15
+
+# Below this, a conclusion is too weak to drive a high band on its own. Read on the
+# product of match and verdict confidence, because two moderate doubts really do
+# compound — but applied *before* the known-exploitation floor, so the floor can lift
+# it. That ordering is the whole correction: the cap used to come last and undercut
+# the floor.
+CONFIDENCE_FLOOR = 0.4
+
+# Below this, we may be looking at the wrong package, which invalidates every other
+# conclusion rather than merely weakening it. Set to sit above `heuristic_range`
+# (0.40, "the comparator is a guess for this ecosystem") and below `cpe_range` (0.70),
+# so it separates matches whose versions we actually ordered from matches we
+# estimated. See correlation.MATCH_CONFIDENCE for the values it discriminates.
+MATCH_FLOOR = 0.5
+
 # Ecosystems whose packages are libraries linked into a program rather than services
 # in their own right. "Is it running?" is not a question that has an answer for them,
 # so a "no" must not be read as one.
@@ -173,9 +193,16 @@ def _stopped(signals: Signals) -> bool:
 
 
 def _exploitation(signals: Signals) -> float:
+    """How much exploitation pressure to assume, 0..1.
+
+    `epss is None` and `epss == 0.0` are deliberately different: the first is the
+    absence of a measurement, the second is a measurement of almost nothing. Reading
+    them alike meant a brand-new critical advisory nobody had scored yet was treated
+    as evidence of non-exploitation.
+    """
     return max(
         1.0 if signals.kev else 0.0,
-        signals.epss or 0.0,
+        EPSS_UNKNOWN if signals.epss is None else signals.epss,
         0.7 if signals.exploit_public else 0.0,
     )
 
@@ -219,19 +246,47 @@ def score(signals: Signals) -> Score:
     running = 0.25 if _stopped(signals) else 1.0
 
     importance = tier * criticality
+    # Reported as one number because it is the honest overall confidence, but never
+    # acted on as one: the overrides below read the two halves separately.
     confidence = max(0.0, min(signals.match_confidence * signals.verdict_confidence, 1.0))
 
     raw = base * (0.30 + 0.70 * exploitation) * exposure * running * importance * reach
     band = _band_for(raw)
     overrides: list[str] = []
+    factors = {
+        "base": base,
+        "exploitation": exploitation,
+        "exposure": exposure,
+        "running": running,
+        "importance": importance,
+        "reachability": reach,
+        "raw": raw,
+    }
 
     # Applied after the arithmetic, and always recorded, so the number and the band
-    # can disagree visibly rather than silently.
+    # can disagree visibly rather than silently. Order matters and is asserted by
+    # tests: each step may undo the one before it, and the last word belongs to the
+    # doubt that invalidates everything else — that we identified the wrong package.
     if signals.verdict == "not_applicable":
         band = Band.INFORMATIONAL
         overrides.append("verdict is not_applicable, so the band is informational")
+        return Score(value=round(100 * raw), band=band, confidence=confidence,
+                     factors=factors, overrides=overrides)
 
-    elif signals.kev and signals.exposure == "internet" and not _stopped(signals):
+    # 1. A conclusion we have little faith in should not drive a high band by itself.
+    if confidence < CONFIDENCE_FLOOR:
+        capped = _at_most(band, Band.MEDIUM)
+        if capped != band:
+            overrides.append(
+                f"confidence {confidence:.2f} is low: capped at medium pending a "
+                "better answer"
+            )
+            band = capped
+
+    # 2. ...but known-exploited and internet-facing is not "by itself". This sits
+    # after the cap above so it can lift it: being unable to establish whether an
+    # actively exploited flaw is reachable is a reason to look, not a reason to relax.
+    if signals.kev and signals.exposure == "internet" and not _stopped(signals):
         floor = _at_least(band, Band.HIGH)
         if floor != band:
             overrides.append(
@@ -240,46 +295,39 @@ def score(signals: Signals) -> Score:
             )
             band = floor
 
-    if signals.verdict != "not_applicable":
-        if signals.tier == "production" and exploitation >= 0.9:
-            escalated = _shift(band, 1)
-            if escalated != band:
-                overrides.append("production tier with active exploitation: escalated one band")
-                band = escalated
+    # 3. Production plus active exploitation earns one more band.
+    if signals.tier == "production" and exploitation >= 0.9:
+        escalated = _shift(band, 1)
+        if escalated != band:
+            overrides.append("production tier with active exploitation: escalated one band")
+            band = escalated
 
-        # Applied last, so it can override the known-exploitation floor above. That
-        # ordering is deliberate: a floor on a finding we may have matched against
-        # the wrong package manufactures urgency out of an uncertain match. Both
-        # overrides are recorded, so the tension is visible rather than resolved
-        # invisibly.
-        if confidence < 0.4:
-            capped = _at_most(band, Band.MEDIUM)
-            if capped != band:
-                overrides.append(
-                    f"confidence {confidence:.2f} is low: capped at medium until investigated"
-                )
-                band = capped
-
-        if signals.fix_requires_entitlement:
+    # 4. Last, so nothing above can undo it. A match we may have got wrong is not an
+    # uncertainty about severity — it is the possibility that every conclusion above
+    # concerns software that is not installed here at all.
+    #
+    # This reads match confidence alone, and it is the half that was previously
+    # entangled with the other. One cap on the product came last, so "we could not
+    # establish whether this is exploitable here" undercut the floor exactly as hard
+    # as "this may be the wrong package" — and the first of those is precisely when a
+    # known-exploited internet-facing finding most needs escalating. Compounded doubt
+    # still caps, at step 1; only a doubtful match gets the last word.
+    if signals.match_confidence < MATCH_FLOOR:
+        capped = _at_most(band, Band.MEDIUM)
+        if capped != band:
             overrides.append(
-                "the only published fix needs a paid entitlement, so this may not be "
-                "actionable here"
+                f"match confidence {signals.match_confidence:.2f} is low: this may be "
+                "the wrong package, so capped at medium"
             )
-        elif not signals.fix_available:
-            overrides.append("no fix published: the remediation clock does not start")
+            band = capped
 
-    return Score(
-        value=round(100 * raw),
-        band=band,
-        confidence=confidence,
-        factors={
-            "base": base,
-            "exploitation": exploitation,
-            "exposure": exposure,
-            "running": running,
-            "importance": importance,
-            "reachability": reach,
-            "raw": raw,
-        },
-        overrides=overrides,
-    )
+    if signals.fix_requires_entitlement:
+        overrides.append(
+            "the only published fix needs a paid entitlement, so this may not be "
+            "actionable here"
+        )
+    elif not signals.fix_available:
+        overrides.append("no fix published: the remediation clock does not start")
+
+    return Score(value=round(100 * raw), band=band, confidence=confidence,
+                 factors=factors, overrides=overrides)

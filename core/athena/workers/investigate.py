@@ -15,6 +15,7 @@ from athena.db.base import session_scope
 from athena.db.models import (
     Asset,
     AssetComponent,
+    AssetEdge,
     Component,
     Evidence,
     Finding,
@@ -339,6 +340,18 @@ def signals_for(session, finding: Finding, verdict: Verdict) -> Signals:
             AssetComponent.component_id == finding.component_id,
         )
     ).scalars().first()
+    # An observation outranks an assertion. The model is asked whether the service is
+    # running and sometimes answers "no" while citing the very tool output that shows
+    # it listening — grounding cannot catch that, because it checks that evidence was
+    # cited, not that the evidence supports the claim. Where inventory records a
+    # listening service whose process is this package, running state is a fact we hold
+    # and not a question for the model.
+    running = _running(verdict)
+    if running is not True and component is not None and _listening(
+        session, asset_id=finding.asset_id, name=component.name
+    ):
+        running = True
+
     return Signals(
         cvss_score=vulnerability.cvss_score if vulnerability else None,
         severity=vulnerability.severity if vulnerability else None,
@@ -346,7 +359,7 @@ def signals_for(session, finding: Finding, verdict: Verdict) -> Signals:
         epss=vulnerability.epss_score if vulnerability else None,
         exploit_public=bool(vulnerability and vulnerability.exploit_public),
         exposure=asset.exposure if asset else "unknown",
-        service_running=_running(verdict),
+        service_running=running,
         component_role=component_role(component.ecosystem if component else None, scope),
         tier=asset.tier if asset else "unknown",
         criticality=asset.criticality if asset else None,
@@ -357,6 +370,31 @@ def signals_for(session, finding: Finding, verdict: Verdict) -> Signals:
         fix_available=bool(finding.fixed_version),
         fix_requires_entitlement=(finding.fix_channel or "standard") != "standard",
     )
+
+
+def _listening(session, *, asset_id: Any, name: str) -> bool:
+    """Does inventory show a listening service on this asset that is this package?
+
+    Matched on the process name or the service's own name, exactly and
+    case-insensitively. Deliberately narrow: this function only ever raises a
+    finding's score, so a loose match here would invent exposure that is not there.
+    A package that runs under some other process name simply falls through to
+    unknown, which earns no discount either way.
+    """
+    wanted = (name or "").strip().lower()
+    if not wanted:
+        return False
+    services = session.execute(
+        select(Asset.display_name, Asset.attributes)
+        .join(AssetEdge, AssetEdge.src_id == Asset.id)
+        .where(AssetEdge.dst_id == asset_id, Asset.kind == "service")
+        .limit(200)
+    ).all()
+    for display_name, attributes in services:
+        process = str((attributes or {}).get("process") or "").strip().lower()
+        if wanted in (process, str(display_name or "").strip().lower()):
+            return True
+    return False
 
 
 def _running(verdict: Verdict) -> bool | None:

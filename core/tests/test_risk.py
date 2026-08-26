@@ -254,3 +254,91 @@ def test_not_applicable_still_outranks_the_floor():
         criticality=5, verdict="not_applicable", verdict_confidence=0.9,
     )
     assert score(signals).band == Band.INFORMATIONAL
+
+
+# ── absent measurements are not measurements of zero ─────────────────────────
+
+
+def test_missing_epss_outranks_an_epss_of_zero():
+    """`None` and `0.0` are different claims and must not score alike.
+
+    An advisory usually lacks an EPSS score because it is new, and new is when
+    exploitation is most likely to follow — so reading the absence as "nil" gets it
+    backwards exactly when it matters.
+    """
+    base = dict(
+        cvss_score=9.1, exposure="internal", tier="production", criticality=4,
+        verdict="applicable", verdict_confidence=0.9, reachable_in_code="confirmed",
+    )
+    assert score(Signals(**base, epss=None)).value > score(Signals(**base, epss=0.0)).value
+
+
+def test_missing_epss_still_ranks_below_measured_exploitation():
+    """Unknown must sit between negligible and likely, not at either end."""
+    base = dict(
+        cvss_score=9.1, exposure="internal", tier="production", criticality=4,
+        verdict="applicable", verdict_confidence=0.9, reachable_in_code="confirmed",
+    )
+    unknown = score(Signals(**base, epss=None)).value
+    assert score(Signals(**base, epss=0.0)).value < unknown
+    assert unknown < score(Signals(**base, epss=0.7)).value
+
+
+# ── the two confidences answer different questions ───────────────────────────
+
+
+def _kev_internet(**overrides):
+    return Signals(**{
+        "cvss_score": 9.8, "kev": True, "epss": 0.85, "exposure": "internet",
+        "tier": "production", "criticality": 5, "verdict": "applicable",
+        "verdict_confidence": 0.9, "service_running": None, **overrides,
+    })
+
+
+def test_an_uncertain_verdict_does_not_undercut_the_known_exploitation_floor():
+    """Being unable to establish reachability is a reason to look, not to relax.
+
+    The cap used to read match confidence times verdict confidence, so a
+    confidently-matched actively-exploited flaw on an internet-facing host scored
+    `medium` merely because nobody could tell whether it was reachable.
+    """
+    uncertain = score(_kev_internet(verdict_confidence=0.30))
+    assert BAND_ORDER.index(uncertain.band) >= BAND_ORDER.index(Band.HIGH)
+    # The tension is recorded rather than resolved silently.
+    assert any("confidence" in o and "low" in o for o in uncertain.overrides)
+    assert any("floored at high" in o for o in uncertain.overrides)
+
+
+def test_a_doubtful_match_still_caps_everything():
+    """A package we may not have identified gets no floor, whatever else is true."""
+    capped = score(_kev_internet(match_confidence=0.2))
+    assert BAND_ORDER.index(capped.band) <= BAND_ORDER.index(Band.MEDIUM)
+    assert any("wrong package" in o for o in capped.overrides)
+
+
+def test_a_low_verdict_confidence_still_caps_without_a_floor():
+    """Removed from the floor's path, not removed altogether."""
+    signals = Signals(
+        cvss_score=9.5, exposure="internal", tier="production", criticality=5,
+        verdict="applicable", verdict_confidence=0.2, reachable_in_code="confirmed",
+    )
+    assert BAND_ORDER.index(score(signals).band) <= BAND_ORDER.index(Band.MEDIUM)
+
+
+def test_override_precedence_is_ordered_not_incidental():
+    """Match doubt beats the floor; the floor beats verdict doubt.
+
+    Asserted as an ordering because each step may undo the one before it, and the
+    order is the design rather than an accident of how the ifs happen to be stacked.
+    """
+    both = score(_kev_internet(verdict_confidence=0.2, match_confidence=0.2))
+    assert BAND_ORDER.index(both.band) <= BAND_ORDER.index(Band.MEDIUM)
+    floor_only = score(_kev_internet(verdict_confidence=0.2))
+    assert BAND_ORDER.index(floor_only.band) > BAND_ORDER.index(both.band)
+
+
+def test_not_applicable_still_reports_its_arithmetic():
+    """"Why is this informational?" deserves an answer too."""
+    dismissed = score(_kev_internet(verdict="not_applicable"))
+    assert dismissed.band == Band.INFORMATIONAL
+    assert dismissed.factors["raw"] > 0
