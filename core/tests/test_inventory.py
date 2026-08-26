@@ -188,3 +188,45 @@ def test_relationships_are_refreshed_not_duplicated(session):
     ).scalars().all()
     assert len(edges) == 1
     assert edges[0].confidence == 0.5
+
+
+# ── classification ───────────────────────────────────────────────────────────
+
+
+def test_literal_asset_routes_are_declared_before_the_parameterised_one():
+    """`/assets/unclassified` must not be swallowed by `/assets/{asset_id}`.
+
+    FastAPI matches in declaration order, so a literal path declared after a
+    parameterised sibling is unreachable — and fails as a 404 for an asset named
+    "unclassified" rather than as anything that looks like a routing mistake.
+    """
+    from athena.api.routers.assets import router
+
+    paths = [r.path for r in router.routes]
+    assert paths.index("/assets/unclassified") < paths.index("/assets/{asset_id}")
+
+
+def test_family_groups_image_tags_together(session):
+    from athena.api.routers.assets import _family
+    from athena.db.models import Asset
+
+    def image(name):
+        return Asset(kind="image", identity_key=name, display_name=name)
+
+    a = _family(image("lumaindex-frontend:20260819T063348Z-8583daf"))
+    b = _family(image("lumaindex-frontend:latest"))
+    c = _family(image("lumaindex-frontend@sha256:abc123"))
+    d = _family(image("other-app:latest"))
+
+    assert a[0] == b[0] == c[0], "tags and digests of one repository are one decision"
+    assert a[1] == "lumaindex-frontend"
+    assert d[0] != a[0]
+
+
+def test_family_keeps_hosts_individual(session):
+    from athena.api.routers.assets import _family
+    from athena.db.models import Asset
+
+    one = _family(Asset(kind="host", identity_key="h1", display_name="edge-proxy"))
+    two = _family(Asset(kind="host", identity_key="h2", display_name="db-primary"))
+    assert one[0] != two[0], "hosts carry their own consequence and are decided one by one"

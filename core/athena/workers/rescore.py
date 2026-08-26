@@ -22,6 +22,7 @@ from sqlalchemy import select
 
 from athena.db.base import session_scope
 from athena.db.models import Finding, InvestigationRecord
+from athena.queue.registry import handler
 from athena.risk import score
 
 log = structlog.get_logger(__name__)
@@ -82,3 +83,15 @@ def rescore_all(*, dry_run: bool = False) -> dict[str, Any]:
     }
     log.info("rescore.done", **{k: v for k, v in summary.items() if k != "movements"})
     return summary
+
+
+@handler("rescore.findings")
+def rescore_findings(payload: dict[str, Any]) -> dict[str, Any]:
+    """Recompute every stored score. Enqueued after anything that changes the inputs.
+
+    Classifying an asset changes its tier and exposure, which are scoring inputs — but
+    the re-investigation guard rightly declines to ask a model again about an advisory
+    that has not moved. Without this the user would classify their estate and watch
+    nothing happen.
+    """
+    return rescore_all(dry_run=bool(payload.get("dry_run")))

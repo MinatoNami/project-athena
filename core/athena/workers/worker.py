@@ -25,6 +25,7 @@ from athena.workers import (
     investigate,  # noqa: F401  (registers investigate.finding)
     node_ingest,  # noqa: F401  (registers ingest.node_observation)
     repository,  # noqa: F401  (registers scan.repository)
+    rescore,  # noqa: F401  (registers rescore.findings)
 )
 
 log = structlog.get_logger(__name__)

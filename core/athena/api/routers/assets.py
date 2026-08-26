@@ -9,7 +9,14 @@ from sqlalchemy.orm import Session
 
 from athena.api.deps import Principal, current_principal, db
 from athena.audit import record
-from athena.db.models import Asset, AssetComponent, Component, MergeCandidate, ScanRun
+from athena.db.models import (
+    Asset,
+    AssetComponent,
+    Component,
+    Finding,
+    MergeCandidate,
+    ScanRun,
+)
 from athena.inventory.identity import AssetKind, IdentityError, identity_for
 from athena.inventory.service import coverage, is_stale, register_asset
 from athena.queue import enqueue
@@ -26,6 +33,17 @@ class RegisterRepository(BaseModel):
     default_branch: str | None = None
     tier: str = "unknown"
     owner: str | None = None
+
+
+class ClassifyGroup(BaseModel):
+    asset_ids: list[str] = Field(min_length=1, max_length=1000)
+    tier: str | None = None
+    exposure: str | None = None
+    criticality: int | None = Field(default=None, ge=1, le=5)
+
+
+class ClassifyRequest(BaseModel):
+    groups: list[ClassifyGroup] = Field(min_length=1, max_length=100)
 
 
 class UpdateAsset(BaseModel):
@@ -120,6 +138,91 @@ def register_repository(
         priority=3,
     )
     return {"created": created, **_serialise(asset)}
+
+
+# ── classification ───────────────────────────────────────────────────────────
+
+
+def _family(asset: Asset) -> tuple[str, str]:
+    """Which classification group an asset belongs to, and what to call it.
+
+    Eight tags of one image are one decision, not eight. Grouping is what turns
+    "classify 308 assets" into something a person will actually finish, so it is
+    computed here rather than left to the browser — the client should not have to
+    fetch every asset to work out that they are the same thing.
+    """
+    if asset.kind == "image":
+        # `repo:tag` and `repo@sha256:…` both reduce to the repository.
+        name = asset.display_name
+        for sep in ("@", ":"):
+            if sep in name:
+                name = name.rsplit(sep, 1)[0]
+        return f"image:{name}", name
+    if asset.kind in ("service", "container"):
+        # Individually numerous and individually uninteresting; they inherit their
+        # host's consequence far more often than they have their own.
+        return f"kind:{asset.kind}", f"All {asset.kind}s"
+    return f"asset:{asset.id}", asset.display_name
+
+
+@router.get("/assets/unclassified")
+def unclassified(
+    _: Principal = Depends(current_principal),
+    session: Session = Depends(db),
+) -> dict[str, Any]:
+    """Assets with no tier or exposure set, grouped into decisions.
+
+    Unknown is scored as middling rather than harmless, so nothing is hidden by this
+    gap — but importance is a placeholder in every score until it is filled in, and
+    that is worth showing as a number.
+    """
+    assets = session.execute(
+        select(Asset).where(
+            Asset.tombstoned_at.is_(None),
+            (Asset.tier == "unknown") | (Asset.exposure == "unknown"),
+        )
+    ).scalars().all()
+
+    finding_counts = dict(
+        session.execute(
+            select(Finding.asset_id, func.count()).group_by(Finding.asset_id)
+        ).all()
+    )
+
+    groups: dict[str, dict[str, Any]] = {}
+    for asset in assets:
+        key, label = _family(asset)
+        group = groups.setdefault(
+            key,
+            {
+                "key": key,
+                "label": label,
+                "kind": asset.kind,
+                "asset_ids": [],
+                "asset_count": 0,
+                "finding_count": 0,
+                "tier": asset.tier,
+                "exposure": asset.exposure,
+                "mixed": False,
+            },
+        )
+        group["asset_ids"].append(str(asset.id))
+        group["asset_count"] += 1
+        group["finding_count"] += finding_counts.get(asset.id, 0)
+        # A group whose members already disagree must say so rather than show one
+        # member's value as if it spoke for the rest.
+        if group["tier"] != asset.tier or group["exposure"] != asset.exposure:
+            group["mixed"] = True
+
+    ordered = sorted(
+        groups.values(), key=lambda g: (-g["finding_count"], -g["asset_count"], g["label"])
+    )
+    return {
+        "groups": ordered,
+        "asset_count": len(assets),
+        "group_count": len(ordered),
+        "findings_affected": sum(g["finding_count"] for g in ordered),
+    }
 
 
 @router.get("/assets/{asset_id}")
@@ -267,3 +370,68 @@ def get_coverage(
 ) -> dict[str, Any]:
     """The honest view: what has been inventoried, what is stale, what was never seen."""
     return coverage(session)
+
+
+@router.post("/assets/classify")
+def classify(
+    body: ClassifyRequest,
+    principal: Principal = Depends(current_principal),
+    session: Session = Depends(db),
+) -> dict[str, Any]:
+    """Set tier and exposure across many assets, then rescore what it changed.
+
+    Rescoring is enqueued here rather than left to the operator. Tier and exposure are
+    scoring inputs, but the re-investigation guard declines to re-ask a model about an
+    advisory that has not moved — so without this the classification would land and
+    every score would sit unchanged, which reads as the feature not working.
+    """
+    for group in body.groups:
+        if group.tier is not None and group.tier not in TIERS:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, f"Unknown tier {group.tier!r}"
+            )
+        if group.exposure is not None and group.exposure not in EXPOSURES:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, f"Unknown exposure {group.exposure!r}"
+            )
+
+    changed = 0
+    for group in body.groups:
+        assets = session.execute(
+            select(Asset).where(Asset.id.in_(group.asset_ids))
+        ).scalars().all()
+        for asset in assets:
+            before = (asset.tier, asset.exposure, asset.criticality)
+            if group.tier is not None:
+                asset.tier = group.tier
+            if group.exposure is not None:
+                asset.exposure = group.exposure
+            if group.criticality is not None:
+                asset.criticality = group.criticality
+            after = (asset.tier, asset.exposure, asset.criticality)
+            if before == after:
+                continue
+            changed += 1
+            # Per asset, not per batch: "who decided this host was production" is a
+            # question the audit trail should be able to answer on its own.
+            record(
+                session,
+                actor=principal.actor,
+                action="ASSET_CLASSIFIED",
+                subject=f"asset:{asset.id}",
+                detail={
+                    "from": {"tier": before[0], "exposure": before[1], "criticality": before[2]},
+                    "to": {"tier": after[0], "exposure": after[1], "criticality": after[2]},
+                },
+            )
+
+    job = None
+    if changed:
+        job = enqueue(
+            session,
+            kind="rescore.findings",
+            key=f"classify:{principal.actor}",
+            payload={},
+            priority=2,
+        )
+    return {"assets_changed": changed, "rescore_queued": job is not None}
