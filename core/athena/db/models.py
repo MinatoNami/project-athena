@@ -487,6 +487,12 @@ class Finding(Base):
     fix_channel: Mapped[str | None] = mapped_column(String(16))
     fixed_version: Mapped[str | None] = mapped_column(Text)
     investigation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # Triage decides what deserves a full investigation, never whether the
+    # vulnerability applies. A deprioritised finding stays `discovered`.
+    triage_disposition: Mapped[str | None] = mapped_column(String(16))
+    triage_reason: Mapped[str | None] = mapped_column(Text)
+    triage_confidence: Mapped[float | None] = mapped_column(Float)
+    triaged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     risk_score: Mapped[int | None] = mapped_column(SmallInteger)
     risk_band: Mapped[str | None] = mapped_column(String(16))
     confidence: Mapped[float | None] = mapped_column(Float)

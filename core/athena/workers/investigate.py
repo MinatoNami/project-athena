@@ -344,3 +344,132 @@ def _reach(value: Any) -> str:
     if value is False:
         return "unlikely"
     return "unknown"
+
+
+@handler("triage.finding")
+def triage_finding(payload: dict[str, Any]) -> dict[str, Any]:
+    """Decide whether a finding earns a full investigation.
+
+    Triage never closes anything. A deprioritised finding stays `discovered` and
+    still reports that it has not been investigated — it is simply not queued for
+    the expensive loop.
+    """
+    from athena.investigation.triage import triage
+
+    finding_id = payload["finding_id"]
+    context = _load_for_triage(finding_id)
+    if context is None:
+        return {"status": "skipped"}
+
+    outcome = triage(context["facts"])
+
+    with session_scope() as session:
+        finding = session.get(Finding, finding_id)
+        if finding is None:
+            return {"status": "gone"}
+
+        finding.triage_disposition = outcome.disposition
+        finding.triage_reason = outcome.reason
+        finding.triage_confidence = outcome.confidence
+        finding.triaged_at = datetime.now(UTC)
+
+        _add_evidence(
+            session, finding,
+            kind="triage",
+            claim=f"Triaged as {outcome.disposition}: {outcome.reason}",
+            value={
+                "disposition": outcome.disposition,
+                "confidence": outcome.confidence,
+                "forced_by_policy": outcome.forced,
+                "tokens": outcome.tokens,
+            },
+            source="triage",
+        )
+
+        if outcome.disposition == "investigate":
+            from athena.queue import enqueue
+
+            enqueue(
+                session,
+                kind="investigate.finding",
+                key=str(finding.id),
+                payload={"finding_id": str(finding.id)},
+                priority=5,
+            )
+
+        record(
+            session,
+            actor="system:triage",
+            action="FINDING_TRIAGED",
+            subject=f"finding:{finding.id}",
+            detail={
+                "disposition": outcome.disposition,
+                "confidence": round(outcome.confidence, 3),
+                "forced": outcome.forced,
+                "tokens": outcome.tokens,
+            },
+        )
+
+    return {
+        "status": "triaged",
+        "disposition": outcome.disposition,
+        "confidence": round(outcome.confidence, 3),
+        "forced": outcome.forced,
+        "tokens": outcome.tokens,
+    }
+
+
+def _load_for_triage(finding_id: str) -> dict[str, Any] | None:
+    """The summary triage reasons over. No tools, so this is all it gets."""
+    with session_scope() as session:
+        finding = session.get(Finding, finding_id)
+        if finding is None or finding.state != "discovered":
+            return None
+        if finding.triage_disposition is not None:
+            return None    # already triaged; re-triage is an explicit action
+
+        asset = session.get(Asset, finding.asset_id)
+        component = session.get(Component, finding.component_id)
+        vulnerability = session.get(Vulnerability, finding.vulnerability_id)
+        if not (asset and component and vulnerability):
+            return None
+
+        return {
+            "facts": {
+                "asset": {
+                    "name": asset.display_name, "kind": asset.kind, "tier": asset.tier,
+                    "exposure": asset.exposure,
+                    "os": asset.attributes.get("os_version"),
+                },
+                "component": {
+                    "name": component.name, "version": component.version,
+                    "ecosystem": component.ecosystem,
+                },
+                "advisory": {
+                    "id": vulnerability.id,
+                    "summary": (vulnerability.summary or "")[:600],
+                    "severity": vulnerability.severity,
+                    "cvss": vulnerability.cvss_score,
+                    "epss": vulnerability.epss_score,
+                    "known_exploited": vulnerability.kev,
+                },
+                "fix": {
+                    "fixed_version": finding.fixed_version,
+                    "channel": finding.fix_channel,
+                },
+            }
+        }
+
+
+def _add_evidence(session, finding, *, kind: str, claim: str, value: dict, source: str) -> None:
+    blob = json.dumps(value, sort_keys=True, default=str)
+    session.query(Evidence).filter(
+        Evidence.finding_id == finding.id, Evidence.kind == kind
+    ).delete(synchronize_session=False)
+    session.add(
+        Evidence(
+            finding_id=finding.id, kind=kind, claim=claim, value=value,
+            source_ref=source,
+            content_hash=hashlib.sha256(blob.encode()).hexdigest(),
+        )
+    )
