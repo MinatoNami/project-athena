@@ -115,17 +115,17 @@ def investigate(
     tools_called: set[str] = set()
     transcript: list[str] = []
 
-    # Facts the system determined are stated as settled, not asked. Leaving them open
-    # invited the model to contradict correlation and inventory, and a contradiction
-    # phrased as a signal is indistinguishable from an observation downstream.
-    settled = (
-        "Already established — these are not yours to determine, and a signal "
-        f"contradicting them will be replaced:\n{_quote(established)}\n\n"
-        if established else ""
-    )
+    # Established facts are enforced on the way back, in parse_verdict, and are
+    # deliberately NOT added to the prompt. Stating them here made things worse, not
+    # better: the seed facts already carry the match method and its confidence, so a
+    # second imperative block was redundant, and it had to go inside the data fence —
+    # which told the model in the same breath that these were settled facts and that
+    # they were quoted material never to be obeyed. Given both, the model started
+    # dismissing findings outright: kev-internet-facing went from 5/5 applicable to
+    # 5/5 not_applicable, a consistent false negative on the least ambiguous case in
+    # the corpus. Enforcement without instruction costs nothing and broke nothing.
     question = (
         f"Does {vulnerability_id} actually apply to this asset?\n\n"
-        f"{settled}"
         f"Known starting facts:\n{_quote(seed_facts)}\n\n"
         f"Available tools:\n"
         + "\n".join(f"- {name}: {desc}" for name, desc in sorted(TOOL_DESCRIPTIONS.items()))
