@@ -360,6 +360,21 @@ def report(cases: list[Case], runs: list[dict[str, Result]], violations: list[st
         if len(usable := [a for a in attempts if a.status == "ok"]) > 1
         and (len({a.verdict for a in usable}) > 1 or len({a.band for a in usable}) > 1)
     })
+    # A count of unstable cases is too coarse to gate on: with seven cases and five
+    # repeats it swung between three and five across runs of identical code, because
+    # whether a 90/10 case happens to show its minority answer is itself sampled.
+    # Agreement is the same property measured as a rate — for each case, how often
+    # the answer matched that case's most common answer — so it moves smoothly
+    # instead of stepping.
+    agreements = []
+    for attempts in per_case.values():
+        usable = [a for a in attempts if a.status == "ok"]
+        if len(usable) < 2:
+            continue
+        modal = Counter((a.verdict, a.band) for a in usable).most_common(1)[0][1]
+        agreements.append(modal / len(usable))
+    agreement = round(sum(agreements) / len(agreements), 3) if agreements else 1.0
+
     # Discrimination is judged on the worst repeat: a ranking that separates cases
     # only sometimes does not separate them.
     spreads = [_spread(list(run.values())) for run in runs]
@@ -371,6 +386,8 @@ def report(cases: list[Case], runs: list[dict[str, Result]], violations: list[st
           f"({len(passed)/len(graded):.0%})" if graded else "no results")
     print(f"false negatives           : {len(false_negatives)} "
           f"{false_negatives if false_negatives else ''}")
+    print(f"answer agreement          : {agreement:.0%} "
+          "(how often a case repeats its own most common answer)")
     print(f"unstable cases            : {len(unstable_cases)} "
           f"{unstable_cases if unstable_cases else ''}")
     print(f"band spread (worst repeat): {worst_spread} of {len(BANDS) - 1} "
@@ -406,6 +423,7 @@ def report(cases: list[Case], runs: list[dict[str, Result]], violations: list[st
         "passed": len(passed),
         "accuracy": round(len(passed) / len(graded), 3) if graded else 0.0,
         "false_negatives": len(false_negatives),
+        "agreement": agreement,
         "unstable_cases": len(unstable_cases),
         "band_spread": worst_spread,
         "ordering_violations": len(violations),
@@ -453,14 +471,14 @@ def gate(summary: dict[str, Any]) -> int:
         print(f"\nFAILED: band spread narrowed from {base['band_spread']} to "
               f"{summary['band_spread']} — cases that were separable no longer are.")
         return 1
-    if summary["unstable_cases"] > base.get("unstable_cases", summary["unstable_cases"]):
-        print(f"\nFAILED: unstable cases rose from {base['unstable_cases']} to "
-              f"{summary['unstable_cases']} — more findings now answer differently "
-              "depending on when they are looked at.")
+    if summary["agreement"] < base.get("agreement", 0.0) - tolerance:
+        print(f"\nFAILED: answer agreement fell from {base['agreement']} to "
+              f"{summary['agreement']} — findings now answer differently depending on "
+              "when they are looked at more often than they did.")
         return 1
     print(f"\nPASSED against baseline (accuracy {summary['accuracy']} vs "
           f"{base['accuracy']}, spread {summary['band_spread']} vs {base['band_spread']}, "
-          f"unstable {summary['unstable_cases']} vs {base.get('unstable_cases', '—')}).")
+          f"agreement {summary['agreement']} vs {base.get('agreement', '—')}).")
     return 0
 
 
