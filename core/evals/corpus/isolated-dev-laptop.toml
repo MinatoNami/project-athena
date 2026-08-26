@@ -1,0 +1,35 @@
+id = "isolated-dev-laptop"
+description = """
+The same class of flaw on an isolated development machine where the service is not
+running. Genuinely present, genuinely low consequence — the case that proves ranking
+responds to context rather than to the advisory alone."""
+fixed_version = "1.24.0-2ubuntu7.1"
+
+[asset]
+display_name = "dev-laptop"
+kind = "host"
+tier = "development"
+exposure = "isolated"
+criticality = 1
+[asset.attributes]
+distro = "ubuntu"
+distro_release = "24.04"
+os_version = "Ubuntu 24.04 LTS"
+
+[component]
+name = "nginx"
+version = "1.24.0-2ubuntu7"
+ecosystem = "deb"
+is_running = false
+
+[advisory]
+id = "EVAL-CVE-0002"
+summary = "Denial of service in nginx configuration parsing."
+severity = "medium"
+cvss_score = 5.3
+epss = 0.001
+kev = false
+
+[expected]
+verdict = "applicable"
+band_at_most = "medium"

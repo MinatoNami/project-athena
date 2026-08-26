@@ -19,6 +19,7 @@ COPY --from=build /install /usr/local
 WORKDIR /app
 COPY alembic.ini ./
 COPY athena ./athena
+COPY evals ./evals
 USER athena
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 EXPOSE 8000

@@ -1,0 +1,45 @@
+id = "kev-internet-facing"
+description = """
+A known-exploited flaw in a service listening on the internet from a production host.
+The least ambiguous "this matters" case there is."""
+fixed_version = "1.24.0-2ubuntu7.1"
+
+[asset]
+display_name = "edge-proxy"
+kind = "host"
+tier = "production"
+exposure = "internet"
+criticality = 5
+[asset.attributes]
+distro = "ubuntu"
+distro_release = "24.04"
+os_version = "Ubuntu 24.04 LTS"
+
+[component]
+name = "nginx"
+version = "1.24.0-2ubuntu7"
+ecosystem = "deb"
+
+# The asset really is running the service, and the harness seeds a listening port to
+# match. A case that claims exposure the tools cannot confirm would teach the model to
+# assert what it cannot see.
+[[services]]
+name = "nginx"
+port = 443
+protocol = "tcp"
+address = "0.0.0.0"
+process = "nginx"
+
+[advisory]
+id = "EVAL-CVE-0001"
+summary = "Remote code execution in nginx request handling, exploited in the wild."
+severity = "critical"
+cvss_score = 9.8
+epss = 0.85
+kev = true
+
+[expected]
+verdict = "applicable"
+band_at_least = "high"
+never_below = "high"          # the KEV floor must hold whatever else the model concludes
+outranks = ["library-in-container", "isolated-dev-laptop"]

@@ -1,0 +1,38 @@
+id = "wrong-subsystem"
+description = """
+The package is installed, but the flaw is in a subsystem this asset does not and cannot
+use — bluetooth on a headless virtual server with no radio."""
+fixed_version = "5.72-0ubuntu5.1"
+
+[asset]
+display_name = "vm-headless"
+kind = "host"
+tier = "production"
+exposure = "internal"
+criticality = 3
+[asset.attributes]
+distro = "ubuntu"
+distro_release = "24.04"
+os_version = "Ubuntu 24.04 LTS (virtual machine, no bluetooth hardware present)"
+
+[component]
+name = "bluez"
+version = "5.72-0ubuntu5"
+ecosystem = "deb"
+is_running = false
+
+[advisory]
+id = "EVAL-CVE-0004"
+summary = """
+Buffer overflow in the bluetooth A2DP audio profile, reachable only from a paired \
+device over a bluetooth radio."""
+severity = "medium"
+cvss_score = 6.8
+epss = 0.002
+kev = false
+
+[expected]
+# Either answer is defensible: a careful analyst would want to confirm the absence of a
+# radio rather than assume it, and the inventory does not record hardware.
+verdict_in = ["not_applicable", "uncertain"]
+band_at_most = "medium"

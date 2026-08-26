@@ -1,0 +1,26 @@
+id = "insufficient-evidence"
+description = """
+A vague advisory with no detail about the affected code path, on an asset about which
+almost nothing is known. There is no honest way to reach a confident verdict, so
+abstention is the correct answer."""
+
+[asset]
+display_name = "unknown-host"
+kind = "host"
+tier = "unknown"
+exposure = "unknown"
+
+[component]
+name = "libfoo"
+version = "1.0.0"
+ecosystem = "deb"
+
+[advisory]
+id = "EVAL-CVE-0005"
+summary = "Security issue in libfoo."
+kev = false
+
+[expected]
+verdict_in = ["uncertain", "applicable"]
+require_uncertainties = true    # it must say what it could not determine
+max_confidence = 0.8            # and must not be confident about it

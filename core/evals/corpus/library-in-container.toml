@@ -1,0 +1,34 @@
+id = "library-in-container"
+description = """
+An application library inside a container image. Not a listening service, so the
+daemon-shaped signals do not apply — but a library reached by application input is not
+therefore harmless. This case exists because production findings of this shape were all
+collapsing to informational."""
+fixed_version = "10.3.0"
+
+[asset]
+display_name = "app-image:2026.3"
+kind = "image"
+tier = "production"
+exposure = "internal"
+criticality = 4
+
+[component]
+name = "pillow"
+version = "10.2.0"
+ecosystem = "pypi"
+
+[advisory]
+id = "EVAL-CVE-0003"
+summary = """
+Heap buffer overflow when decoding a crafted image. Reachable by any application that \
+processes user-supplied images."""
+severity = "high"
+cvss_score = 8.1
+epss = 0.04
+kev = false
+
+[expected]
+verdict = "applicable"
+band_at_least = "low"
+outranks = ["isolated-dev-laptop"]
