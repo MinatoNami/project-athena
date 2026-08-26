@@ -71,6 +71,31 @@ REACHABILITY_WEIGHT = {
 # Qualitative severities, for advisories that carry a word instead of a CVSS vector.
 SEVERITY_SCORE = {"critical": 9.5, "high": 7.5, "medium": 5.0, "low": 2.5}
 
+# Ecosystems whose packages are libraries linked into a program rather than services
+# in their own right. "Is it running?" is not a question that has an answer for them,
+# so a "no" must not be read as one.
+LIBRARY_ECOSYSTEMS = {
+    "npm", "pypi", "golang", "maven", "gem", "cargo", "nuget",
+    "composer", "hex", "pub", "cran", "conan", "swift",
+}
+
+
+def component_role(ecosystem: str | None, scope: str | None = None) -> str:
+    """`library` or `unknown` — is running-state a meaningful question here?
+
+    Never returns `service`, because nothing in the system currently establishes
+    that a component is one: `asset_component.is_running` is null on every
+    installation we hold. Claiming otherwise would put a four-fold discount behind
+    a fact nobody has observed.
+    """
+    if (ecosystem or "").lower() in LIBRARY_ECOSYSTEMS:
+        return "library"
+    # A transitive dependency was pulled in by something else, whatever ecosystem it
+    # came from. Nothing starts it; something else links it.
+    if scope == "transitive":
+        return "library"
+    return "unknown"
+
 
 @dataclass
 class Signals:
@@ -86,6 +111,7 @@ class Signals:
     tier: str = "unknown"
     criticality: int | None = None
     reachable_in_code: str = "unknown"
+    component_role: str = "unknown"     # library | unknown; see component_role()
     match_confidence: float = 1.0
     verdict_confidence: float = 1.0
     verdict: str = "uncertain"          # applicable | not_applicable | uncertain
@@ -131,6 +157,21 @@ def _base(signals: Signals) -> float:
     return 0.5
 
 
+def _stopped(signals: Signals) -> bool:
+    """Is there positive evidence that the thing which would run is not running?
+
+    One predicate, used by both the multiplier and the known-exploitation floor.
+    They previously took opposite conventions on the same fact — the multiplier
+    declined to discount an unknown, while the floor declined to raise one — so a
+    known-exploited flaw on an internet-facing host was scored `medium` because
+    nobody could confirm the service was up. Absence of evidence now means the same
+    thing in both places, because it is the same question asked once.
+    """
+    if signals.component_role == "library":
+        return False
+    return signals.service_running is False
+
+
 def _exploitation(signals: Signals) -> float:
     return max(
         1.0 if signals.kev else 0.0,
@@ -173,8 +214,9 @@ def score(signals: Signals) -> Score:
     reach = REACHABILITY_WEIGHT.get(signals.reachable_in_code, REACHABILITY_WEIGHT["unknown"])
 
     # A component that is installed but not running is a smaller problem than one
-    # serving traffic — but "we do not know" must not earn the discount.
-    running = 1.0 if signals.service_running is not False else 0.25
+    # serving traffic — but "we do not know" must not earn the discount, and neither
+    # may a library, for which the question does not arise.
+    running = 0.25 if _stopped(signals) else 1.0
 
     importance = tier * criticality
     confidence = max(0.0, min(signals.match_confidence * signals.verdict_confidence, 1.0))
@@ -189,11 +231,12 @@ def score(signals: Signals) -> Score:
         band = Band.INFORMATIONAL
         overrides.append("verdict is not_applicable, so the band is informational")
 
-    elif signals.kev and signals.exposure == "internet" and signals.service_running:
+    elif signals.kev and signals.exposure == "internet" and not _stopped(signals):
         floor = _at_least(band, Band.HIGH)
         if floor != band:
             overrides.append(
-                "known-exploited, internet-facing, and running: floored at high"
+                "known-exploited and internet-facing, with nothing showing it stopped: "
+                "floored at high"
             )
             band = floor
 

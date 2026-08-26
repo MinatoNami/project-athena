@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from athena.risk import Band, Signals, score
+from athena.risk import Band, Signals, component_role, score
+from athena.risk.scoring import BAND_ORDER
 
 
 def sig(**kwargs) -> Signals:
@@ -181,3 +182,75 @@ def test_bands_are_ordered_consistently_with_scores():
                 assert value >= other_value or "floored" in "".join(
                     score(sig()).overrides
                 ), f"{band} at {value} ranked above {other_band} at {other_value}"
+
+
+# ── running-state: the discount and the floor must agree ─────────────────────
+
+
+def test_a_library_never_earns_the_stopped_discount():
+    """A pypi package is not a daemon, so "not running" says nothing about it.
+
+    This is the defect that put every real finding in `informational`: the model
+    reports service_running=False for a library — a reasonable answer to an
+    incoherent question — and the score was quartered for it.
+    """
+    common = dict(
+        cvss_score=8.1, exposure="internal", tier="production", criticality=4,
+        verdict="applicable", verdict_confidence=0.85, reachable_in_code="confirmed",
+    )
+    library = score(Signals(**common, service_running=False, component_role="library"))
+    unknown_role = score(Signals(**common, service_running=False))
+
+    assert library.value > unknown_role.value
+    assert library.value == score(Signals(**common, service_running=None)).value
+
+
+def test_transitive_dependencies_are_libraries_whatever_the_ecosystem():
+    assert component_role("deb", "transitive") == "library"
+    assert component_role("npm", "direct") == "library"
+    assert component_role("deb", "os") == "unknown"
+
+
+def test_component_role_never_claims_service():
+    """Nothing in the system observes running state, so nothing may assert it."""
+    roles = {component_role(eco, scope)
+             for eco in ("deb", "rpm", "apk", "npm", "generic", None)
+             for scope in ("os", "direct", "transitive", None)}
+    assert roles == {"library", "unknown"}
+
+
+def test_known_exploited_floor_holds_when_running_state_is_unknown():
+    """The floor and the multiplier now read an unknown the same way.
+
+    Previously the multiplier declined to discount an unknown while the floor
+    declined to raise one, so a known-exploited flaw on an internet-facing
+    production host scored `medium` because nobody could confirm the service was up.
+    """
+    signals = Signals(
+        cvss_score=9.8, kev=True, epss=0.85, exposure="internet", tier="production",
+        criticality=5, verdict="applicable", verdict_confidence=0.9,
+        service_running=None,
+    )
+    assert BAND_ORDER.index(score(signals).band) >= BAND_ORDER.index(Band.HIGH)
+
+
+def test_the_floor_still_yields_to_evidence_that_the_service_is_stopped():
+    """Consistency cuts both ways: confirmed-stopped must still lower the result."""
+    stopped = Signals(
+        cvss_score=9.8, kev=True, epss=0.85, exposure="internet", tier="production",
+        criticality=5, verdict="applicable", verdict_confidence=0.9,
+        service_running=False,
+    )
+    assert BAND_ORDER.index(score(stopped).band) < BAND_ORDER.index(Band.HIGH)
+    assert score(stopped).value < score(
+        Signals(**{**stopped.__dict__, "service_running": None})
+    ).value
+
+
+def test_not_applicable_still_outranks_the_floor():
+    """Order of precedence is unchanged: a dismissed finding stays informational."""
+    signals = Signals(
+        cvss_score=9.8, kev=True, epss=0.85, exposure="internet", tier="production",
+        criticality=5, verdict="not_applicable", verdict_confidence=0.9,
+    )
+    assert score(signals).band == Band.INFORMATIONAL

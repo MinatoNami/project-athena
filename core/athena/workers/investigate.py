@@ -14,6 +14,7 @@ from athena.audit import record
 from athena.db.base import session_scope
 from athena.db.models import (
     Asset,
+    AssetComponent,
     Component,
     Evidence,
     Finding,
@@ -24,7 +25,7 @@ from athena.investigation.loop import context_fingerprint, investigate
 from athena.investigation.verdict import Signal, Verdict
 from athena.queue import publish
 from athena.queue.registry import handler
-from athena.risk import Signals, score
+from athena.risk import Signals, component_role, score
 
 log = structlog.get_logger(__name__)
 
@@ -245,26 +246,7 @@ def _apply(
             return {}
 
         asset = session.get(Asset, finding.asset_id)
-        vulnerability = session.get(Vulnerability, finding.vulnerability_id)
-
-        risk = score(
-            Signals(
-                cvss_score=vulnerability.cvss_score,
-                severity=vulnerability.severity,
-                kev=vulnerability.kev,
-                epss=vulnerability.epss_score,
-                exposure=asset.exposure,
-                service_running=_tri(verdict.signal_value("service_running")),
-                tier=asset.tier,
-                criticality=asset.criticality,
-                reachable_in_code=_reach(verdict.signal_value("reachable_in_code")),
-                match_confidence=finding.match_confidence,
-                verdict_confidence=verdict.verdict_confidence,
-                verdict=verdict.verdict,
-                fix_available=bool(finding.fixed_version),
-                fix_requires_entitlement=(finding.fix_channel or "standard") != "standard",
-            )
-        )
+        risk = score(signals_for(session, finding, verdict))
 
         finding.risk_score = risk.value
         finding.risk_band = str(risk.band)
@@ -337,6 +319,62 @@ def _attach(session, finding: Finding, verdict: Verdict, risk, *, model: str) ->
         add("grounding_correction", correction, {})
 
     add("risk", f"Scored {risk.value} ({risk.band})", risk.explain())
+
+
+def signals_for(session, finding: Finding, verdict: Verdict) -> Signals:
+    """Assemble the scoring inputs for one finding.
+
+    The single definition of what the score depends on. Anything that recomputes a
+    score — the investigation path, a rescore after the function changes — goes
+    through here, because two copies would drift and the drift would be silent:
+    both would produce a plausible number and only one would be the number the UI
+    says it is.
+    """
+    asset = session.get(Asset, finding.asset_id)
+    vulnerability = session.get(Vulnerability, finding.vulnerability_id)
+    component = session.get(Component, finding.component_id)
+    scope = session.execute(
+        select(AssetComponent.scope).where(
+            AssetComponent.asset_id == finding.asset_id,
+            AssetComponent.component_id == finding.component_id,
+        )
+    ).scalars().first()
+    return Signals(
+        cvss_score=vulnerability.cvss_score if vulnerability else None,
+        severity=vulnerability.severity if vulnerability else None,
+        kev=bool(vulnerability and vulnerability.kev),
+        epss=vulnerability.epss_score if vulnerability else None,
+        exploit_public=bool(vulnerability and vulnerability.exploit_public),
+        exposure=asset.exposure if asset else "unknown",
+        service_running=_running(verdict),
+        component_role=component_role(component.ecosystem if component else None, scope),
+        tier=asset.tier if asset else "unknown",
+        criticality=asset.criticality if asset else None,
+        reachable_in_code=_reach(verdict.signal_value("reachable_in_code")),
+        match_confidence=finding.match_confidence,
+        verdict_confidence=verdict.verdict_confidence,
+        verdict=verdict.verdict,
+        fix_available=bool(finding.fixed_version),
+        fix_requires_entitlement=(finding.fix_channel or "standard") != "standard",
+    )
+
+
+def _running(verdict: Verdict) -> bool | None:
+    """`service_running`, but a "no" has to be earned.
+
+    This one signal carries a four-fold discount, which makes it the cheapest way
+    for an unsupported assertion to bury a real finding. A `False` therefore counts
+    only when the model cited tool output for it and grounding did not downgrade the
+    claim. Everything else reads as unknown, which earns no discount.
+    """
+    signal = verdict.signals.get("service_running")
+    if signal is None:
+        return None
+    if signal.value is not False:
+        return _tri(signal.value)
+    if signal.downgraded or not signal.evidence:
+        return None
+    return False
 
 
 def _tri(value: Any) -> bool | None:

@@ -39,7 +39,7 @@ from sqlalchemy import select
 from athena.db.base import session_scope
 from athena.db.models import Finding, InvestigationRecord
 from athena.investigation.tools import TOOL_DESCRIPTIONS
-from athena.risk import Signals, score
+from athena.risk import Signals, component_role, score
 
 from evals import seed
 from evals.cases import BANDS, Case, band_rank, load
@@ -133,6 +133,9 @@ def run_case_deterministic(case: Case) -> Result:
         exploit_public=adv.get("exploit_public", False),
         exposure=case.asset.get("exposure", "unknown"),
         service_running=running if running is not None else None,
+        component_role=component_role(
+            case.component["ecosystem"], case.component.get("scope")
+        ),
         tier=case.asset.get("tier", "unknown"),
         criticality=case.asset.get("criticality"),
         match_confidence=1.0,

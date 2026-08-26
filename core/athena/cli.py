@@ -239,6 +239,19 @@ def _keygen() -> int:
     return 0
 
 
+def _rescore(*, dry_run: bool) -> int:
+    from athena.workers.rescore import rescore_all
+
+    summary = rescore_all(dry_run=dry_run)
+    verb = "would move" if dry_run else "moved"
+    print(f"examined {summary['examined']} investigated finding(s)")
+    print(f"  unchanged : {summary['unchanged']}")
+    print(f"  {verb:9} : {summary['changed']}")
+    for movement, count in summary["movements"].items():
+        print(f"      {movement:32} {count}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="athena", description=__doc__)
     parser.add_argument("--version", action="version", version=__version__)
@@ -247,6 +260,9 @@ def main(argv: list[str] | None = None) -> int:
         sub.add_parser(name)
     node_token = sub.add_parser("node-token")
     node_token.add_argument("--tier", default="unknown")
+    rescore = sub.add_parser("rescore")
+    rescore.add_argument("--dry-run", action="store_true",
+                         help="report what would move without writing anything")
 
     args = parser.parse_args(argv)
     configure_logging(get_settings().log_level)
@@ -264,6 +280,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "node-token":
         return _node_token(args.tier)
+
+    if args.command == "rescore":
+        return _rescore(dry_run=args.dry_run)
 
     return {
         "serve": _serve,
