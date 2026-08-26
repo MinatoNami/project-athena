@@ -1,0 +1,32 @@
+{
+  "_recorded": "2026-08-26, qwen/qwen3.6-35b-a3b via LM Studio over the tailnet",
+  "_how": "Full mode was run three times at 5 repeats and scored 0.571, 0.600, and 0.657. The baseline records the LOWEST of those, not the best: anything above it is within observed variance, and a floor set at the best run would fail on ordinary sampling. Raise it only when a change is understood to have made the system better, never to turn a red run green.",
+  "full": {
+    "mode": "full",
+    "repeats": 5,
+    "attempts": 35,
+    "errored": 0,
+    "malformed_replies": 0,
+    "passed": 20,
+    "accuracy": 0.571,
+    "false_negatives": 0,
+    "unstable_cases": 3,
+    "band_spread": 2,
+    "ordering_violations": 0,
+    "control_findings": 0
+  },
+  "deterministic": {
+    "mode": "deterministic",
+    "repeats": 1,
+    "attempts": 7,
+    "errored": 0,
+    "malformed_replies": 0,
+    "passed": 7,
+    "accuracy": 1.0,
+    "false_negatives": 0,
+    "unstable_cases": 0,
+    "band_spread": 4,
+    "ordering_violations": 0,
+    "control_findings": 0
+  }
+}
