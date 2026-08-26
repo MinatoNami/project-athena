@@ -506,7 +506,16 @@ def main() -> int:
     if args.record:
         existing = json.loads(BASELINE.read_text()) if BASELINE.exists() else {}
         existing[mode] = summary
-        BASELINE.write_text(json.dumps(existing, indent=2) + "\n")
+        try:
+            BASELINE.write_text(json.dumps(existing, indent=2) + "\n")
+        except OSError as exc:
+            # The container image is root-owned and this process is not root, which
+            # is correct — but a --record that silently did nothing would leave the
+            # gate comparing against a baseline that was never written.
+            print(f"\nCOULD NOT RECORD BASELINE: {exc}")
+            print("Run with --json from a checkout and redirect into evals/baseline.json:")
+            print(f"\n{json.dumps({mode: summary}, indent=2)}")
+            return 1
         print(f"\nrecorded baseline for mode {mode!r}")
         return 0
     if args.json:
