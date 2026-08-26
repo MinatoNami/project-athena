@@ -171,19 +171,28 @@ def list_findings(
         .where(Asset.tombstoned_at.is_(None), Asset.last_inventoried_at.isnot(None))
     ).scalar_one()
 
+    instance_count = sum(g["instance_count"] for g in ordered)
+    assessed_count = sum(g["investigated_count"] for g in ordered)
     return {
         "groups": ordered,
         "group_count": len(groups),
+        # Totals over the whole result, so a caller can show what fraction of what it
+        # is displaying has actually been assessed without re-deriving it per group.
+        "instance_count": instance_count,
+        "assessed_count": assessed_count,
         # Surfaced, never hidden: the operator can see how much is being held back
         # and why.
         "no_fix_available_count": no_fix_count,
         # Findings are only as complete as the inventory behind them.
         "coverage": {"of_assets_observed": observed, "of_assets_total": total_assets},
-        # Stated explicitly so nobody reads these as assessed risk.
+        # Two populations live here and conflating them would undo the point. This
+        # used to say nothing had been investigated, which stopped being true when
+        # M3 shipped — a caveat that overstates its own ignorance is still wrong.
         "caveat": (
-            "These are candidate matches from version comparison only. Nothing here "
-            "has been investigated: no check has been made of whether the affected "
-            "component is running, reachable, or exploitable in this environment."
+            f"{assessed_count} of {instance_count} findings have been investigated: the "
+            "component was checked against that asset and the risk scored on what was "
+            "found. The rest are version matches only — nothing has checked whether "
+            "they run, are reachable, or are exploitable here."
         ),
     }
 

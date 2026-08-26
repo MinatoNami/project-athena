@@ -104,3 +104,56 @@ th { text-align: left; font-weight: 600; color: var(--ink-muted); font-size: .75
      text-transform: uppercase; letter-spacing: .05em; padding: .4rem .5rem; }
 td { padding: .45rem .5rem; border-top: 1px solid var(--rule); font-variant-numeric: tabular-nums; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
+
+/* ── Shared shell primitives ──────────────────────────────────────────────
+   Added with the redesign. `.wrap` stays for the pages that still use a
+   centred column; screens with their own left rail use `.page` instead, which
+   is full-bleed because a fixed 62rem column beside a 216px rail wastes the
+   half of a wide display where the evidence goes. */
+.page { padding: 1.4rem 1.75rem 2rem; max-width: 1500px; }
+.page-head { display: flex; align-items: flex-start; justify-content: space-between;
+             gap: 1.25rem; margin-bottom: 1.1rem; }
+.page-title { display: flex; flex-direction: column; gap: .18rem; min-width: 0; }
+.page-title h1 { margin: 0; font-size: 1.375rem; font-weight: 640; letter-spacing: -0.015em; }
+.page-title p { margin: 0; font-size: .87rem; color: var(--ink-2); max-width: 70ch; }
+.actions { display: flex; gap: .5rem; flex-shrink: 0; }
+
+.btn {
+  font: inherit; font-size: .8rem; font-weight: 500; padding: .42rem .8rem;
+  border-radius: 7px; border: 1px solid var(--rule); background: transparent;
+  color: var(--ink); cursor: pointer; white-space: nowrap;
+}
+.btn:hover:not(:disabled) { background: var(--plane); }
+.btn.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.btn.primary:hover:not(:disabled) { opacity: .88; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+
+.lbl { font-size: .66rem; letter-spacing: .06em; text-transform: uppercase;
+       color: var(--ink-muted); font-weight: 600; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* Hatching means "not looked at" and must never read as "clean". Used wherever a
+   value is absent because nothing checked, rather than because nothing was found. */
+.hatch {
+  background: repeating-linear-gradient(45deg, transparent, transparent 3px,
+              var(--never-hatch) 3px, var(--never-hatch) 4px);
+}
+
+/* Segmented control — the classification picker and the state gallery. */
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 7px;
+       overflow: hidden; background: var(--surface); }
+.seg button {
+  font: inherit; font-size: .74rem; padding: .3rem .6rem; border: 0; background: transparent;
+  color: var(--ink-2); cursor: pointer; border-right: 1px solid var(--rule);
+  white-space: nowrap; border-radius: 0;
+}
+.seg button:last-child { border-right: 0; }
+.seg button:hover { background: var(--plane); color: var(--ink); }
+.seg button.on { background: var(--ink); color: var(--surface); font-weight: 600; }
+
+.skeleton { background: var(--rule); border-radius: 4px; animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: .45 } }
+@media (prefers-reduced-motion: reduce) { .skeleton { animation: none; opacity: .7 } }
+
+@media (max-width: 860px) { .page { padding: 1.1rem 1rem 2rem; } }

@@ -1,4 +1,8 @@
 <script setup lang="ts">
+// Outside the shell: there is no session yet, and a nav with counts would either
+// be empty or disclose what the estate contains before anyone has signed in.
+definePageMeta({ layout: false })
+
 useHead({ title: 'Sign in' })
 const email = ref('')
 const password = ref('')

@@ -1,4 +1,8 @@
 <script setup lang="ts">
+// Outside the shell: there is no session yet, and a nav with counts would either
+// be empty or disclose what the estate contains before anyone has signed in.
+definePageMeta({ layout: false })
+
 /** First-run admin creation. The token is printed once to the API log by
  *  `athena bootstrap` — the deployment ships no credentials of any kind. */
 useHead({ title: 'First run' })
