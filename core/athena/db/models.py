@@ -559,6 +559,47 @@ class EgressLog(Base):
     duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
+class Suppression(Base):
+    """A decision to stop showing a finding, and what that decision rested on.
+
+    Not a deletion. The premise — exposure, tier, whether a fix exists, whether the
+    flaw is known-exploited — is stored with it, so when the situation changes the
+    reasoning can be re-checked rather than silently outliving the facts it was
+    about. A one-line "accepted" from six months ago is worth nothing on its own.
+
+    Scope is expressed by which columns are set: a null `asset_id` means any asset, a
+    null `component_id` means any component. The vulnerability is always required.
+    """
+
+    __tablename__ = "suppression"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    vulnerability_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("vulnerability.id", ondelete="CASCADE"), nullable=False
+    )
+    asset_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("asset.id", ondelete="CASCADE")
+    )
+    component_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("component.id", ondelete="CASCADE")
+    )
+    # Provenance only. Findings are recreated by correlation, so keying a suppression
+    # on one would lose it the next time the estate was scanned.
+    created_from_finding_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    reason_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    premise: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_by: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_by: Mapped[str | None] = mapped_column(Text)
+    invalidated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    invalidated_reason: Mapped[str | None] = mapped_column(Text)
+
+
 class InvestigationRecord(Base):
     """A completed investigation, keyed by the facts that could change its answer.
 

@@ -20,6 +20,7 @@ from athena.workers import (
     node_ingest,  # noqa: F401  (registers ingest.node_observation)
     repository,  # noqa: F401  (registers scan.repository)
     rescore,  # noqa: F401  (registers rescore.findings)
+    suppression_jobs,  # noqa: F401  (registers suppression.review)
 )
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])

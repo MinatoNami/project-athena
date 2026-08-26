@@ -33,7 +33,8 @@ from typing import Any
 from sqlalchemy import Integer, Select, case, func, literal, or_, select, tuple_
 from sqlalchemy.orm import Session
 
-from athena.db.models import Asset, Component, Finding, Vulnerability
+from athena.db.models import Asset, Component, Finding, Suppression, Vulnerability
+from athena.suppression import active_predicate
 
 MAX_LIMIT = 200
 DEFAULT_LIMIT = 50
@@ -78,6 +79,9 @@ class FindingQuery:
     state: str | None = None
     asset_id: str | None = None
     include_no_fix: bool = False
+    # Suppressed findings are excluded by default and counted separately — held
+    # back, never hidden, the same treatment as findings with no published fix.
+    include_suppressed: bool = False
 
     # Facets.
     q: str | None = None
@@ -121,6 +125,7 @@ class Page:
     matching_group_count: int = 0
     instance_count: int = 0
     assessed_count: int = 0
+    suppressed_group_count: int = 0
     facets: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
@@ -142,7 +147,26 @@ def _base(query: FindingQuery) -> Select:
         stmt = stmt.where(Finding.state != "no_fix_available")
     if query.asset_id:
         stmt = stmt.where(Finding.asset_id == query.asset_id)
+    if not query.include_suppressed:
+        stmt = stmt.where(~_suppressed_exists())
     return stmt
+
+
+def _suppressed_exists() -> Any:
+    """Does a live suppression cover this finding?
+
+    Correlated on the finding rather than joined: a finding can be covered by more
+    than one suppression — an exact one and a broader one — and a join would return
+    it once per match, inflating every instance count that touched it.
+    """
+    from athena.suppression.service import scope_matches_finding
+
+    return (
+        select(literal(1))
+        .select_from(Suppression)
+        .where(scope_matches_finding(), active_predicate())
+        .exists()
+    )
 
 
 def _facet_predicates(query: FindingQuery) -> list[Any]:
@@ -338,6 +362,14 @@ def query_findings(session: Session, query: FindingQuery) -> Page:
     totals = _facet_counts(session, query, with_facets=False)
     matching = _facet_counts(session, query, with_facets=True)
 
+    # Counted even when excluded. An operator must be able to see how much has been
+    # dismissed without having to go looking for it.
+    suppressed = session.execute(
+        select(func.count(func.distinct(Finding.group_key)))
+        .select_from(Finding)
+        .where(_suppressed_exists())
+    ).scalar_one()
+
     facets = {
         name: {"total": totals.get(name, 0), "matching": matching.get(name, 0)}
         for name in (
@@ -357,6 +389,7 @@ def query_findings(session: Session, query: FindingQuery) -> Page:
         # per-page denominator would answer a question nobody asked.
         instance_count=matching["instances"],
         assessed_count=matching["assessed_instances"],
+        suppressed_group_count=suppressed,
         facets=facets,
     )
 

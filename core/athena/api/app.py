@@ -20,6 +20,7 @@ from athena.api.routers import (
     health,
     jobs,
     nodes,
+    suppressions,
 )
 
 log = structlog.get_logger(__name__)
@@ -77,7 +78,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     for r in (
         auth.router, assets.router, findings.router, nodes.router,
-        jobs.router, audit.router, events.router,
+        jobs.router, audit.router, events.router, suppressions.router,
     ):
         app.include_router(r, prefix="/api/v1")
 

@@ -40,6 +40,10 @@ SCHEDULE: list[tuple[str, int, str, dict]] = [
     # evaluated, including ones previously closed: a corrected range can make a
     # dismissed finding real again.
     ("correlate-stale", HOUR, "correlate.stale", {}),
+    # Suppressions rest on a premise. When the premise stops holding — an isolated
+    # asset becomes exposed, a flaw joins the known-exploited catalogue — the
+    # dismissal stops applying and the finding returns with a stated reason.
+    ("suppression-review", HOUR, "suppression.review", {}),
 ]
 
 # Periodic work done directly by the scheduler rather than through the queue,
