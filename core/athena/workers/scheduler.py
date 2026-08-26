@@ -44,6 +44,9 @@ SCHEDULE: list[tuple[str, int, str, dict]] = [
     # asset becomes exposed, a flaw joins the known-exploited catalogue — the
     # dismissal stops applying and the finding returns with a stated reason.
     ("suppression-review", HOUR, "suppression.review", {}),
+    # Frequent, because the throttle is what limits volume rather than the schedule:
+    # an urgent notification should not wait an hour to find out it may send.
+    ("notify-dispatch", 5 * 60, "notify.dispatch", {}),
 ]
 
 # Periodic work done directly by the scheduler rather than through the queue,

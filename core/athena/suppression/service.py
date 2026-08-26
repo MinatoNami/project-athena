@@ -277,6 +277,19 @@ def review_suppressions(session: Session) -> dict[str, Any]:
         suppression.invalidated_at = datetime.now(UTC)
         suppression.invalidated_reason = broken
         invalidated += 1
+        # Worth interrupting for: somebody believed this was handled, and the ground
+        # it stood on moved. Grouped per advisory like everything else.
+        from athena.notify import emit
+
+        emit(
+            session,
+            kind="suppression.invalidated",
+            group_key=f"suppression.invalidated:{suppression.vulnerability_id}",
+            title=f"{suppression.vulnerability_id} is back",
+            body=f"You set this aside, and {broken}.",
+            subject=str(suppression.asset_id) if suppression.asset_id else None,
+            urgency="urgent",
+        )
         record(
             session,
             actor="system",

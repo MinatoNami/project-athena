@@ -605,6 +605,36 @@ class Suppression(Base):
     invalidated_reason: Mapped[str | None] = mapped_column(Text)
 
 
+class Notification(Base):
+    """Something worth telling somebody about, grouped by what happened.
+
+    One advisory affecting fourteen hosts is one notification with an occurrence
+    count, not fourteen messages. A partial unique index enforces at most one pending
+    row per `group_key`, so grouping cannot be lost to a race between two emitters.
+    """
+
+    __tablename__ = "notification"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    kind: Mapped[str] = mapped_column(String(48), nullable=False)
+    group_key: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    urgency: Mapped[str] = mapped_column(String(16), nullable=False, default="routine")
+    occurrence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    subjects: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    channel: Mapped[str | None] = mapped_column(String(32))
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class InvestigationRecord(Base):
     """A completed investigation, keyed by the facts that could change its answer.
 

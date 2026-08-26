@@ -282,6 +282,8 @@ def _apply(
         asset = session.get(Asset, finding.asset_id)
         risk = score(signals_for(session, finding, verdict))
 
+        _notify_if_worth_it(session, finding, verdict, risk)
+
         finding.risk_score = risk.value
         finding.risk_band = str(risk.band)
         finding.confidence = verdict.verdict_confidence
@@ -315,6 +317,50 @@ def _apply(
             "score": risk.value,
             "corrections": len(verdict.corrections),
         }
+
+
+# Bands that are worth interrupting somebody about. Below this an investigation is
+# something to find when you look, not something to be told.
+_WORTH_TELLING = {"critical", "high", "medium"}
+
+
+def _notify_if_worth_it(session, finding: Finding, verdict: Verdict, risk) -> None:
+    """Tell somebody, once per advisory rather than once per asset.
+
+    Grouped on the vulnerability deliberately: the same flaw landing on fourteen
+    hosts is one thing to know about, and sending it fourteen times is how a useful
+    alert becomes something people filter away.
+
+    Only emitted when the band *rises* into the range worth interrupting for. A
+    finding rescored from high to critical is news; one re-evaluated from high to
+    high is the system working, and saying so every time would bury the first kind.
+    """
+    from athena.db.models import Asset, Vulnerability
+    from athena.notify import emit
+
+    band = str(risk.band)
+    if band not in _WORTH_TELLING:
+        return
+    was = finding.risk_band
+    if was == band or (was in _WORTH_TELLING and _RANK.get(was, 0) >= _RANK.get(band, 0)):
+        return
+
+    asset = session.get(Asset, finding.asset_id)
+    vulnerability = session.get(Vulnerability, finding.vulnerability_id)
+    urgent = bool(vulnerability and vulnerability.kev) or band == "critical"
+
+    emit(
+        session,
+        kind="finding.assessed",
+        group_key=f"finding.assessed:{finding.vulnerability_id}",
+        title=f"{finding.vulnerability_id} scored {band}",
+        body=(vulnerability.summary or "")[:400] if vulnerability else "",
+        subject=asset.display_name if asset else None,
+        urgency="urgent" if urgent else "routine",
+    )
+
+
+_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "informational": 0}
 
 
 def _attach(session, finding: Finding, verdict: Verdict, risk, *, model: str) -> None:

@@ -72,6 +72,17 @@ class Settings(BaseSettings):
     # own network, so a misconfiguration cannot quietly start shipping inventory to
     # a hosted provider.
     ai_mode: str = "local_only"
+
+    # --- notifications ------------------------------------------------------
+    # Sends allowed per window before the rest are held for the digest. The point is
+    # not to save bandwidth: it is that a person who receives forty messages in an
+    # afternoon stops reading any of them, and the fortieth is as likely to matter as
+    # the first.
+    notify_max_per_window: int = 10
+    notify_window_minutes: int = 60
+    # Local hours during which only urgent notifications send; everything else waits
+    # for the digest. Empty disables it. Format "22:00-07:00", crossing midnight.
+    notify_quiet_hours: str = ""
     # Point this at a MagicDNS name rather than a tailnet IP where the model lives on
     # another machine: tailnet addresses are reassigned on reconnect, and a stale one
     # presents as an unreachable model rather than as a configuration error.

@@ -18,6 +18,7 @@ from athena.workers import (
     intel_jobs,  # noqa: F401  (registers intel.* and correlate.*)
     investigate,  # noqa: F401  (registers investigate.finding)
     node_ingest,  # noqa: F401  (registers ingest.node_observation)
+    notify_jobs,  # noqa: F401  (registers notify.dispatch)
     repository,  # noqa: F401  (registers scan.repository)
     rescore,  # noqa: F401  (registers rescore.findings)
     suppression_jobs,  # noqa: F401  (registers suppression.review)
