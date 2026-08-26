@@ -17,9 +17,11 @@ const { data: me } = await useMe()
 if (!me.value) await navigateTo('/login')
 
 const includeNoFix = ref(false)
+const includeBaseline = ref(false)
 const query = ref('')
 const debounced = ref('')
 const facets = ref<string[]>([])
+const includeSuppressed = ref(false)
 const sort = ref<'risk' | 'spread' | 'recent'>('risk')
 const expanded = ref<string | null>(null)
 const refreshing = ref(false)
@@ -47,6 +49,8 @@ const FACET_PARAM: Record<string, string> = {
 const params = computed(() => {
   const parts = [`limit=50`, `sort=${sort.value}`]
   if (includeNoFix.value) parts.push('include_no_fix=true')
+  if (includeBaseline.value) parts.push('include_baseline=true')
+  if (includeSuppressed.value) parts.push('include_suppressed=true')
   if (debounced.value.trim()) parts.push(`q=${encodeURIComponent(debounced.value.trim())}`)
   for (const id of facets.value) if (FACET_PARAM[id]) parts.push(FACET_PARAM[id])
   return parts.join('&')
@@ -230,6 +234,21 @@ function instanceLines(g: any) {
           </span>
         </label>
 
+        <label v-if="data?.baseline_group_count" class="fgroup toggle">
+          <input v-model="includeBaseline" type="checkbox">
+          <span>
+            Include {{ data.baseline_group_count.toLocaleString() }} pre-existing
+            <span class="subtle">— the backlog you started from</span>
+          </span>
+        </label>
+
+        <label v-if="data?.suppressed_group_count" class="fgroup toggle">
+          <input v-model="includeSuppressed" type="checkbox">
+          <span>
+            Include {{ data.suppressed_group_count.toLocaleString() }} you stopped showing
+          </span>
+        </label>
+
         <div v-if="intel?.sources?.length" class="fgroup sources">
           <div class="lbl">Sources</div>
           <div v-for="s in intel.sources" :key="s.name" class="source">
@@ -405,6 +424,7 @@ function instanceLines(g: any) {
 .toggle { flex-direction: row; align-items: flex-start; gap: .45rem; font-size: .76rem;
           color: var(--ink-2); padding: 0 .5rem; margin: 0; line-height: 1.4; }
 .toggle input { width: auto; margin-top: .15rem; }
+.subtle { color: var(--ink-muted); }
 .sources .source { display: flex; justify-content: space-between; gap: .5rem;
                    padding: .18rem .5rem; font-size: .72rem; }
 .sources code { font-size: .72rem; }

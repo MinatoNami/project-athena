@@ -471,11 +471,47 @@ def _baseline_preview(session: Session, asset_id: str | None) -> dict[str, Any]:
     )
     if asset_id:
         assets = assets.where(Asset.id == asset_id)
+    # What a person is actually deciding about is what leaves their screen. The
+    # totals above count every finding a baseline would mark, including ones already
+    # held back for having no published fix — true, but not the number being weighed.
+    from athena.findings import FindingQuery, query_findings
+
+    before = query_findings(
+        session, FindingQuery(limit=1, asset_id=asset_id)
+    ).matching_group_count
     return {
         "vulnerabilities": groups,
         "findings": findings,
         "assets_without_baseline": session.execute(assets).scalar_one(),
+        "default_view_now": before,
+        # Everything currently visible that is not exempt by the escape clause.
+        "would_leave_default_view": max(0, before - _exempt_count(session, asset_id)),
+        "stays_visible": _exempt_count(session, asset_id),
     }
+
+
+def _exempt_count(session: Session, asset_id: str | None) -> int:
+    """Groups the escape clause keeps in view whatever the baseline says.
+
+    Known-exploited, or measured at high or above. Reported alongside the preview so
+    the offer is not read as "this makes everything go away".
+    """
+    from athena.findings.query import _BAND_RANK
+
+    stmt = (
+        select(func.count(func.distinct(Finding.group_key)))
+        .select_from(Finding)
+        .join(Asset, Asset.id == Finding.asset_id)
+        .join(Vulnerability, Vulnerability.id == Finding.vulnerability_id)
+        .where(
+            Asset.tombstoned_at.is_(None),
+            Finding.state != "no_fix_available",
+            (Vulnerability.kev.is_(True)) | (_BAND_RANK >= 3),
+        )
+    )
+    if asset_id:
+        stmt = stmt.where(Finding.asset_id == asset_id)
+    return session.execute(stmt).scalar_one()
 
 
 @router.get("/baseline")

@@ -148,6 +148,9 @@ const heldBack = computed(() => {
   if (estate.value?.suppressed_group_count) {
     out.push({ label: 'Suppressed by you', n: estate.value.suppressed_group_count })
   }
+  if (estate.value?.baseline_group_count) {
+    out.push({ label: 'Pre-existing', n: estate.value.baseline_group_count })
+  }
   const deprioritised = instances.value.filter(
     (i: any) => i.triage_disposition === 'deprioritise',
   ).length
@@ -291,6 +294,10 @@ const heldBack = computed(() => {
       </div>
 
       <aside class="rail">
+        <!-- Offered above the classification lever only while a large inherited
+             backlog is the first thing standing between a person and a usable view. -->
+        <BaselineOffer @done="refreshEstate(); refresh()" />
+
         <!-- The single highest-leverage action available, stated as a lever rather
              than a nag: unclassified assets score at a placeholder importance, so most
              of the ranking beside this card is guesswork until it is filled in. -->
