@@ -236,6 +236,14 @@ def check_ordering(cases: list[Case], results: dict[str, Result]) -> list[str]:
 # ── reporting ────────────────────────────────────────────────────────────────
 
 
+def _signal_value(value: Any) -> str:
+    """Signals are stored as {value, confidence, evidence}; show the value."""
+    if isinstance(value, dict):
+        inner = value.get("value")
+        return f"{inner}" if not isinstance(inner, float) else f"{inner:.2f}"
+    return f"{value}"
+
+
 def report(cases: list[Case], results: dict[str, Result], violations: list[str],
            *, mode: str) -> dict[str, Any]:
     ok = [r for r in results.values() if r.status == "ok"]
@@ -266,7 +274,18 @@ def report(cases: list[Case], results: dict[str, Result], violations: list[str],
             f"{(f'{r.confidence:.2f}' if r.confidence is not None else '—'):>5}  {mark}"
         )
         for failure in r.failures:
-            print(f"{'':26} └─ {failure}")
+            print(f"{'':26} ├─ {failure}")
+        if r.failures and r.signals:
+            # A band failure is unreadable without the signals that produced it —
+            # the difference between "the model was wrong" and "the scorer weighted
+            # a correct signal badly" lives here.
+            rendered = ", ".join(
+                f"{name}={_signal_value(value)}"
+                for name, value in sorted(r.signals.items())
+            )
+            print(f"{'':26} └─ signals: {rendered}")
+        elif r.failures:
+            print(f"{'':26} └─")
 
     for violation in violations:
         print(f"\nORDERING: {violation}")
