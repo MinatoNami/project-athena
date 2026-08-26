@@ -11,6 +11,15 @@ difference matters. Full mode asks whether the *model* reaches the right answer.
 Deterministic mode asks whether the *scoring function* is even capable of separating
 these cases — if it collapses them all to one band with ideal signals handed to it,
 no model could rescue the ranking.
+
+Full mode runs each case several times, because one run is not a measurement. Two
+consecutive single runs of this corpus disagreed on three of seven cases, including
+whether a known-exploited internet-facing flaw was critical or medium. A gate built
+on one sample of that would flap, and a flapping gate gets ignored. What the corpus
+reports is therefore a rate, and it distinguishes a case that is consistently wrong
+from one that is unstable — those are different problems with different fixes, and
+for a security tool the second is arguably worse: the same finding answered
+differently depending on when someone happened to look.
 """
 
 from __future__ import annotations
@@ -20,6 +29,7 @@ import json
 import statistics
 import sys
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -35,6 +45,13 @@ from evals import seed
 from evals.cases import BANDS, Case, band_rank, load
 
 BASELINE = Path(__file__).parent / "baseline.json"
+DEFAULT_REPEATS = 3
+
+# Expectations about how the model behaves, as distinct from how the scorer ranks.
+# Deterministic mode stipulates its own confidence and produces no uncertainty list,
+# so applying these there would report failures that measure nothing.
+MODEL_ONLY = ("max_confidence", "require_uncertainties", "no_unregistered_tool_calls",
+              "reject_injected_confidence", "matches_control")
 
 
 @dataclass
@@ -69,7 +86,7 @@ def run_case(case: Case) -> Result:
     started = time.monotonic()
     try:
         # Seeding is inside the guard too: a fixture that will not build is a result
-        # for that case, not a reason to abandon the other five.
+        # for that case, not a reason to abandon the others.
         ids = seed.build(case)
         outcome = investigate_finding({"finding_id": ids["finding_id"]})
     except Exception as exc:
@@ -79,6 +96,10 @@ def run_case(case: Case) -> Result:
 
     if outcome.get("status") == "inconclusive":
         result.status = f"inconclusive: {outcome.get('reason', '')}"
+        return result
+    if outcome.get("status") == "cached":
+        # Would silently report the previous repeat's answer as this repeat's.
+        result.status = "error: cache hit inside a repeat — teardown did not run"
         return result
 
     with session_scope() as session:
@@ -128,14 +149,6 @@ def run_case_deterministic(case: Case) -> Result:
 
 
 # ── checking ─────────────────────────────────────────────────────────────────
-
-
-# Expectations about how the model behaves, as distinct from how the scorer ranks.
-# Deterministic mode stipulates its own confidence and produces no uncertainty list,
-# so applying these there would report failures that measure nothing.
-MODEL_ONLY = ("max_confidence", "require_uncertainties",
-              "no_unregistered_tool_calls", "reject_injected_confidence",
-              "matches_control")
 
 
 def check(case: Case, result: Result, *, mode: str = "full") -> None:
@@ -240,76 +253,100 @@ def _signal_value(value: Any) -> str:
     """Signals are stored as {value, confidence, evidence}; show the value."""
     if isinstance(value, dict):
         inner = value.get("value")
-        return f"{inner}" if not isinstance(inner, float) else f"{inner:.2f}"
+        return f"{inner:.2f}" if isinstance(inner, float) else f"{inner}"
     return f"{value}"
 
 
-def report(cases: list[Case], results: dict[str, Result], violations: list[str],
-           *, mode: str) -> dict[str, Any]:
-    ok = [r for r in results.values() if r.status == "ok"]
-    scored = [r for r in ok if r.risk_score is not None]
-    graded = [r for r in results.values() if r.case_id in {c.id for c in cases}]
-    passed = [r for r in graded if r.passed]
+def _spread(runs: list[Result]) -> int:
+    bands = [r.band for r in runs if r.band]
+    if not bands:
+        return 0
+    return band_rank(max(bands, key=band_rank)) - band_rank(min(bands, key=band_rank))
 
-    applicable_cases = {c.id for c in cases if c.expects_applicable}
-    false_negatives = [
-        r.case_id for r in ok
-        if r.case_id in applicable_cases and r.verdict == "not_applicable"
-    ]
 
-    bands = [r.band for r in scored]
-    spread = (
-        band_rank(max(bands, key=band_rank)) - band_rank(min(bands, key=band_rank))
-        if bands else 0
-    )
+def report(cases: list[Case], runs: list[dict[str, Result]],
+           violations: list[str], *, mode: str) -> dict[str, Any]:
+    repeats = len(runs)
+    per_case: dict[str, list[Result]] = {
+        c.id: [r[c.id] for r in runs if c.id in r] for c in cases
+    }
 
-    print(f"\n{'case':26} {'verdict':16} {'band':14} {'score':>5}  {'conf':>5}  result")
-    print("─" * 88)
+    print(f"\n{'case':26} {'pass':>6}  {'verdict(s)':34} {'band(s)':24} score")
+    print("─" * 104)
     for case in cases:
-        r = results[case.id]
-        mark = "pass" if r.passed else "FAIL"
-        print(
-            f"{case.id:26} {(r.verdict or '—'):16} {(r.band or '—'):14} "
-            f"{(r.risk_score if r.risk_score is not None else '—'):>5}  "
-            f"{(f'{r.confidence:.2f}' if r.confidence is not None else '—'):>5}  {mark}"
-        )
-        for failure in r.failures:
-            print(f"{'':26} ├─ {failure}")
-        if r.failures and r.signals:
-            # A band failure is unreadable without the signals that produced it —
-            # the difference between "the model was wrong" and "the scorer weighted
-            # a correct signal badly" lives here.
-            rendered = ", ".join(
-                f"{name}={_signal_value(value)}"
-                for name, value in sorted(r.signals.items())
-            )
-            print(f"{'':26} └─ signals: {rendered}")
-        elif r.failures:
-            print(f"{'':26} └─")
+        attempts = per_case[case.id]
+        passes = sum(1 for a in attempts if a.passed)
+        verdicts = Counter(a.verdict or "—" for a in attempts)
+        bands = Counter(a.band or "—" for a in attempts)
+        scores = [a.risk_score for a in attempts if a.risk_score is not None]
+        unstable = len(verdicts) > 1 or len(bands) > 1
 
-    for violation in violations:
+        def fmt(counter: Counter) -> str:
+            return " ".join(
+                f"{k}×{v}" if repeats > 1 else f"{k}" for k, v in counter.most_common()
+            )
+
+        flag = "  UNSTABLE" if unstable else ""
+        print(
+            f"{case.id:26} {passes}/{repeats:<4}  {fmt(verdicts):34} "
+            f"{fmt(bands):24} "
+            f"{(f'{min(scores)}–{max(scores)}' if scores and min(scores) != max(scores) else (scores[0] if scores else '—'))}"
+            f"{flag}"
+        )
+        seen: set[str] = set()
+        for attempt in attempts:
+            for failure in attempt.failures:
+                if failure not in seen:
+                    seen.add(failure)
+                    print(f"{'':26} ├─ {failure}")
+        if seen:
+            last = next((a for a in attempts if a.failures and a.signals), None)
+            if last:
+                print(f"{'':26} └─ signals: " + ", ".join(
+                    f"{n}={_signal_value(v)}" for n, v in sorted(last.signals.items())
+                ))
+            else:
+                print(f"{'':26} └─")
+
+    for violation in dict.fromkeys(violations):
         print(f"\nORDERING: {violation}")
 
+    graded = [a for attempts in per_case.values() for a in attempts]
+    passed = [a for a in graded if a.passed]
+    errored = [a for a in graded if a.status != "ok"]
+    ok = [a for a in graded if a.status == "ok"]
+
+    applicable_cases = {c.id for c in cases if c.expects_applicable}
+    false_negatives = sorted({
+        a.case_id for a in ok
+        if a.case_id in applicable_cases and a.verdict == "not_applicable"
+    })
+    unstable_cases = sorted({
+        cid for cid, attempts in per_case.items()
+        if len({a.verdict for a in attempts}) > 1 or len({a.band for a in attempts}) > 1
+    })
+    # Discrimination is judged on the worst repeat: a ranking that separates cases
+    # only sometimes does not separate them.
+    spreads = [_spread(list(run.values())) for run in runs]
+    worst_spread = min(spreads) if spreads else 0
+
     print()
-    print(f"verdict/band expectations : {len(passed)}/{len(graded)} cases pass")
+    print(f"repeats                   : {repeats}")
+    print(f"verdict/band expectations : {len(passed)}/{len(graded)} "
+          f"({len(passed)/len(graded):.0%})" if graded else "no results")
     print(f"false negatives           : {len(false_negatives)} "
           f"{false_negatives if false_negatives else ''}")
-    print(f"band spread               : {spread} of {len(BANDS) - 1} "
-          f"({'no discrimination — every case lands in one band' if spread == 0 else 'ranking separates cases'})")
+    print(f"unstable cases            : {len(unstable_cases)} "
+          f"{unstable_cases if unstable_cases else ''}")
+    print(f"band spread (worst repeat): {worst_spread} of {len(BANDS) - 1} "
+          + ("(no discrimination — every case lands in one band)" if worst_spread == 0
+             else "(ranking separates cases)"))
     print(f"ordering violations       : {len(violations)}")
-    if mode == "deterministic":
-        untested = sorted({
-            name for c in cases for name in MODEL_ONLY
-            if getattr(c.expected, name)
-        })
-        if untested:
-            print(f"not tested in this mode   : {', '.join(untested)} "
-                  "(no model ran)")
 
     if mode == "full":
-        corrections = sum(len(r.corrections) for r in ok)
-        tokens = [r.tokens for r in ok if r.tokens]
-        durations = [r.duration_ms for r in ok if r.duration_ms]
+        corrections = sum(len(a.corrections) for a in ok)
+        tokens = [a.tokens for a in ok if a.tokens]
+        durations = [a.duration_ms for a in ok if a.duration_ms]
         print(f"grounding corrections     : {corrections} across {len(ok)} investigations")
         if tokens:
             print(f"tokens per investigation  : {statistics.median(tokens):.0f} median, "
@@ -317,23 +354,29 @@ def report(cases: list[Case], results: dict[str, Result], violations: list[str],
         if durations:
             print(f"seconds per investigation : {statistics.median(durations)/1000:.1f} median, "
                   f"{max(durations)/1000:.1f} max")
+    else:
+        untested = sorted({n for c in cases for n in MODEL_ONLY if getattr(c.expected, n)})
+        if untested:
+            print(f"not tested in this mode   : {', '.join(untested)} (no model ran)")
 
     return {
         "mode": mode,
-        "errored": len([r for r in graded if r.status != "ok"]),
-        "cases": len(graded),
+        "repeats": repeats,
+        "attempts": len(graded),
+        "errored": len(errored),
         "passed": len(passed),
         "accuracy": round(len(passed) / len(graded), 3) if graded else 0.0,
         "false_negatives": len(false_negatives),
-        "band_spread": spread,
+        "unstable_cases": len(unstable_cases),
+        "band_spread": worst_spread,
         "ordering_violations": len(violations),
     }
 
 
 def gate(summary: dict[str, Any]) -> int:
     """Compare against the recorded baseline. Returns a process exit code."""
-    if summary.get("errored"):
-        print(f"\nFAILED: {summary['errored']} case(s) did not produce a result. "
+    if summary["errored"]:
+        print(f"\nFAILED: {summary['errored']} attempt(s) produced no result. "
               "Nothing was measured, so nothing can pass.")
         return 1
     if summary["false_negatives"]:
@@ -345,29 +388,32 @@ def gate(summary: dict[str, Any]) -> int:
 
     if not BASELINE.exists():
         print(f"\nNo baseline recorded. Write this run to {BASELINE.name} with "
-              f"--record once you have read it and agree with it.")
+              "--record once you have read it and agree with it.")
         return 0
-
     base = json.loads(BASELINE.read_text()).get(summary["mode"])
     if base is None:
         print(f"\nNo baseline for mode {summary['mode']!r}.")
         return 0
-    if summary["accuracy"] < base["accuracy"]:
-        print(f"\nFAILED: accuracy {summary['accuracy']} regressed from "
-              f"baseline {base['accuracy']}.")
-        return 1
-    if summary["band_spread"] < base["band_spread"]:
-        print(f"\nFAILED: band spread narrowed from {base['band_spread']} to "
-              f"{summary['band_spread']} — cases that used to be separable no longer are.")
-        return 1
-    print(f"\nPASSED against baseline (accuracy {summary['accuracy']} "
-          f"vs {base['accuracy']}, spread {summary['band_spread']} vs {base['band_spread']}).")
+
+    for key, label, worse in (
+        ("accuracy", "accuracy", lambda a, b: a < b),
+        ("band_spread", "band spread", lambda a, b: a < b),
+        ("unstable_cases", "unstable cases", lambda a, b: a > b),
+    ):
+        if worse(summary[key], base.get(key, summary[key])):
+            print(f"\nFAILED: {label} regressed from {base[key]} to {summary[key]}.")
+            return 1
+    print(f"\nPASSED against baseline (accuracy {summary['accuracy']} vs "
+          f"{base['accuracy']}, spread {summary['band_spread']} vs {base['band_spread']}, "
+          f"unstable {summary['unstable_cases']} vs {base.get('unstable_cases', '—')}).")
     return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", help="run one case by id")
+    parser.add_argument("--repeat", type=int, default=None,
+                        help=f"runs per case (default {DEFAULT_REPEATS} in full mode)")
     parser.add_argument("--deterministic-only", action="store_true",
                         help="skip every model call; score from stipulated signals")
     parser.add_argument("--record", action="store_true",
@@ -377,29 +423,36 @@ def main() -> int:
 
     cases = load(args.case)
     mode = "deterministic" if args.deterministic_only else "full"
-    print(f"corpus: {len(cases)} case(s), mode={mode}")
+    # Deterministic mode has nothing to vary, so repeating it only wastes time.
+    repeats = 1 if mode == "deterministic" else (args.repeat or DEFAULT_REPEATS)
+    print(f"corpus: {len(cases)} case(s), mode={mode}, repeats={repeats}")
 
-    if mode == "full":
-        seed.clear()
-
-    results: dict[str, Result] = {}
+    runs: list[dict[str, Result]] = []
+    violations: list[str] = []
     try:
-        for case in cases:
-            if mode == "deterministic":
-                result = run_case_deterministic(case)
-            else:
-                print(f"  running {case.id} …", flush=True)
-                result = run_case(case)
-            check(case, result, mode=mode)
-            results[case.id] = result
+        for attempt in range(repeats):
+            if mode == "full":
+                # Between repeats too: the investigation cache would otherwise return
+                # the previous repeat's verdict and report perfect stability.
+                seed.clear()
+            results: dict[str, Result] = {}
+            for case in cases:
+                if mode == "deterministic":
+                    result = run_case_deterministic(case)
+                else:
+                    print(f"  [{attempt + 1}/{repeats}] {case.id} …", flush=True)
+                    result = run_case(case)
+                check(case, result, mode=mode)
+                results[case.id] = result
+            if mode == "full":
+                check_controls(cases, results)
+            violations.extend(check_ordering(cases, results))
+            runs.append(results)
     finally:
         if mode == "full":
             seed.clear()
 
-    if mode == "full":
-        check_controls(cases, results)
-    violations = check_ordering(cases, results)
-    summary = report(cases, results, violations, mode=mode)
+    summary = report(cases, runs, violations, mode=mode)
 
     if args.record:
         existing = json.loads(BASELINE.read_text()) if BASELINE.exists() else {}
@@ -407,7 +460,6 @@ def main() -> int:
         BASELINE.write_text(json.dumps(existing, indent=2) + "\n")
         print(f"\nrecorded baseline for mode {mode!r}")
         return 0
-
     if args.json:
         print(json.dumps(summary, indent=2))
     return gate(summary)
