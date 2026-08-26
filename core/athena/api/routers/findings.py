@@ -17,6 +17,8 @@ from athena.db.models import (
     Finding,
     Vulnerability,
 )
+from athena.findings import FindingQuery, query_findings
+from athena.findings.query import DEFAULT_LIMIT, MAX_LIMIT, SORTS
 from athena.intel.ingest import source_health
 from athena.queue import enqueue
 
@@ -51,121 +53,59 @@ def list_findings(
     asset_id: str | None = None,
     kev_only: bool = False,
     include_no_fix: bool = False,
-    limit: int = Query(default=100, le=500),
+    q: str | None = None,
+    assessed: bool | None = None,
+    exposure: str | None = None,
+    tier: str | None = None,
+    has_fix: bool | None = None,
+    min_band: str | None = None,
+    needs_attention: bool = False,
+    sort: str = "risk",
+    cursor: str | None = None,
+    limit: int = Query(default=DEFAULT_LIMIT, le=MAX_LIMIT),
     _: Principal = Depends(current_principal),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     """Findings, grouped by vulnerability.
 
     One CVE affecting forty hosts is one row with forty instances, not forty rows.
+
+    Filtering, ordering and the page boundary are all decided in SQL. They used to be
+    decided in Python over an unordered slice of rows, which silently returned an
+    arbitrary subset once the estate outgrew the slice.
     """
-    # Default view is work that can actually be done. Findings a distribution has
-    # published no fix for are real, but they are not action — they are shown on
-    # request, and counted separately so they are never silently hidden.
-    stmt = (
-        select(Finding, Vulnerability, Asset, Component)
-        .join(Vulnerability, Vulnerability.id == Finding.vulnerability_id)
-        .join(Asset, Asset.id == Finding.asset_id)
-        .join(Component, Component.id == Finding.component_id)
-    )
-    if state:
-        stmt = stmt.where(Finding.state == state)
-    elif not include_no_fix:
-        stmt = stmt.where(Finding.state != "no_fix_available")
-    if asset_id:
-        stmt = stmt.where(Finding.asset_id == asset_id)
-    if kev_only:
-        stmt = stmt.where(Vulnerability.kev.is_(True))
-
-    rows = session.execute(stmt.limit(limit * 20)).all()
-
-    groups: dict[str, dict[str, Any]] = {}
-    for finding, vulnerability, asset, component in rows:
-        group = groups.setdefault(
-            finding.group_key,
-            {
-                "group_key": finding.group_key,
-                "worst_band": None,
-                "worst_score": None,
-                "investigated_count": 0,
-                "vulnerability_id": vulnerability.id,
-                "summary": vulnerability.summary,
-                "provisional_severity": _severity_of(vulnerability),
-                "cvss_score": vulnerability.cvss_score,
-                "epss_score": vulnerability.epss_score,
-                "kev": vulnerability.kev,
-                "kev_ransomware": vulnerability.kev_ransomware,
-                "published_at": vulnerability.published_at,
-                "instances": [],
-            },
-        )
-        group["instances"].append(
-            {
-                "finding_id": str(finding.id),
-                # An investigated finding has a real band and a confidence behind it.
-                # One that has not been looked at has neither, and must not borrow the
-                # advisory's severity to look as though it had.
-                "investigated": finding.risk_band is not None,
-                "risk_band": finding.risk_band,
-                "risk_score": finding.risk_score,
-                "confidence": finding.confidence,
-                "triage_disposition": finding.triage_disposition,
-                "triage_reason": finding.triage_reason,
-                "asset_id": str(asset.id),
-                "asset": asset.display_name,
-                # Exposure travels with the instance, not just the tier: "internet-facing"
-                # is the single strongest reason a finding needs a person, and the queue
-                # cannot say so without it.
-                "exposure": asset.exposure,
-                "asset_kind": asset.kind,
-                "tier": asset.tier,
-                "component": f"{component.name} {component.version}",
-                "ecosystem": component.ecosystem,
-                "fixed_version": finding.fixed_version,
-                # A fix only available through Ubuntu Pro is not an upgrade the
-                # operator can necessarily perform.
-                "fix_channel": finding.fix_channel,
-                "state": finding.state,
-                "match_method": finding.match_method,
-                "match_confidence": finding.match_confidence,
-            }
+    if sort not in SORTS:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"Unknown sort {sort!r} — expected one of {', '.join(SORTS)}",
         )
 
-    # Known-exploited first, then severity, then CVSS, then most recent. This is the
-    # only ordering defensible before M3: nothing here knows whether a service is
-    # running or reachable, so it cannot claim to rank by risk.
-    # Roll the per-instance assessment up to the group. Risk is scored per instance,
-    # so the group takes the worst of them rather than an average that would hide it.
-    band_rank = {"critical": 4, "high": 3, "medium": 2, "low": 1, "informational": 0}
-    for group in groups.values():
-        assessed = [i for i in group["instances"] if i["investigated"]]
-        group["investigated_count"] = len(assessed)
-        if assessed:
-            worst = max(assessed, key=lambda i: band_rank.get(i["risk_band"], -1))
-            group["worst_band"] = worst["risk_band"]
-            group["worst_score"] = worst["risk_score"]
-
-    ordered = sorted(
-        groups.values(),
-        key=lambda g: (
-            # Assessed findings rank above unassessed ones: a measured band is a
-            # stronger claim than an advisory's opinion, in either direction.
-            -band_rank.get(g["worst_band"] or "", -1),
-            not g["kev"],
-            -SEVERITY_RANK.get(g["provisional_severity"], 0),
-            -(g["cvss_score"] or 0),
-            -(g["epss_score"] or 0),
-            g["vulnerability_id"],
+    page = query_findings(
+        session,
+        FindingQuery(
+            state=state,
+            asset_id=asset_id,
+            include_no_fix=include_no_fix,
+            q=q,
+            assessed=assessed,
+            # `kev_only` predates the facet set and is kept so existing callers and
+            # bookmarks keep working.
+            kev=kev_only,
+            exposure=exposure,
+            tier=tier,
+            has_fix=has_fix,
+            min_band=min_band,
+            needs_attention=needs_attention,
+            sort=sort,
+            cursor=cursor,
+            limit=limit,
         ),
-    )[:limit]
-    for group in ordered:
-        group["instance_count"] = len(group["instances"])
+    )
 
     no_fix_count = session.execute(
         select(func.count(func.distinct(Finding.vulnerability_id)))
         .where(Finding.state == "no_fix_available")
     ).scalar_one()
-
     total_assets = session.execute(
         select(func.count()).select_from(Asset).where(Asset.tombstoned_at.is_(None))
     ).scalar_one()
@@ -175,28 +115,28 @@ def list_findings(
         .where(Asset.tombstoned_at.is_(None), Asset.last_inventoried_at.isnot(None))
     ).scalar_one()
 
-    instance_count = sum(g["instance_count"] for g in ordered)
-    assessed_count = sum(g["investigated_count"] for g in ordered)
     return {
-        "groups": ordered,
-        "group_count": len(groups),
-        # Totals over the whole result, so a caller can show what fraction of what it
-        # is displaying has actually been assessed without re-deriving it per group.
-        "instance_count": instance_count,
-        "assessed_count": assessed_count,
-        # Surfaced, never hidden: the operator can see how much is being held back
-        # and why.
+        "groups": page.groups,
+        # `group_count` is the whole population and `matching_group_count` is what
+        # survives the filters. A single number cannot answer both "what am I looking
+        # at" and "what am I excluding", and only ever answering the first is how a
+        # filtered view comes to read as a complete one.
+        "group_count": page.group_count,
+        "matching_group_count": page.matching_group_count,
+        "next_cursor": page.next_cursor,
+        # Over the whole matching set, not this page: these are the denominator for
+        # "how much of what I am looking at has been assessed".
+        "instance_count": page.instance_count,
+        "assessed_count": page.assessed_count,
+        # Each facet carries both numbers for the same reason.
+        "facets": page.facets,
         "no_fix_available_count": no_fix_count,
-        # Findings are only as complete as the inventory behind them.
         "coverage": {"of_assets_observed": observed, "of_assets_total": total_assets},
-        # Two populations live here and conflating them would undo the point. This
-        # used to say nothing had been investigated, which stopped being true when
-        # M3 shipped — a caveat that overstates its own ignorance is still wrong.
         "caveat": (
-            f"{assessed_count} of {instance_count} findings have been investigated: the "
-            "component was checked against that asset and the risk scored on what was "
-            "found. The rest are version matches only — nothing has checked whether "
-            "they run, are reachable, or are exploitable here."
+            f"{page.assessed_count} of {page.instance_count} findings have been "
+            "investigated: the component was checked against that asset and the risk "
+            "scored on what was found. The rest are version matches only — nothing has "
+            "checked whether they run, are reachable, or are exploitable here."
         ),
     }
 

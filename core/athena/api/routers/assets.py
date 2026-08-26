@@ -162,7 +162,10 @@ def _family(asset: Asset) -> tuple[str, str]:
         # Individually numerous and individually uninteresting; they inherit their
         # host's consequence far more often than they have their own.
         return f"kind:{asset.kind}", f"All {asset.kind}s"
-    return f"asset:{asset.id}", asset.display_name
+    # Keyed on identity_key rather than id: identity is what the inventory assigned,
+    # and it exists before the row does. Keying on the primary key made the group of
+    # an unflushed asset "asset:None", which is only ever wrong.
+    return f"asset:{asset.identity_key}", asset.display_name
 
 
 @router.get("/assets/unclassified")
