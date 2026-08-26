@@ -30,9 +30,16 @@ useEvents(['assets'], refresh)
 </script>
 
 <template>
-  <div class="wrap">
-    <h1>Assets</h1>
-    <p class="sub">What Athena knows about, and how recently it looked.</p>
+  <div class="page">
+    <div class="page-head">
+      <div class="page-title">
+        <h1>Assets</h1>
+        <p>What Athena knows about, and how recently it looked.</p>
+      </div>
+      <div class="actions">
+        <NuxtLink to="/assets/classify" class="btn primary">Classify</NuxtLink>
+      </div>
+    </div>
 
     <CoveragePanel v-if="data?.coverage" :coverage="data.coverage" />
 

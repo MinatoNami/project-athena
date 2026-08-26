@@ -23,10 +23,18 @@ const statusClass = (s: string) => (s === 'succeeded' ? 'ok' : s === 'running' ?
 </script>
 
 <template>
-  <div v-if="asset" class="wrap">
-    <NuxtLink to="/assets" class="muted">← Assets</NuxtLink>
-    <h1>{{ asset.display_name }}</h1>
-    <p class="sub">{{ asset.kind }} · <code>{{ asset.identity_key }}</code></p>
+  <div v-if="asset" class="page">
+    <nav class="crumbs">
+      <NuxtLink to="/assets">Assets</NuxtLink>
+      <span>/</span>
+      <span>{{ asset.display_name }}</span>
+    </nav>
+    <div class="page-head">
+      <div class="page-title">
+        <h1>{{ asset.display_name }}</h1>
+        <p>{{ asset.kind }} · <code>{{ asset.identity_key }}</code></p>
+      </div>
+    </div>
 
     <div class="card">
       <h2>Status</h2>
@@ -109,6 +117,9 @@ const statusClass = (s: string) => (s === 'succeeded' ? 'ok' : s === 'running' ?
 </template>
 
 <style scoped>
+.crumbs { display: flex; align-items: center; gap: .4rem; font-size: .76rem;
+          color: var(--ink-muted); margin-bottom: .75rem; }
+.crumbs a { color: var(--ink-muted); }
 .ok { color: var(--good); font-weight: 500; }
 .bad { color: var(--crit); font-weight: 600; }
 .small { font-size: .82rem; max-width: 30rem; }

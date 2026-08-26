@@ -107,8 +107,14 @@ async function logout() {
         </div>
         <div class="who">
           <span class="avatar">{{ (me?.email || '?').charAt(0).toUpperCase() }}</span>
-          <span class="email">{{ me?.email }}</span>
-          <button class="linkish" title="Sign out" @click="logout">Sign out</button>
+          <span class="email" :title="me?.email">{{ me?.email }}</span>
+          <button class="signout" title="Sign out" aria-label="Sign out" @click="logout">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M14.5 16.5L19 12l-4.5-4.5" /><path d="M19 12H9" />
+              <path d="M12 4.5H6.5A1.5 1.5 0 005 6v12a1.5 1.5 0 001.5 1.5H12" />
+            </svg>
+          </button>
         </div>
       </div>
     </nav>
@@ -157,11 +163,12 @@ async function logout() {
   font-size: .74rem; color: var(--ink-2); overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; flex-grow: 1;
 }
-.linkish {
-  background: none; border: 0; padding: 0; font: inherit; font-size: .7rem;
-  color: var(--ink-muted); cursor: pointer; text-decoration: underline;
+/* An icon, not a word: at 216px a long address squeezed "Sign out" onto two lines. */
+.signout {
+  background: none; border: 0; padding: .15rem; margin: 0; line-height: 0;
+  color: var(--ink-muted); cursor: pointer; border-radius: 5px; flex-shrink: 0;
 }
-.linkish:hover { color: var(--ink); }
+.signout:hover { color: var(--ink); background: var(--plane); }
 .main { flex-grow: 1; min-width: 0; }
 
 @media (max-width: 860px) {
