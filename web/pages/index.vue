@@ -33,12 +33,35 @@ const BAND_RANK: Record<string, number> = {
   critical: 4, high: 3, medium: 2, low: 1, informational: 0,
 }
 
-/** One entry per finding instance, carrying its group's advisory context. */
-const instances = computed(() =>
-  (data.value?.groups ?? []).flatMap((g: any) =>
-    (g.instances ?? []).map((i: any) => ({ ...i, group: g })),
-  ),
-)
+/**
+ * One entry per decision, not per row in the database.
+ *
+ * Near-identical assets collapse: fourteen tags of one image carrying one
+ * vulnerability is one thing to decide about. Without this the queue fills with the
+ * same CVE repeated down the page, which is the wall of noise a triage view exists
+ * to prevent — and the worst instance is what should be shown, since acting on the
+ * family covers the rest.
+ */
+const instances = computed(() => {
+  const collapsed = new Map<string, any>()
+  for (const g of data.value?.groups ?? []) {
+    for (const i of g.instances ?? []) {
+      const family = String(i.asset).replace(/[@:][^@:]*$/, '')
+      const key = `${g.vulnerability_id}::${family}`
+      const entry = collapsed.get(key)
+      if (!entry) {
+        collapsed.set(key, { ...i, group: g, family, siblings: 1 })
+        continue
+      }
+      entry.siblings += 1
+      // Keep whichever instance argues hardest for attention.
+      if ((i.risk_score ?? -1) > (entry.risk_score ?? -1)) {
+        Object.assign(entry, i, { group: g, family, siblings: entry.siblings })
+      }
+    }
+  }
+  return [...collapsed.values()]
+})
 
 /**
  * Needs a person: assessed and consequential, or flagged as exploited. Deliberately
@@ -203,7 +226,12 @@ const heldBack = computed(() => {
               <div class="idline">
                 <code class="cve">{{ i.group.vulnerability_id }}</code>
                 <code class="pkg">{{ i.component }}</code>
-                <span class="on">on {{ i.asset }}</span>
+                <span class="on">
+                  on {{ i.siblings > 1 ? i.family : i.asset }}
+                  <span v-if="i.siblings > 1" class="siblings">
+                    · {{ i.siblings }} near-identical
+                  </span>
+                </span>
               </div>
               <div class="reason">{{ reason(i) }}</div>
             </div>
@@ -232,7 +260,7 @@ const heldBack = computed(() => {
             <div class="rowacts">
               <NuxtLink :to="`/findings/${i.finding_id}`" class="btn primary">Open case</NuxtLink>
               <NuxtLink :to="`/findings#${i.group.vulnerability_id}`" class="btn">
-                See all {{ i.group.instance_count }} affected
+                See all {{ i.group.instance_count }} affected assets
               </NuxtLink>
             </div>
           </div>
@@ -299,6 +327,7 @@ const heldBack = computed(() => {
 .cve { font-size: .8rem; font-weight: 600; }
 .pkg { font-size: .78rem; color: var(--ink-2); }
 .on { font-size: .76rem; color: var(--ink-muted); }
+.siblings { border: 1px dashed var(--rule); border-radius: 3px; padding: 0 .22rem; }
 .reason { font-size: .79rem; line-height: 1.45; color: var(--ink-2); }
 .score { display: flex; flex-direction: column; align-items: flex-end; gap: .1rem; flex-shrink: 0; }
 .score .n { font-size: .95rem; font-weight: 600; }

@@ -1,269 +1,425 @@
 <script setup lang="ts">
+/**
+ * One finding, as a case file.
+ *
+ * The investigation is what separates this from a version-matcher, and the old page
+ * buried it under advisory metadata. Three things are deliberately prominent rather
+ * than tucked away: what was established and by which tool, where code overruled the
+ * model, and what could not be determined at all. The first is the claim, the second
+ * is the best available measure of how far to trust it, the third is its honest edge.
+ */
 const route = useRoute()
 const { data: me } = await useMe()
 if (!me.value) await navigateTo('/login')
 
-const { data: f } = await useAsyncData(`finding-${route.params.id}`, () =>
+const tab = ref<'verdict' | 'risk' | 'evidence' | 'advisory'>('verdict')
+
+const { data, pending, error, refresh } = await useAsyncData(`finding-${route.params.id}`, () =>
   api<any>(`findings/${route.params.id}`),
 )
-useHead({ title: () => f.value?.vulnerability?.id || 'Finding' })
 
-const riskEvidence = computed(() =>
-  (f.value?.evidence || []).find((e: any) => e.kind === 'risk'),
+useHead({ title: () => data.value?.vulnerability?.id ?? 'Finding' })
+
+const inv = computed(() => data.value?.investigation)
+const risk = computed(() => data.value?.risk_explained)
+
+const allSignals = computed(() =>
+  Object.entries(inv.value?.signals ?? {}).map(([name, s]: any) => ({ name, ...s })),
 )
-const riskFactors = computed(() => riskEvidence.value?.value?.factors || null)
-const riskOverrides = computed(() => riskEvidence.value?.value?.overrides || [])
+const settled = computed(() =>
+  allSignals.value.filter(s => s.value !== 'unknown' && s.value !== null),
+)
+const unsettled = computed(() =>
+  allSignals.value.filter(s => s.value === 'unknown' || s.value === null),
+)
 
-function formatSignal(value: any) {
-  if (value === true) return 'yes'
-  if (value === false) return 'no'
-  return String(value)
+function pretty(name: string) {
+  return name.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase())
+}
+function valueLabel(v: any) {
+  if (v === true) return 'yes'
+  if (v === false) return 'no'
+  return String(v)
+}
+function evidenceLabel(s: any) {
+  return s.evidence?.length ? s.evidence.join(', ') : 'nothing cited'
 }
 
-// "unknown" is a legitimate answer, not a failure — it reads as neither yes nor no.
-function signalClass(value: any) {
-  if (value === true) return 'sig-yes'
-  if (value === false) return 'sig-no'
-  return 'muted'
-}
+const tabs = [
+  { id: 'verdict', label: 'Verdict' },
+  { id: 'risk', label: 'Why this score' },
+  { id: 'evidence', label: 'Raw evidence' },
+  { id: 'advisory', label: 'Advisory' },
+]
 </script>
 
 <template>
-  <div v-if="f" class="wrap">
-    <NuxtLink to="/findings" class="muted">← Findings</NuxtLink>
-    <h1>{{ f.vulnerability.id }}</h1>
-    <p class="sub">
-      <SeverityChip
-        v-if="f.risk_band"
-        :severity="f.risk_band"
-        :kev="f.vulnerability.kev"
-      />
-      <span v-else class="unassessed">unassessed</span>
-      <span v-if="f.risk_score != null" class="muted"> {{ f.risk_score }}/100</span>
-      <span style="margin-left:.6rem">{{ f.vulnerability.summary || 'No summary published.' }}</span>
-    </p>
+  <div class="page">
+    <RowSkeleton v-if="pending" :rows="3" />
 
-    <div v-if="f.not_yet_investigated" class="caveat">
-      <strong>Candidate match only.</strong>
-      This is a version comparison. Nothing has checked whether the affected component
-      runs, is reachable, or is exploitable on this asset.
-      <template v-if="f.triage?.disposition === 'deprioritise'">
-        Triage judged a full investigation unlikely to change the picture, so it has
-        not been queued — but that is a judgement about priority, not a conclusion
-        that the finding does not apply.
+    <StateBlock v-else-if="error" kind="error" title="Cannot load this finding">
+      It may have been resolved and removed, or the core service did not answer.
+      <template #actions>
+        <button class="btn primary" @click="refresh()">Retry</button>
+        <NuxtLink to="/findings" class="btn">Back to findings</NuxtLink>
       </template>
-      <template v-else-if="f.triage?.disposition === 'investigate'">
-        Queued for investigation.
-      </template>
-    </div>
+    </StateBlock>
 
-    <div v-if="f.investigation" class="card">
-      <h2>Verdict</h2>
-      <p class="verdict-line">
-        <strong>{{ f.investigation.verdict.replace('_', ' ') }}</strong>
-        <span class="muted">
-          · confidence {{ (f.investigation.confidence * 100).toFixed(0) }}%
-          · {{ f.investigation.model }}
-        </span>
-      </p>
-      <UntrustedText v-if="f.investigation.rationale" :text="f.investigation.rationale" class="rationale" />
+    <template v-else-if="data">
+      <nav class="crumbs">
+        <NuxtLink to="/findings">Findings</NuxtLink>
+        <span>/</span>
+        <code>{{ data.vulnerability.id }}</code>
+      </nav>
 
-      <p class="muted small">
-        Established by calling {{ f.investigation.tools_called.join(', ') || 'no tools' }}
-        · {{ f.investigation.tokens.toLocaleString() }} tokens
-        · {{ (f.investigation.duration_ms / 1000).toFixed(1) }}s
-        <template v-if="f.investigation.shared_with_findings">
-          · this answer is shared with {{ f.investigation.shared_with_findings }} other
-          finding(s) whose relevant facts are identical
-        </template>
-      </p>
+      <div class="head">
+        <div class="headmain">
+          <div class="titleline">
+            <SeverityChip
+              v-if="data.risk_band" :severity="data.risk_band" :kev="data.vulnerability.kev"
+            />
+            <span v-else class="unassessed">
+              unassessed
+              <span v-if="data.vulnerability.kev" class="kevflag">KEV</span>
+            </span>
+            <h1><UntrustedText :text="data.vulnerability.summary || data.vulnerability.id" /></h1>
+          </div>
+          <div class="subline">
+            <code>{{ data.component.ecosystem }}:{{ data.component.name }}
+              {{ data.component.version }}</code>
+            <span class="sep">·</span>
+            <span>on <NuxtLink :to="`/assets/${data.asset.id}`">
+              <strong>{{ data.asset.display_name }}</strong></NuxtLink></span>
+            <span class="sep">·</span>
+            <span>{{ data.asset.tier }}, {{ data.asset.exposure }}</span>
+            <span class="sep">·</span>
+            <span>
+              fixed in
+              <code v-if="data.fixed_version">{{ data.fixed_version }}</code>
+              <span v-else class="gap">nothing published yet</span>
+            </span>
+          </div>
+        </div>
 
-      <!-- Where the model asserted something it could not support and code overruled
-           it. The clearest available signal of how much to trust this verdict, so it
-           is shown rather than tucked away. -->
-      <div v-if="f.investigation.corrections?.length" class="corrections">
-        <strong>{{ f.investigation.corrections.length }} claim(s) were not supported by
-          evidence and were downgraded:</strong>
-        <ul>
-          <li v-for="(c, i) in f.investigation.corrections" :key="i">{{ c }}</li>
-        </ul>
+        <div class="headside">
+          <div v-if="data.risk_score != null" class="scorefig">
+            <span class="mono tnum n">{{ data.risk_score }}</span>
+            <span class="of">of 100</span>
+          </div>
+          <div v-else class="scorefig">
+            <span class="hatchbox hatch" />
+            <span class="of">not scored</span>
+          </div>
+        </div>
       </div>
 
-      <div v-if="f.investigation.uncertainties?.length" class="uncertain">
-        <strong>Not determined:</strong>
-        <ul>
-          <li v-for="(u, i) in f.investigation.uncertainties" :key="i">
-            <UntrustedText :text="u" />
-          </li>
-        </ul>
+      <!-- Not investigated is its own state, never a low score. -->
+      <div v-if="data.not_yet_investigated" class="banner">
+        <strong>This has not been investigated.</strong>
+        It is a version match against a published advisory. Nothing has checked whether
+        the component runs here, is reachable, or is exploitable — so it has no score,
+        rather than a low one.
       </div>
 
-      <table class="signals">
-        <thead><tr><th>signal</th><th>value</th><th>confidence</th><th>from</th></tr></thead>
-        <tbody>
-          <tr v-for="(sig, name) in f.investigation.signals" :key="name">
-            <td>{{ String(name).replace(/_/g, ' ') }}</td>
-            <td>
-              <span :class="signalClass(sig.value)">{{ formatSignal(sig.value) }}</span>
-            </td>
-            <td class="muted">{{ (sig.confidence * 100).toFixed(0) }}%</td>
-            <td class="muted small">{{ (sig.evidence || []).join(', ') || '—' }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+      <div v-if="data.triage?.disposition === 'deprioritise'" class="banner">
+        <strong>Triaged as lower priority.</strong>
+        <UntrustedText :text="data.triage.reason || ''" />
+        That is a judgement about <em>priority</em>, not a conclusion that this does not
+        apply here.
+      </div>
 
-    <div v-if="riskFactors" class="card">
-      <h2>Why this score</h2>
-      <p class="muted small">
-        Risk is a deterministic function of these factors. The model supplies the
-        values; the number is arithmetic, not a judgement.
-      </p>
-      <table class="kv">
-        <tbody>
-          <tr v-for="(v, k) in riskFactors" :key="k">
-            <th>{{ String(k).replace(/_/g, ' ') }}</th>
-            <td>{{ typeof v === 'number' ? v.toFixed(3) : v }}</td>
-          </tr>
-        </tbody>
-      </table>
-      <ul v-if="riskOverrides.length" class="overrides">
-        <li v-for="(o, i) in riskOverrides" :key="i">{{ o }}</li>
-      </ul>
-    </div>
+      <div v-if="risk?.stale" class="banner warn">
+        <strong>This score is out of date.</strong>
+        The scoring function has changed since this was last evaluated: it would now
+        score {{ risk.score }} rather than {{ risk.stored_score }}. The breakdown below
+        describes the current function.
+      </div>
 
-    <div class="card">
-      <h2>What matched</h2>
-      <table class="kv">
-        <tbody>
-          <tr><th>Asset</th>
-            <td><NuxtLink :to="`/assets/${f.asset.id}`">{{ f.asset.display_name }}</NuxtLink>
-              <span class="muted"> · {{ f.asset.kind }} · tier {{ f.asset.tier }}</span></td></tr>
-          <tr><th>Installed</th>
-            <td><code>{{ f.component.name }} {{ f.component.version }}</code>
-              <span class="muted"> · {{ f.component.ecosystem }}</span></td></tr>
-          <tr><th>Fixed in</th>
-            <td>
-              {{ f.fixed_version || 'no fix recorded' }}
-              <div v-if="f.fix_channel && f.fix_channel !== 'standard'" class="entitlement">
-                Delivered through <strong>{{ f.fix_channel.toUpperCase() }}</strong>.
-                This needs an Ubuntu Pro entitlement — without one, this package
-                cannot be upgraded on this host.
+      <div class="tabs">
+        <button
+          v-for="t in tabs" :key="t.id" class="tab" :class="{ on: tab === t.id }"
+          @click="tab = t.id as any"
+        >{{ t.label }}</button>
+      </div>
+
+      <!-- ══ Verdict ══ -->
+      <div v-if="tab === 'verdict'" class="cols">
+        <div class="main">
+          <StateBlock v-if="!inv" kind="never" title="No investigation has run">
+            Correlation matched a version. Nothing beyond that has been established, so
+            there is no verdict to show — an absence, not a clean result.
+          </StateBlock>
+
+          <template v-else>
+            <div class="card">
+              <div class="verdicthead">
+                <span class="lbl">Verdict</span>
+                <span class="verdict">{{
+                  inv.verdict === 'applicable' ? 'Applies to this asset'
+                  : inv.verdict === 'not_applicable' ? 'Does not apply here'
+                  : 'Could not be settled' }}</span>
+                <span class="conf">confidence {{ (inv.confidence * 100).toFixed(0) }}%</span>
               </div>
-            </td></tr>
-          <tr v-if="f.matched_source"><th>Matched by</th>
-            <td class="muted">{{ f.matched_source }}<template v-if="f.matched_release">
-              · release {{ f.matched_release }}</template></td></tr>
-          <tr><th>Match</th>
-            <td>{{ f.match_method }}
-              <span class="muted">({{ (f.match_confidence * 100).toFixed(0) }}% — how the
-                match was made, not whether it is exploitable here)</span></td></tr>
-        </tbody>
-      </table>
-    </div>
+              <p class="rationale"><UntrustedText :text="inv.rationale || ''" /></p>
+            </div>
 
-    <div class="card">
-      <h2>Evidence</h2>
-      <!-- Every claim traces to a row. A conclusion with no evidence is a bug. -->
-      <ul class="evidence">
-        <li v-for="(e, i) in f.evidence" :key="i">
-          <span class="kind">{{ e.kind.replace('_', ' ') }}</span>
-          <UntrustedText :text="e.claim" />
-          <div v-if="e.source_ref" class="muted small">{{ e.source_ref }}</div>
-        </li>
-        <li v-if="!f.evidence.length" class="muted">No evidence recorded — this is a defect.</li>
-      </ul>
-    </div>
+            <div v-if="settled.length" class="card">
+              <div class="lbl">What Athena checked</div>
+              <table class="sig">
+                <thead>
+                  <tr><th>Signal</th><th>Value</th><th>Confidence</th><th>Established by</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="s in settled" :key="s.name">
+                    <td class="sname">{{ pretty(s.name) }}</td>
+                    <td class="sval">{{ valueLabel(s.value) }}</td>
+                    <td class="mono tnum muted">{{ s.confidence?.toFixed(2) }}</td>
+                    <td class="muted"><code class="src">{{ evidenceLabel(s) }}</code></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
 
-    <div class="card">
-      <h2>Advisory ranges</h2>
-      <p class="muted small">
-        Every range published for this package. Sources disagree by design: an
-        upstream advisory cannot know whether a distribution backported the fix.
-      </p>
-      <table>
-        <thead><tr><th>source</th><th>release</th><th>introduced</th><th>fixed</th><th></th></tr></thead>
-        <tbody>
-          <tr v-for="(r, i) in f.advisory_ranges" :key="i" :class="{ used: r.used_for_match }">
-            <td><code>{{ r.source }}</code> <span class="muted">auth {{ r.authority }}</span></td>
-            <td>{{ r.distro_release || '—' }}</td>
-            <td class="muted">{{ r.introduced || '0' }}</td>
-            <td>
-              {{ r.fixed || r.last_affected || '—' }}
-              <span v-if="r.channel && r.channel !== 'standard'" class="channel">{{ r.channel }}</span>
-            </td>
-            <td class="muted small">{{ r.used_for_match ? 'used for this match' : '' }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+            <!-- Where the model asserted something it could not support and code
+                 overruled it. Prominent, because burying it would defeat its purpose. -->
+            <div v-if="inv.corrections?.length" class="card overruled">
+              <div class="lbl warn">Athena overruled itself · {{ inv.corrections.length }}</div>
+              <ul class="corrections">
+                <li v-for="(c, n) in inv.corrections" :key="n"><UntrustedText :text="c" /></li>
+              </ul>
+              <p class="fine">
+                These are corrections, not errors for you to act on — but they are the best
+                available measure of how far to trust the verdict above.
+              </p>
+            </div>
 
-    <div class="card">
-      <h2>Advisory</h2>
-      <p class="muted small">
-        CVSS {{ f.vulnerability.cvss_score ?? '—' }}
-        <template v-if="f.vulnerability.cvss_vector"> · <code>{{ f.vulnerability.cvss_vector }}</code></template>
-        <template v-if="f.vulnerability.epss_score"> · EPSS {{ (f.vulnerability.epss_score * 100).toFixed(1) }}%</template>
-        · revision {{ f.vulnerability.revision }}
-      </p>
-      <p v-if="f.vulnerability.aliases?.length" class="muted small">
-        Also known as {{ f.vulnerability.aliases.join(', ') }}
-      </p>
-      <UntrustedText v-if="f.vulnerability.details" :text="f.vulnerability.details" class="details" />
-      <ul v-if="f.vulnerability.references?.length" class="refs">
-        <!-- Advisory text and links are attacker-influenceable, so URLs are shown as
-             text rather than rendered as live anchors. -->
-        <li v-for="(r, i) in f.vulnerability.references.slice(0, 8)" :key="i" class="muted small">
-          {{ r.type }}: {{ r.url }}
-        </li>
-      </ul>
-    </div>
+            <div v-if="inv.uncertainties?.length || unsettled.length" class="card">
+              <div class="lbl">Could not determine</div>
+              <ul class="unknowns">
+                <li v-for="(u, n) in inv.uncertainties ?? []" :key="`u${n}`">
+                  <span class="hatchdot hatch" /><UntrustedText :text="u" />
+                </li>
+                <li v-for="s in unsettled" :key="s.name">
+                  <span class="hatchdot hatch" />{{ pretty(s.name) }}
+                  <span class="muted">— {{ evidenceLabel(s) }}</span>
+                </li>
+              </ul>
+            </div>
+          </template>
+        </div>
+
+        <aside class="side">
+          <!-- A reused verdict is a different claim from one reached for this asset
+               alone, and with a high cache-hit rate most verdicts are reused. -->
+          <div v-if="inv" class="card">
+            <div class="lbl">This answer</div>
+            <div class="kv"><span>Reached</span>
+              <span class="muted">{{ new Date(inv.at).toLocaleString() }}</span></div>
+            <div class="kv"><span>Tools called</span>
+              <span class="mono tnum muted">{{ inv.tools_called?.length ?? 0 }}</span></div>
+            <div class="kv"><span>Shared with</span>
+              <span class="mono tnum muted">{{ inv.shared_with_findings }} findings</span></div>
+            <div class="kv"><span>Model</span>
+              <span class="muted src">{{ inv.model }}</span></div>
+            <p class="fine">
+              {{ inv.shared_with_findings
+                ? 'Reused across findings whose relevant facts match — not reached for this asset alone.'
+                : 'Reached for this asset alone, not reused from a matching one.' }}
+            </p>
+          </div>
+
+          <div class="card">
+            <div class="lbl">Match</div>
+            <div class="kv"><span>Method</span>
+              <span class="muted src">{{ data.match_method }}</span></div>
+            <div class="kv"><span>Confidence</span>
+              <span class="mono tnum muted">{{ (data.match_confidence * 100).toFixed(0) }}%</span></div>
+            <div class="kv"><span>Source</span>
+              <span class="muted src">{{ data.matched_source || '—' }}</span></div>
+            <p class="fine">How the match was made — not whether it is exploitable here.</p>
+          </div>
+        </aside>
+      </div>
+
+      <!-- ══ Why this score ══ -->
+      <div v-else-if="tab === 'risk'" class="narrow">
+        <StateBlock v-if="!risk" kind="never" title="No score to explain">
+          Nothing has been scored for this finding yet.
+        </StateBlock>
+        <template v-else>
+          <div class="card">
+            <div class="lbl">How {{ risk.score }} was reached</div>
+            <table class="sig">
+              <thead><tr><th>Factor</th><th>Weight</th></tr></thead>
+              <tbody>
+                <tr v-for="(v, k) in risk.factors" :key="k">
+                  <td class="sname">{{ pretty(String(k)) }}</td>
+                  <td class="mono tnum sval">{{ Number(v).toFixed(2) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-if="risk.overrides?.length" class="card">
+            <div class="lbl">Overrides applied, in order</div>
+            <ol class="overrides">
+              <li v-for="(o, n) in risk.overrides" :key="n">{{ o }}</li>
+            </ol>
+            <p class="fine">
+              Overrides can disagree with one another. They are listed in the order they
+              applied rather than resolved silently, so the tension stays visible.
+            </p>
+          </div>
+        </template>
+      </div>
+
+      <!-- ══ Raw evidence ══ -->
+      <div v-else-if="tab === 'evidence'" class="narrow">
+        <StateBlock v-if="!data.evidence?.length" kind="never" title="No evidence recorded">
+          Nothing has been observed and stored for this finding yet.
+        </StateBlock>
+        <div v-else class="card">
+          <div class="lbl">Observations, as recorded</div>
+          <div v-for="(e, n) in data.evidence" :key="n" class="ev">
+            <div class="evhead">
+              <code class="src">{{ e.kind }}</code>
+              <span class="muted">{{ new Date(e.observed_at).toLocaleString() }}</span>
+            </div>
+            <div class="evclaim"><UntrustedText :text="e.claim" /></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ Advisory ══ -->
+      <div v-else class="narrow">
+        <div class="card">
+          <div class="lbl">Advisory</div>
+          <div class="kv"><span>CVSS</span>
+            <span class="mono tnum muted">{{ data.vulnerability.cvss_score ?? '—' }}</span></div>
+          <div class="kv"><span>EPSS</span>
+            <span class="mono tnum muted">
+              {{ data.vulnerability.epss_score != null
+                ? `${(data.vulnerability.epss_score * 100).toFixed(1)}%` : 'not published' }}
+            </span></div>
+          <div class="kv"><span>Known-exploited</span>
+            <span class="muted">{{ data.vulnerability.kev ? 'yes' : 'no' }}</span></div>
+          <div class="kv"><span>Published</span>
+            <span class="muted">{{ data.vulnerability.published_at
+              ? new Date(data.vulnerability.published_at).toLocaleDateString() : '—' }}</span></div>
+          <p v-if="data.vulnerability.details" class="details">
+            <UntrustedText :text="data.vulnerability.details" />
+          </p>
+        </div>
+
+        <!-- Sources can disagree about which versions are affected. Shown rather than
+             resolved behind the scenes. -->
+        <div v-if="data.advisory_ranges?.length" class="card">
+          <div class="lbl">Affected ranges, by source</div>
+          <table class="sig">
+            <thead><tr><th>Source</th><th>Introduced</th><th>Fixed</th><th>Release</th><th /></tr></thead>
+            <tbody>
+              <tr v-for="(r, n) in data.advisory_ranges" :key="n" :class="{ used: r.used_for_match }">
+                <td><code class="src">{{ r.source }}</code></td>
+                <td class="mono">{{ r.introduced || '—' }}</td>
+                <td class="mono">{{ r.fixed || '—' }}</td>
+                <td class="muted">{{ r.distro_release || '—' }}</td>
+                <td><span v-if="r.used_for_match" class="used-tag">used</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </template>
   </div>
 </template>
 
 <style scoped>
-.caveat {
-  border-left: 3px solid var(--warn); background: var(--surface);
-  padding: .7rem .9rem; border-radius: 4px; font-size: .88rem; margin-bottom: 1rem;
-  color: var(--ink-2);
+.crumbs { display: flex; align-items: center; gap: .4rem; font-size: .76rem;
+          color: var(--ink-muted); margin-bottom: .75rem; }
+.crumbs a { color: var(--ink-muted); }
+.head { display: flex; align-items: flex-start; justify-content: space-between;
+        gap: 1.5rem; margin-bottom: .9rem; }
+.headmain { display: flex; flex-direction: column; gap: .4rem; min-width: 0; }
+.titleline { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.titleline h1 { margin: 0; font-size: 1.28rem; font-weight: 640; letter-spacing: -0.015em; }
+.subline { display: flex; gap: .55rem; flex-wrap: wrap; font-size: .79rem; color: var(--ink-2); }
+.subline .sep { color: var(--rule); }
+.subline .gap { color: var(--warn-ink); }
+.headside { flex-shrink: 0; }
+.scorefig { display: flex; flex-direction: column; align-items: flex-end; gap: .1rem; }
+.scorefig .n { font-size: 1.7rem; font-weight: 600; line-height: 1; }
+.scorefig .of { font-size: .7rem; color: var(--ink-muted); }
+.hatchbox { width: 34px; height: 24px; border-radius: 5px; border: 1px dashed var(--rule); }
+
+.banner {
+  border: 1px solid var(--rule); border-left: 3px solid var(--rule); border-radius: 8px;
+  background: var(--surface); padding: .6rem .8rem; font-size: .81rem; line-height: 1.55;
+  color: var(--ink-2); margin-bottom: .8rem;
 }
-.kv th { text-align: left; width: 8rem; vertical-align: top; padding: .35rem .5rem .35rem 0; }
-.kv td { border: none; padding: .35rem 0; }
-.evidence { list-style: none; padding: 0; margin: 0; }
-.evidence li { padding: .5rem 0; border-top: 1px solid var(--rule); font-size: .9rem; }
-.evidence li:first-child { border-top: none; }
-.kind {
-  display: inline-block; font-size: .68rem; text-transform: uppercase; letter-spacing: .05em;
-  color: var(--ink-muted); margin-right: .5rem;
+.banner.warn { border-left-color: var(--warn); }
+.banner strong { color: var(--ink); }
+
+.tabs { display: flex; gap: 1.3rem; border-bottom: 1px solid var(--rule); margin-bottom: 1rem; }
+.tab {
+  font: inherit; font-size: .82rem; font-weight: 500; padding: .5rem .1rem;
+  border: 0; background: transparent; color: var(--ink-muted); cursor: pointer;
+  border-bottom: 2px solid transparent;
 }
-.used { background: var(--plane); font-weight: 500; }
-.small { font-size: .8rem; }
-.details { display: block; white-space: pre-wrap; font-size: .87rem; color: var(--ink-2); max-height: 22rem; overflow: auto; }
-.refs { padding-left: 1.1rem; margin: .6rem 0 0; }
+.tab:hover { color: var(--ink); }
+.tab.on { color: var(--ink); font-weight: 600; border-bottom-color: var(--ink); }
+
+.cols { display: flex; gap: 1.1rem; align-items: flex-start; }
+.main { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: .65rem; }
+.side { width: 268px; flex-shrink: 0; display: flex; flex-direction: column; gap: .65rem; }
+.narrow { max-width: 52rem; display: flex; flex-direction: column; gap: .65rem; }
+
+.card { border: 1px solid var(--rule); border-radius: 10px; background: var(--surface);
+        padding: .85rem 1rem; }
+.card.overruled { border-left: 3px solid var(--warn); }
+.lbl.warn { color: var(--warn-ink); }
+.verdicthead { display: flex; align-items: baseline; gap: .65rem; margin-bottom: .45rem; flex-wrap: wrap; }
+.verdict { font-size: .95rem; font-weight: 640; }
+.conf { font-size: .76rem; color: var(--ink-muted); }
+.rationale { margin: 0; font-size: .85rem; line-height: 1.6; color: var(--ink-2); }
+
+.sig { width: 100%; border-collapse: collapse; margin-top: .55rem; }
+.sig th { padding: 0 .6rem .4rem 0; }
+.sig td { padding: .42rem .6rem .42rem 0; border-top: 1px solid var(--rule);
+          font-size: .79rem; vertical-align: top; }
+.sname { color: var(--ink-2); }
+.sval { font-weight: 600; }
+.src { font-size: .72rem; }
+.sig tr.used { background: var(--plane); }
+.used-tag { font-size: .62rem; text-transform: uppercase; letter-spacing: .04em;
+            border: 1px solid var(--rule); border-radius: 3px; padding: 0 .25rem; }
+
+.corrections, .overrides { margin: .5rem 0 0; padding-left: 1.1rem;
+                           display: flex; flex-direction: column; gap: .4rem; }
+.unknowns { margin: .5rem 0 0; padding-left: 0; list-style: none;
+            display: flex; flex-direction: column; gap: .4rem; }
+.unknowns li { display: flex; gap: .5rem; align-items: baseline; }
+.corrections li, .unknowns li, .overrides li { font-size: .81rem; line-height: 1.55; color: var(--ink-2); }
+.hatchdot { width: 11px; height: 11px; flex-shrink: 0; border-radius: 2px;
+            border: 1px solid var(--rule); transform: translateY(1px); }
+.fine { margin: .6rem 0 0; font-size: .72rem; line-height: 1.5; color: var(--ink-muted); }
+
+.kv { display: flex; justify-content: space-between; gap: .6rem; padding: .24rem 0;
+      font-size: .79rem; color: var(--ink-2); }
+.details { margin: .6rem 0 0; font-size: .81rem; line-height: 1.6; color: var(--ink-2);
+           white-space: pre-line; }
+.ev { padding: .5rem 0; border-top: 1px solid var(--rule); }
+.evhead { display: flex; justify-content: space-between; gap: .6rem; font-size: .72rem; }
+.evclaim { font-size: .81rem; color: var(--ink-2); margin-top: .2rem; }
+
 .unassessed {
-  font-size: .72rem; text-transform: uppercase; letter-spacing: .04em;
-  color: var(--ink-muted); border: 1px dashed var(--rule);
-  border-radius: 4px; padding: .14rem .4rem;
+  font-size: .66rem; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-muted);
+  border: 1px dashed var(--rule); border-radius: 4px; padding: .15rem .38rem; white-space: nowrap;
 }
-.verdict-line { margin: 0 0 .5rem; font-size: 1rem; }
-.rationale { display: block; font-size: .9rem; color: var(--ink-2); margin-bottom: .7rem; }
-.corrections {
-  border-left: 3px solid var(--warn); padding: .5rem .8rem; margin: .8rem 0;
-  font-size: .85rem; background: var(--plane); border-radius: 4px;
-}
-.corrections ul, .uncertain ul { margin: .3rem 0 0; padding-left: 1.1rem; }
-.uncertain { font-size: .85rem; color: var(--ink-2); margin: .8rem 0; }
-.signals { margin-top: .9rem; }
-.sig-yes { color: var(--crit); font-weight: 600; }
-.sig-no { color: var(--good); }
-.overrides { margin: .7rem 0 0; padding-left: 1.1rem; font-size: .85rem; color: var(--ink-2); }
-.entitlement {
-  margin-top: .35rem; font-size: .82rem; color: var(--ink-2);
-  border-left: 2px solid var(--warn); padding-left: .5rem;
-}
-.channel {
-  font-size: .65rem; text-transform: uppercase; letter-spacing: .04em;
-  border: 1px solid var(--rule); border-radius: 3px; padding: 0 .25rem;
-  color: var(--warn-ink); margin-left: .3rem;
+.kevflag { background: var(--sev-critical); color: var(--sev-on-dark);
+           padding: 0 .22rem; border-radius: 3px; margin-left: .22rem; }
+
+@media (max-width: 1080px) {
+  .cols { flex-direction: column; }
+  .side { width: 100%; flex-direction: row; flex-wrap: wrap; }
+  .side .card { flex: 1 1 240px; }
 }
 </style>
