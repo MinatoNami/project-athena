@@ -33,6 +33,11 @@ from athena.investigation.loop import context_fingerprint
 # fixture that lied about its provenance would exercise a path production never takes.
 DEFAULT_SOURCE = {"deb": "ubuntu", "rpm": "redhat", "apk": "alpine"}
 
+# Stamped on components the corpus creates. Teardown removes only these, so an eval
+# run that happens to name a package the real inventory also carries reuses that row
+# and leaves it alone.
+EVAL_COMPONENT_MARK = "eval-fixture"
+
 EVAL_ADVISORY_PREFIX = "EVAL-"
 EVAL_IDENTITY_PREFIX = "eval:"
 # Fixed sentinel: every eval-seeded AssetComponent traces to the same "scan run",
@@ -85,15 +90,24 @@ def build(case) -> dict[str, Any]:
             session.add(AssetEdge(src_id=service.id, dst_id=host.id,
                                   relation="runs_on", observed_at=now))
 
-        component = Component(
-            ecosystem=case.component["ecosystem"],
-            name=case.component["name"],
-            version=case.component["version"],
-            purl=f"pkg:{case.component['ecosystem']}/"
-                 f"{case.component['name']}@{case.component['version']}",
-        )
-        session.add(component)
-        session.flush()
+        component = session.execute(
+            select(Component).where(
+                Component.ecosystem == case.component["ecosystem"],
+                Component.name == case.component["name"],
+                Component.version == case.component["version"],
+            )
+        ).scalars().first()
+        if component is None:
+            component = Component(
+                ecosystem=case.component["ecosystem"],
+                name=case.component["name"],
+                version=case.component["version"],
+                purl=f"pkg:{case.component['ecosystem']}/"
+                     f"{case.component['name']}@{case.component['version']}",
+                cpe=EVAL_COMPONENT_MARK,
+            )
+            session.add(component)
+            session.flush()
 
         session.add(AssetComponent(
             asset_id=host.id, component_id=component.id,
@@ -191,8 +205,12 @@ def clear() -> int:
             )
         if asset_ids:
             component_ids = session.execute(
-                select(AssetComponent.component_id)
-                .where(AssetComponent.asset_id.in_(asset_ids))
+                select(AssetComponent.component_id).where(
+                    AssetComponent.asset_id.in_(asset_ids),
+                    AssetComponent.component_id.in_(
+                        select(Component.id).where(Component.cpe == EVAL_COMPONENT_MARK)
+                    ),
+                )
             ).scalars().all()
             session.execute(delete(Finding).where(Finding.asset_id.in_(asset_ids)))
             session.execute(

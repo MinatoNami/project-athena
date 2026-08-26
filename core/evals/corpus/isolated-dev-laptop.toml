@@ -18,7 +18,7 @@ os_version = "Ubuntu 24.04 LTS"
 
 [component]
 name = "nginx"
-version = "1.24.0-2ubuntu7"
+version = "1.24.0-2ubuntu6"
 ecosystem = "deb"
 is_running = false
 
