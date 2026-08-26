@@ -318,7 +318,38 @@ def get_finding(
             else None
         ),
         "investigation": _investigation_of(session, finding),
+        "risk_explained": _risk_explained(session, finding),
     }
+
+
+def _risk_explained(session: Session, finding: Finding) -> dict[str, Any] | None:
+    """The arithmetic behind the band, recomputed rather than stored.
+
+    "Why is this critical?" has to be answerable without reading code. Recomputing
+    from the stored verdict rather than persisting the breakdown keeps the
+    explanation and the scoring function from ever disagreeing — a stored breakdown
+    would go stale the first time a weight changed, and would then be a confident
+    account of a number nobody would reach again.
+    """
+    from athena.db.models import InvestigationRecord
+    from athena.risk import score
+    from athena.workers.investigate import _verdict_of, signals_for
+
+    if finding.investigation_id is None:
+        return None
+    stored = session.get(InvestigationRecord, finding.investigation_id)
+    if stored is None:
+        return None
+    computed = score(signals_for(session, finding, _verdict_of(stored)))
+    explained = computed.explain()
+    # A recomputation that disagrees with what is stored means the scoring function
+    # moved and this finding has not been rescored. Say so rather than quietly
+    # showing an explanation for a different number than the one on the page.
+    explained["stored_score"] = finding.risk_score
+    explained["stale"] = (
+        finding.risk_score is not None and computed.value != finding.risk_score
+    )
+    return explained
 
 
 def _investigation_of(session: Session, finding: Finding) -> dict[str, Any] | None:
