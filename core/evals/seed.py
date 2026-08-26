@@ -26,7 +26,6 @@ from athena.db.models import (
     Vulnerability,
 )
 from athena.intel.authority import SOURCE_AUTHORITY, Authority
-from athena.investigation.loop import context_fingerprint
 
 # Which feed a range of this shape would really have come from. Getting this right
 # matters: authority decides which range wins when several describe one package, and a
@@ -170,21 +169,11 @@ def build(case) -> dict[str, Any]:
         session.add(finding)
         session.flush()
 
-        fingerprint = context_fingerprint({
-            "vulnerability": vulnerability.id,
-            "revision": 1,
-            "purl": component.purl,
-            "tier": host.tier,
-            "exposure": host.exposure,
-            "release": host.attributes.get("distro_release"),
-            "fixed_in": case.fixed_version,
-        })
         return {
             "finding_id": str(finding.id),
             "asset_id": str(host.id),
             "component_id": str(component.id),
             "vulnerability_id": vulnerability.id,
-            "fingerprint": fingerprint,
         }
 
 

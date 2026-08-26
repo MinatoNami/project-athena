@@ -34,8 +34,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
-
 from athena.db.base import session_scope
 from athena.db.models import Finding, InvestigationRecord
 from athena.investigation.tools import TOOL_DESCRIPTIONS
@@ -107,10 +105,14 @@ def run_case(case: Case) -> Result:
         result.band = finding.risk_band
         result.risk_score = finding.risk_score
         result.confidence = finding.confidence
-        record = session.execute(
-            select(InvestigationRecord)
-            .where(InvestigationRecord.fingerprint == ids["fingerprint"])
-        ).scalars().first()
+        # Read the investigation this finding points at, rather than recomputing a
+        # fingerprint to look one up. A second copy of that definition drifted the
+        # moment the real one changed, and every case silently reported no verdict
+        # while the scores beside them were computed perfectly well.
+        record = (
+            session.get(InvestigationRecord, finding.investigation_id)
+            if finding.investigation_id else None
+        )
         if record is not None:
             result.verdict = record.verdict
             result.corrections = list(record.corrections)
