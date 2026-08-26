@@ -20,6 +20,24 @@ const { data, pending, error, refresh } = await useAsyncData(`finding-${route.pa
 
 useHead({ title: () => data.value?.vulnerability?.id ?? 'Finding' })
 
+const { data: suppression, refresh: refreshSuppression } = await useAsyncData(
+  `suppression-${route.params.id}`,
+  () => api<any>(`findings/${route.params.id}/suppression`).catch(() => null),
+)
+
+const suppressing = ref(false)
+
+async function suppressed() {
+  suppressing.value = false
+  await Promise.all([refresh(), refreshSuppression()])
+}
+
+async function revoke() {
+  if (!suppression.value?.active) return
+  await api(`suppressions/${suppression.value.active.id}/revoke`, { method: 'POST' })
+  await Promise.all([refresh(), refreshSuppression()])
+}
+
 const inv = computed(() => data.value?.investigation)
 const risk = computed(() => data.value?.risk_explained)
 
@@ -102,6 +120,11 @@ const tabs = [
         </div>
 
         <div class="headside">
+          <div class="headacts">
+            <button v-if="!suppression?.active" class="btn" @click="suppressing = true">
+              Stop showing this…
+            </button>
+          </div>
           <div v-if="data.risk_score != null" class="scorefig">
             <span class="mono tnum n">{{ data.risk_score }}</span>
             <span class="of">of 100</span>
@@ -126,6 +149,31 @@ const tabs = [
         <UntrustedText :text="data.triage.reason || ''" />
         That is a judgement about <em>priority</em>, not a conclusion that this does not
         apply here.
+      </div>
+
+      <div v-if="suppression?.active" class="banner suppressed">
+        <strong>You stopped showing this on
+          {{ new Date(suppression.active.created_at).toLocaleDateString() }}.</strong>
+        <UntrustedText :text="suppression.active.reason" />
+        <span class="fineline">
+          {{ suppression.active.reason_label }}
+          · {{ suppression.active.scope === 'everywhere' ? 'everywhere'
+            : suppression.active.scope === 'asset' ? 'on this asset' : 'this finding only' }}
+          <template v-if="suppression.active.expires_at">
+            · under review on
+            {{ new Date(suppression.active.expires_at).toLocaleDateString() }}
+          </template>
+        </span>
+        <button class="btn" style="margin-top:.5rem" @click="revoke">Show it again</button>
+      </div>
+
+      <!-- A finding that came back says why, rather than simply reappearing. -->
+      <div v-else-if="suppression?.lapsed?.invalidated_reason" class="banner warn">
+        <strong>This came back.</strong>
+        It was set aside on
+        {{ new Date(suppression.lapsed.created_at).toLocaleDateString() }} —
+        “<UntrustedText :text="suppression.lapsed.reason" />” — and that no longer holds,
+        because {{ suppression.lapsed.invalidated_reason }}.
       </div>
 
       <div v-if="risk?.stale" class="banner warn">
@@ -328,6 +376,14 @@ const tabs = [
           </table>
         </div>
       </div>
+      <SuppressDialog
+        v-if="suppressing"
+        :finding-id="String(route.params.id)"
+        :vulnerability-id="data.vulnerability.id"
+        :asset="data.asset.display_name"
+        @close="suppressing = false"
+        @done="suppressed"
+      />
     </template>
   </div>
 </template>
@@ -344,7 +400,10 @@ const tabs = [
 .subline { display: flex; gap: .55rem; flex-wrap: wrap; font-size: .79rem; color: var(--ink-2); }
 .subline .sep { color: var(--rule); }
 .subline .gap { color: var(--warn-ink); }
-.headside { flex-shrink: 0; }
+.headside { flex-shrink: 0; display: flex; align-items: flex-start; gap: 1rem; }
+.headacts { display: flex; gap: .4rem; padding-top: .2rem; }
+.banner.suppressed { border-left-color: var(--ink-muted); }
+.fineline { display: block; margin-top: .3rem; font-size: .72rem; color: var(--ink-muted); }
 .scorefig { display: flex; flex-direction: column; align-items: flex-end; gap: .1rem; }
 .scorefig .n { font-size: 1.7rem; font-weight: 600; line-height: 1; }
 .scorefig .of { font-size: .7rem; color: var(--ink-muted); }

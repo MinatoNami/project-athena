@@ -45,7 +45,7 @@ const { data: coverage } = await useAsyncData('today-coverage', () =>
  * "0 of 0 findings assessed" while 537 were in fact assessed. A denominator that
  * shrinks to match the filter is not a denominator.
  */
-const { data: estate } = await useAsyncData('today-estate', () =>
+const { data: estate, refresh: refreshEstate } = await useAsyncData('today-estate', () =>
   api<any>('findings?limit=1').catch(() => null),
 )
 const { data: unclassified } = await useAsyncData('today-unclassified', () =>
@@ -129,6 +129,13 @@ function reason(i: any) {
   return bits.join(' · ')
 }
 
+const suppressing = ref<any | null>(null)
+
+async function suppressed() {
+  suppressing.value = null
+  await Promise.all([refresh(), refreshEstate()])
+}
+
 const heldBack = computed(() => {
   const out: { label: string; n: number }[] = []
   if (data.value?.no_fix_available_count) {
@@ -138,6 +145,9 @@ const heldBack = computed(() => {
     (i: any) => i.fix_channel && i.fix_channel !== 'standard',
   ).length
   if (entitled) out.push({ label: 'Needs a paid entitlement', n: entitled })
+  if (estate.value?.suppressed_group_count) {
+    out.push({ label: 'Suppressed by you', n: estate.value.suppressed_group_count })
+  }
   const deprioritised = instances.value.filter(
     (i: any) => i.triage_disposition === 'deprioritise',
   ).length
@@ -265,6 +275,7 @@ const heldBack = computed(() => {
             </div>
             <div class="rowacts">
               <NuxtLink :to="`/findings/${i.finding_id}`" class="btn primary">Open case</NuxtLink>
+              <button class="btn" @click="suppressing = i">Stop showing this…</button>
               <NuxtLink :to="`/findings#${i.group.vulnerability_id}`" class="btn">
                 See all {{ i.group.instance_count }} affected assets
               </NuxtLink>
@@ -312,6 +323,16 @@ const heldBack = computed(() => {
         </div>
       </aside>
     </div>
+
+    <SuppressDialog
+      v-if="suppressing"
+      :finding-id="suppressing.finding_id"
+      :vulnerability-id="suppressing.group.vulnerability_id"
+      :asset="suppressing.asset"
+      :instance-count="suppressing.group.instance_count"
+      @close="suppressing = null"
+      @done="suppressed"
+    />
   </div>
 </template>
 
