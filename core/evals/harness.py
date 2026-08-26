@@ -395,14 +395,25 @@ def gate(summary: dict[str, Any]) -> int:
         print(f"\nNo baseline for mode {summary['mode']!r}.")
         return 0
 
-    for key, label, worse in (
-        ("accuracy", "accuracy", lambda a, b: a < b),
-        ("band_spread", "band spread", lambda a, b: a < b),
-        ("unstable_cases", "unstable cases", lambda a, b: a > b),
-    ):
-        if worse(summary[key], base.get(key, summary[key])):
-            print(f"\nFAILED: {label} regressed from {base[key]} to {summary[key]}.")
-            return 1
+    # Accuracy is measured on a stochastic process, so an exact floor would fail on
+    # noise. Two attempts' worth of movement is treated as noise; more is a
+    # regression. The other two gates are exact, because neither should drift at all:
+    # a band that stops separating cases and a case that starts flip-flopping are
+    # both categorical changes, not sampling.
+    tolerance = 2 / summary["attempts"] if summary["attempts"] else 0.0
+    if summary["accuracy"] < base.get("accuracy", 0.0) - tolerance:
+        print(f"\nFAILED: accuracy {summary['accuracy']} regressed from baseline "
+              f"{base['accuracy']} by more than the {tolerance:.0%} sampling tolerance.")
+        return 1
+    if summary["band_spread"] < base.get("band_spread", summary["band_spread"]):
+        print(f"\nFAILED: band spread narrowed from {base['band_spread']} to "
+              f"{summary['band_spread']} — cases that were separable no longer are.")
+        return 1
+    if summary["unstable_cases"] > base.get("unstable_cases", summary["unstable_cases"]):
+        print(f"\nFAILED: unstable cases rose from {base['unstable_cases']} to "
+              f"{summary['unstable_cases']} — more findings now answer differently "
+              "depending on when they are looked at.")
+        return 1
     print(f"\nPASSED against baseline (accuracy {summary['accuracy']} vs "
           f"{base['accuracy']}, spread {summary['band_spread']} vs {base['band_spread']}, "
           f"unstable {summary['unstable_cases']} vs {base.get('unstable_cases', '—')}).")
