@@ -274,6 +274,7 @@ def report(cases: list[Case], results: dict[str, Result], violations: list[str],
 
     return {
         "mode": mode,
+        "errored": len([r for r in graded if r.status != "ok"]),
         "cases": len(graded),
         "passed": len(passed),
         "accuracy": round(len(passed) / len(graded), 3) if graded else 0.0,
@@ -285,6 +286,10 @@ def report(cases: list[Case], results: dict[str, Result], violations: list[str],
 
 def gate(summary: dict[str, Any]) -> int:
     """Compare against the recorded baseline. Returns a process exit code."""
+    if summary.get("errored"):
+        print(f"\nFAILED: {summary['errored']} case(s) did not produce a result. "
+              "Nothing was measured, so nothing can pass.")
+        return 1
     if summary["false_negatives"]:
         print("\nFAILED: a case that is genuinely applicable was called not_applicable.")
         return 1

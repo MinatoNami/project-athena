@@ -122,6 +122,7 @@ def build(case) -> dict[str, Any]:
             revision=1,
         )
         session.add(vulnerability)
+        session.flush()   # the range's foreign key needs the advisory to exist first
         ecosystem = case.component["ecosystem"]
         source = adv.get("source") or DEFAULT_SOURCE.get(ecosystem, "osv")
         session.add(AffectedRange(
