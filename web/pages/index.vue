@@ -103,7 +103,7 @@ const tabs = computed(() => [
 function reason(i: any) {
   const bits: string[] = []
   if (i.group.kev) bits.push('listed as actively exploited')
-  if (i.asset_exposure === 'internet') bits.push('internet-facing')
+  if (i.exposure === 'internet') bits.push('internet-facing')
   if (!i.investigated) {
     bits.push('not yet investigated — nothing has checked whether it runs or is reachable here')
   }

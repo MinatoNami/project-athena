@@ -113,6 +113,10 @@ def list_findings(
                 "triage_reason": finding.triage_reason,
                 "asset_id": str(asset.id),
                 "asset": asset.display_name,
+                # Exposure travels with the instance, not just the tier: "internet-facing"
+                # is the single strongest reason a finding needs a person, and the queue
+                # cannot say so without it.
+                "exposure": asset.exposure,
                 "asset_kind": asset.kind,
                 "tier": asset.tier,
                 "component": f"{component.name} {component.version}",
