@@ -27,6 +27,7 @@ from athena.investigation.verdict import Signal, Verdict
 from athena.queue import publish
 from athena.queue.registry import handler
 from athena.risk import Signals, component_role, score
+from athena.risk.scoring import MATCH_FLOOR
 
 log = structlog.get_logger(__name__)
 
@@ -69,6 +70,8 @@ def investigate_finding(payload: dict[str, Any]) -> dict[str, Any]:
             component_id=context["component_id"],
             vulnerability_id=context["vulnerability_id"],
             seed_facts=context["seed"],
+            established=context["established"],
+            advisory_describes_flaw=context["advisory_describes_flaw"],
         )
 
     if not result.succeeded:
@@ -117,11 +120,31 @@ def _load(finding_id: str) -> dict[str, Any] | None:
         finding.state = "investigating"
         finding.state_changed_at = datetime.now(UTC)
 
+        # Two of the eight signals are not questions. Inventory recorded the component;
+        # correlation put the version inside an affected range, which is the only
+        # reason this finding exists. `version_in_range` is withheld when the match
+        # was heuristic or uncomparable, because there we genuinely did not order the
+        # versions — MATCH_FLOOR is the same line the scorer uses to decide a match
+        # is trustworthy.
+        established: dict[str, Any] = {"component_present": True}
+        if finding.match_confidence >= MATCH_FLOOR:
+            established["version_in_range"] = True
+
         return {
             "asset_id": str(asset.id),
             "component_id": str(component.id),
             "vulnerability_id": vulnerability.id,
             "advisory_revision": vulnerability.revision,
+            "established": established,
+            # No tool inspects configuration or code, so the advisory is the only
+            # possible source for a claim about how the flaw works. An advisory with
+            # no rating, no weakness class and no detail is not such a source.
+            "advisory_describes_flaw": bool(
+                vulnerability.cvss_score is not None
+                or vulnerability.severity
+                or vulnerability.cwe
+                or vulnerability.details
+            ),
             "seed": {
                 "asset": {
                     "name": asset.display_name, "kind": asset.kind, "tier": asset.tier,
@@ -154,6 +177,16 @@ def _load(finding_id: str) -> dict[str, Any] | None:
                     "exposure": asset.exposure,
                     "release": asset.attributes.get("distro_release"),
                     "fixed_in": finding.fixed_version,
+                    # These change what the model is allowed to conclude, so two
+                    # findings that differ on them are not the same question and must
+                    # not share an answer.
+                    "established": sorted(established),
+                    "advisory_describes_flaw": bool(
+                        vulnerability.cvss_score is not None
+                        or vulnerability.severity
+                        or vulnerability.cwe
+                        or vulnerability.details
+                    ),
                 }
             ),
         }

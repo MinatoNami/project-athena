@@ -106,6 +106,8 @@ def investigate(
     component_id: str,
     vulnerability_id: str,
     seed_facts: dict[str, Any],
+    established: dict[str, Any] | None = None,
+    advisory_describes_flaw: bool = True,
 ) -> Investigation:
     """Run one bounded investigation."""
     started = time.monotonic()
@@ -113,8 +115,17 @@ def investigate(
     tools_called: set[str] = set()
     transcript: list[str] = []
 
+    # Facts the system determined are stated as settled, not asked. Leaving them open
+    # invited the model to contradict correlation and inventory, and a contradiction
+    # phrased as a signal is indistinguishable from an observation downstream.
+    settled = (
+        "Already established — these are not yours to determine, and a signal "
+        f"contradicting them will be replaced:\n{_quote(established)}\n\n"
+        if established else ""
+    )
     question = (
         f"Does {vulnerability_id} actually apply to this asset?\n\n"
+        f"{settled}"
         f"Known starting facts:\n{_quote(seed_facts)}\n\n"
         f"Available tools:\n"
         + "\n".join(f"- {name}: {desc}" for name, desc in sorted(TOOL_DESCRIPTIONS.items()))
@@ -182,7 +193,12 @@ def investigate(
             continue
 
         try:
-            result.verdict = parse_verdict(payload, tools_called=tools_called)
+            result.verdict = parse_verdict(
+                payload,
+                tools_called=tools_called,
+                established=established,
+                advisory_describes_flaw=advisory_describes_flaw,
+            )
             result.stopped_because = "verdict produced"
             break
         except MalformedVerdict as exc:
