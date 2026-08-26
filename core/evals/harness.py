@@ -26,8 +26,8 @@ from typing import Any
 
 from sqlalchemy import select
 
+from athena.db.base import session_scope
 from athena.db.models import Finding, InvestigationRecord
-from athena.db.session import session_scope
 from athena.investigation.tools import TOOL_DESCRIPTIONS
 from athena.risk import Signals, score
 

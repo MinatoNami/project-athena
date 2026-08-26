@@ -14,6 +14,7 @@ from typing import Any
 
 from sqlalchemy import delete, select, text
 
+from athena.db.base import session_scope
 from athena.db.models import (
     AffectedRange,
     Asset,
@@ -24,7 +25,6 @@ from athena.db.models import (
     InvestigationRecord,
     Vulnerability,
 )
-from athena.db.session import session_scope
 from athena.investigation.loop import context_fingerprint
 
 EVAL_ADVISORY_PREFIX = "EVAL-"
