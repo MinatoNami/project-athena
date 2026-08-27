@@ -62,7 +62,7 @@ def scan_image(payload: dict[str, Any]) -> dict[str, Any]:
         return {"status": "failed", "reason": "sandbox unavailable"}
 
     if not result.ok:
-        reason = "timeout" if result.timed_out else f"exit {result.exit_code}"
+        reason = result.diagnosis
         _fail(
             asset_id,
             f"syft failed ({reason}): {result.stderr.strip()[-300:]}",

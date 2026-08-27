@@ -7,6 +7,10 @@ answer "how do you know that, and with what".
 
 from __future__ import annotations
 
+import re
+import shlex
+import uuid
+
 import structlog
 
 from athena.config import get_settings
@@ -58,9 +62,21 @@ def scan_directory(path_in_volume: str, *, work_volume: str) -> tuple[SandboxRes
     return result, version
 
 
-# An image scan exports whole layers, so it needs real scratch space. SCRATCH is the
-# sandbox's own tmpfs, created per invocation and destroyed with the container.
-IMAGE_TMPFS = "4g"
+# Image scratch lives on disk, not in the sandbox's tmpfs.
+#
+# Syft exports the whole image before reading it, so scratch has to be at least as
+# large as the image. A tmpfs is RAM, and RAM is counted against the container's
+# memory limit — so a 4g tmpfs under a 1g limit was not 4g of scratch at all, it was
+# an OOM kill at the one-gigabyte mark, arriving as a bare "exit 137" with nothing on
+# stderr. Raising the limit to match only moves the wall: a 13 GB image would need
+# 13 GB of RAM on a host that has 15.
+#
+# Disk has none of that coupling, and the work volume already exists for exactly this
+# kind of thing. The tmpfs stays small for anything that still writes to /tmp.
+IMAGE_TMPFS = "256m"
+IMAGE_SCRATCH_ROOT = "/scratch"
+# Enough for syft's own working set once the export is on disk rather than in RAM.
+IMAGE_MEMORY = "2g"
 SCRATCH = "/tmp"  # noqa: S108
 
 
@@ -72,28 +88,44 @@ def scan_image(reference: str) -> tuple[SandboxResult, str | None]:
     it. The daemon is reached through the read-only proxy, so this needs no socket
     access and cannot create anything.
 
-    HOME and the cache directory are pointed at the writable scratch mount: syft
+    Scratch is a directory of its own on the work volume, removed afterwards. Syft
     fails outright if it cannot create a cache, and the sandbox root is read-only by
-    design.
+    design, so it needs somewhere to write; disk rather than tmpfs because the export
+    is the size of the image.
     """
     settings = get_settings()
-    result = run_sandboxed(
-        SandboxSpec(
-            image=SYFT_IMAGE,
-            command=["scan", f"docker:{reference}", "-o", "syft-json", "-q"],
-            network=settings.sandbox_network,
-            timeout=SYFT_TIMEOUT,
-            tmpfs_size=IMAGE_TMPFS,
-            # These point at the sandbox's own tmpfs, which is created fresh per
-            # invocation and destroyed with the container — not a shared host /tmp.
-            env={
-                "DOCKER_HOST": settings.docker_proxy_host,
-                "HOME": SCRATCH,
-                "XDG_CACHE_HOME": SCRATCH,
-                "TMPDIR": SCRATCH,
-            },
+    work_volume = settings.work_volume
+    scratch = f"imagescan-{uuid.uuid4().hex[:12]}"
+    scratch_path = f"{IMAGE_SCRATCH_ROOT}/{scratch}"
+
+    try:
+        result = run_sandboxed(
+            SandboxSpec(
+                image=SYFT_IMAGE,
+                command=[
+                    "sh", "-c",
+                    # The directory is created inside the sandbox rather than by the
+                    # worker, which has no write access to the volume itself.
+                    f"mkdir -p {shlex.quote(scratch_path)} && "
+                    f"exec syft scan docker:{shlex.quote(reference)} -o syft-json -q",
+                ],
+                mounts=[
+                    Mount(volume=work_volume, target=IMAGE_SCRATCH_ROOT, read_only=False)
+                ],
+                network=settings.sandbox_network,
+                timeout=SYFT_TIMEOUT,
+                memory=IMAGE_MEMORY,
+                tmpfs_size=IMAGE_TMPFS,
+                env={
+                    "DOCKER_HOST": settings.docker_proxy_host,
+                    "HOME": scratch_path,
+                    "XDG_CACHE_HOME": scratch_path,
+                    "TMPDIR": scratch_path,
+                },
+            )
         )
-    )
+    finally:
+        remove_scratch(scratch, work_volume=work_volume)
     version = None
     if result.ok:
         try:
@@ -210,3 +242,25 @@ def _direct_artifact_ids(document: dict) -> set[str] | None:
 
     depended_upon = {r["child"] for r in relationships if r.get("child")}
     return all_ids - depended_upon
+
+
+def remove_scratch(scratch: str, *, work_volume: str) -> None:
+    """Delete one image-scan scratch directory.
+
+    Never fatal: a leaked directory costs disk, while raising here would turn a
+    successful scan into a failed one after the work was already done. The name is
+    checked against the pattern this module generates so a bad value cannot widen
+    what gets removed.
+    """
+    if not re.fullmatch(r"imagescan-[0-9a-f]{12}", scratch):
+        log.warning("imagescan.refused_removal", scratch=scratch)
+        return
+    run_sandboxed(
+        SandboxSpec(
+            image=SYFT_IMAGE,
+            command=["sh", "-c", f"rm -rf {IMAGE_SCRATCH_ROOT}/{scratch}"],
+            mounts=[Mount(volume=work_volume, target=IMAGE_SCRATCH_ROOT, read_only=False)],
+            network="none",
+            timeout=120,
+        )
+    )

@@ -56,7 +56,7 @@ def scan_repository(payload: dict[str, Any]) -> dict[str, Any]:
         result, tool_version = syft.scan_directory(checkout, work_volume=work_volume)
 
         if not result.ok:
-            reason = "timeout" if result.timed_out else f"exit {result.exit_code}"
+            reason = result.diagnosis
             _record_failure(asset_id, tool_version, f"syft failed: {reason}",
                             status="timeout" if result.timed_out else "failed",
                             detail=result.stderr[:400])

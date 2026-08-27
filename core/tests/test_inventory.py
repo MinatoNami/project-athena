@@ -230,3 +230,38 @@ def test_family_keeps_hosts_individual(session):
     one = _family(Asset(kind="host", identity_key="h1", display_name="edge-proxy"))
     two = _family(Asset(kind="host", identity_key="h2", display_name="db-primary"))
     assert one[0] != two[0], "hosts carry their own consequence and are decided one by one"
+
+
+# ── sandbox failure diagnosis ────────────────────────────────────────────────
+
+
+def test_a_kill_is_reported_as_a_kill_not_a_number():
+    """137 is SIGKILL, which from a memory-limited container means the OOM killer.
+
+    It arrives with an empty stderr, so an unexplained "exit 137" is the least
+    actionable failure this system can produce — two images failed on it every sweep
+    for hours without anybody being able to tell why from the log line.
+    """
+    from athena.scanners.sandbox import SandboxResult
+
+    assert "out of memory" in SandboxResult(exit_code=137, stdout="", stderr="").diagnosis
+    assert SandboxResult(exit_code=0, stdout="", stderr="", timed_out=True).diagnosis == "timeout"
+    assert "size limit" in SandboxResult(
+        exit_code=0, stdout="", stderr="", truncated=True
+    ).diagnosis
+    assert SandboxResult(exit_code=2, stdout="", stderr="").diagnosis == "exit 2"
+
+
+def test_image_scratch_removal_refuses_a_name_it_did_not_generate():
+    """The removal runs `rm -rf` inside a container with the work volume mounted
+    read-write. It only ever deletes names matching what this module creates."""
+    from unittest.mock import patch
+
+    from athena.scanners import syft
+
+    with patch("athena.scanners.syft.run_sandboxed") as run:
+        syft.remove_scratch("../../etc", work_volume="athena-work")
+        syft.remove_scratch("imagescan-deadbeefcafe", work_volume="athena-work")
+
+    assert run.call_count == 1, "a name outside the generated pattern was acted on"
+    assert "imagescan-deadbeefcafe" in " ".join(run.call_args[0][0].command)

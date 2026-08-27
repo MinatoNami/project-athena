@@ -41,6 +41,26 @@ class SandboxResult:
     def ok(self) -> bool:
         return self.exit_code == 0 and not self.timed_out and not self.truncated
 
+    @property
+    def diagnosis(self) -> str:
+        """What went wrong, in words rather than a number.
+
+        137 is SIGKILL, which from a memory-limited container means the kernel's OOM
+        killer. It arrives with an empty stderr — the process is not given the chance
+        to say anything — so an unexplained "exit 137" is the least actionable
+        failure this system can produce, and it went unnoticed for exactly that
+        reason.
+        """
+        if self.timed_out:
+            return "timeout"
+        if self.truncated:
+            return "output exceeded the size limit"
+        if self.exit_code == 137:
+            return "killed (exit 137) — out of memory against the sandbox limit"
+        if self.exit_code == 143:
+            return "terminated (exit 143)"
+        return f"exit {self.exit_code}"
+
     def json(self) -> dict:
         try:
             return json.loads(self.stdout)
