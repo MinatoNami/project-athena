@@ -202,6 +202,11 @@ services:
       NUXT_ATHENA_API_URL: http://api:8000
       NUXT_SESSION_SECRET_FILE: /run/secrets/session_secret
       NUXT_PUBLIC_APP_NAME: ${ATHENA_APP_NAME:-Athena}
+      # Base path, read at runtime rather than baked at build time. Nuxt uses it
+      # for the router, for the asset URLs it writes into the HTML, and for the
+      # prefix Nitro answers on; composables/useApi.ts reads it back so the
+      # hand-written BFF paths follow. Must keep the trailing slash.
+      NUXT_APP_BASE_URL: ${ATHENA_BASE_PATH:-/}
     secrets: [session_secret]
     group_add:
       - "${ATHENA_SECRET_GID:-0}"

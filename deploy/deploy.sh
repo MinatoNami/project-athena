@@ -192,13 +192,15 @@ do_deploy() {
   # No-op once an account exists, so re-deploying never mints a second token.
   remote "docker compose exec -T api athena bootstrap"
 
-  local bind port
+  local bind port base
   bind="$("${SSH[@]}" "$HOST" "grep -E '^ATHENA_WEB_BIND=' ~/$REMOTE_DIR/deploy/.env | cut -d= -f2" 2>/dev/null || echo 127.0.0.1)"
   port="$("${SSH[@]}" "$HOST" "grep -E '^ATHENA_WEB_PORT=' ~/$REMOTE_DIR/deploy/.env | cut -d= -f2" 2>/dev/null || echo 8080)"
+  # Nuxt answers only under its base path, so a URL without it 404s.
+  base="$("${SSH[@]}" "$HOST" "grep -E '^ATHENA_BASE_PATH=' ~/$REMOTE_DIR/deploy/.env | cut -d= -f2" 2>/dev/null || echo /)"
 
   step "Done"
   ok "Deployed to $HOST"
-  info "Dashboard: http://${bind:-127.0.0.1}:${port:-8080}"
+  info "Dashboard: http://${bind:-127.0.0.1}:${port:-8080}${base:-/}"
   if [[ "${bind:-127.0.0.1}" == "127.0.0.1" ]]; then
     info "Bound to loopback. To reach it over the tailnet, set ATHENA_WEB_BIND in"
     info "~/$REMOTE_DIR/deploy/.env to the host's tailnet IP and re-run deploy."
