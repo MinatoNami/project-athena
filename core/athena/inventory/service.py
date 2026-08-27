@@ -72,6 +72,10 @@ def register_asset(
     now = datetime.now(UTC)
     if existing is not None:
         existing.last_seen = now
+        # Seeing it again undoes retiring it. Without this a service that is briefly
+        # down would be tombstoned on one observation and never come back, which
+        # turns a restart into a permanent disappearance.
+        existing.tombstoned_at = None
         existing.display_name = display_name or existing.display_name
         if attributes:
             existing.attributes = {**existing.attributes, **attributes}

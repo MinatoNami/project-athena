@@ -11,10 +11,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 import structlog
+from sqlalchemy import select
 
 from athena.audit import record
 from athena.db.base import session_scope
-from athena.db.models import Asset, Node, NodeTask
+from athena.db.models import Asset, AssetEdge, Node, NodeTask
 from athena.inventory.identity import AssetKind, IdentityError, identity_for
 from athena.inventory.purl import build_purl
 from athena.inventory.service import (
@@ -194,6 +195,7 @@ def _ports(session, *, asset: Asset, data: list) -> dict[str, Any]:
     service into a false internet exposure — or hide a real one.
     """
     exposed = 0
+    seen: set[str] = set()
     for entry in data or []:
         port, protocol = entry.get("port"), entry.get("protocol", "tcp")
         if not port:
@@ -239,7 +241,58 @@ def _ports(session, *, asset: Asset, data: list) -> dict[str, Any]:
         service.exposure = exposure
         service.last_inventoried_at = datetime.now(UTC)
         link(session, src=service, dst=asset, relation="runs_on")
-    return {"listening_ports": len(data or []), "non_loopback": exposed}
+        seen.add(key)
+
+    retired = _retire_unseen_services(session, asset=asset, seen=seen, reported=len(data or []))
+    return {
+        "listening_ports": len(data or []),
+        "non_loopback": exposed,
+        "retired": retired,
+    }
+
+
+def _retire_unseen_services(session, *, asset: Asset, seen: set[str], reported: int) -> int:
+    """Tombstone services on this host that the node no longer reports.
+
+    The agent sends its whole listening set each time, so anything absent from it has
+    gone. Without this every socket that ever existed stays in the inventory forever:
+    on the development host 190 of 227 services were ephemeral high ports observed
+    once, six days earlier, and never again — permanently stale, permanently dragging
+    coverage down, and growing with every collection.
+
+    Nothing is deleted. Tombstoned assets leave the active inventory, and observing
+    one again clears the tombstone, so a service that is briefly down comes back
+    rather than vanishing for good.
+    """
+    if not reported:
+        # An empty report is far more likely to be a collection that failed than a
+        # host with nothing listening at all, and acting on it would retire the
+        # entire inventory of that host in one pass.
+        log.warning("node.empty_port_report", asset=str(asset.id))
+        return 0
+
+    now = datetime.now(UTC)
+    rows = session.execute(
+        select(Asset)
+        .join(AssetEdge, AssetEdge.src_id == Asset.id)
+        .where(
+            AssetEdge.dst_id == asset.id,
+            AssetEdge.relation == "runs_on",
+            Asset.kind == AssetKind.SERVICE,
+            Asset.tombstoned_at.is_(None),
+        )
+    ).scalars().all()
+
+    retired = 0
+    for service in rows:
+        if service.identity_key in seen:
+            continue
+        service.tombstoned_at = now
+        retired += 1
+    if retired:
+        log.info("node.services_retired", asset=str(asset.id), retired=retired,
+                 still_listening=len(seen))
+    return retired
 
 
 def _docker(session, *, asset: Asset, data: dict) -> dict[str, Any]:
