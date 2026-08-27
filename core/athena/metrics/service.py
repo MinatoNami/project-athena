@@ -165,10 +165,19 @@ def coverage(session: Session) -> Metric:
         m.note = "No assets are registered."
         return m
     m.value = round(100 * c["assets_fresh"] / c["assets_total"], 1)
-    m.note = (
+    note = [
         f"{c['assets_never_scanned']} never inventoried, {c['assets_stale']} stale. "
         "Neither is a clean result."
-    )
+    ]
+    if c.get("assets_inherited"):
+        # Said rather than folded in silently: these were established by scanning the
+        # image a container came from, so a package installed into a running
+        # container after it started would not appear.
+        note.append(
+            f"{c['assets_inherited']} containers are covered by their image rather "
+            "than scanned directly, so a runtime install would not be seen."
+        )
+    m.note = " ".join(note)
     return _grade(m)
 
 

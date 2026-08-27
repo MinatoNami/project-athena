@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
@@ -276,3 +278,73 @@ def test_removing_a_scratch_that_is_already_gone_is_not_an_error(tmp_path):
     from athena.scanners import syft
 
     syft.remove_scratch("imagescan-000000000000", work_dir=str(tmp_path))
+
+
+# ── coverage: containers inherit from their image ────────────────────────────
+
+
+def _asset(session, kind, name, *, inventoried=None):
+    from athena.db.models import Asset
+
+    a = Asset(
+        kind=kind, identity_key=f"cov:{uuid.uuid4()}", display_name=name,
+        tier="production", exposure="internal", last_inventoried_at=inventoried,
+    )
+    session.add(a)
+    session.flush()
+    return a
+
+
+def test_a_container_counts_as_covered_once_its_image_is_scanned(session):
+    """A container's packages come from its image, so scanning the image is what
+    establishes its contents. Counting containers as never-looked-at put a ceiling
+    on the metric that no amount of scanning could lift."""
+    from datetime import UTC, datetime
+
+    from athena.db.models import AssetEdge
+    from athena.inventory.service import coverage
+
+    before = coverage(session)
+    image = _asset(session, "image", "app:1", inventoried=datetime.now(UTC))
+    container = _asset(session, "container", "app-run")
+    session.add(AssetEdge(src_id=container.id, dst_id=image.id, relation="built_from",
+                          observed_at=datetime.now(UTC)))
+    session.flush()
+
+    after = coverage(session)
+    assert after["assets_never_scanned"] == before["assets_never_scanned"]
+    assert after["assets_inherited"] == before["assets_inherited"] + 1
+    assert after["assets_fresh"] == before["assets_fresh"] + 2  # the image and the container
+
+
+def test_a_container_with_no_image_stays_unknown(session):
+    """Inheritance is not a way of assuming. With nothing to inherit from, the
+    container is genuinely unlooked-at and says so."""
+    from athena.inventory.service import coverage
+
+    before = coverage(session)
+    _asset(session, "container", "orphan-run")
+    after = coverage(session)
+    assert after["assets_never_scanned"] == before["assets_never_scanned"] + 1
+
+
+def test_inherited_freshness_is_judged_against_the_image_window(session):
+    """An image scanned two days ago is fresh — images have a seven-day window. The
+    container's own 24-hour window would call the same observation stale, which
+    would be judging a scan of an image by how often containers change."""
+    from datetime import UTC, datetime, timedelta
+
+    from athena.db.models import AssetEdge
+    from athena.inventory.service import coverage
+
+    before = coverage(session)
+    two_days = datetime.now(UTC) - timedelta(days=2)
+    image = _asset(session, "image", "app:2", inventoried=two_days)
+    container = _asset(session, "container", "app-run-2")
+    session.add(AssetEdge(src_id=container.id, dst_id=image.id, relation="built_from",
+                          observed_at=datetime.now(UTC)))
+    session.flush()
+
+    after = coverage(session)
+    assert after["assets_stale"] == before["assets_stale"], "counted stale on the wrong window"
+    assert after["assets_inherited"] == before["assets_inherited"] + 1
