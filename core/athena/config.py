@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     # Named volume shared between the worker and the sandbox containers it launches.
     # Sibling containers cannot see a path that exists only inside the worker.
     work_volume: str = "athena-work"
+    # Where the worker itself sees that volume. Scanners see it wherever their own
+    # mount puts it, which is why the two are separate settings.
+    work_dir: str = "/work"
     # Network the scanner sandbox joins when it needs to reach the read-only Docker
     # proxy, and the address of that proxy. Both are explicit names rather than
     # compose-prefixed ones, so a sibling container can find them.

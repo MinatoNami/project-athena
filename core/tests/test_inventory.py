@@ -252,16 +252,27 @@ def test_a_kill_is_reported_as_a_kill_not_a_number():
     assert SandboxResult(exit_code=2, stdout="", stderr="").diagnosis == "exit 2"
 
 
-def test_image_scratch_removal_refuses_a_name_it_did_not_generate():
-    """The removal runs `rm -rf` inside a container with the work volume mounted
-    read-write. It only ever deletes names matching what this module creates."""
-    from unittest.mock import patch
-
+def test_image_scratch_removal_refuses_a_name_it_did_not_generate(tmp_path):
+    """This deletes a tree, so it only ever acts on names this module generates."""
     from athena.scanners import syft
 
-    with patch("athena.scanners.syft.run_sandboxed") as run:
-        syft.remove_scratch("../../etc", work_volume="athena-work")
-        syft.remove_scratch("imagescan-deadbeefcafe", work_volume="athena-work")
+    keep = tmp_path / "important"
+    keep.mkdir()
+    (keep / "file").write_text("x")
+    mine = tmp_path / "imagescan-deadbeefcafe"
+    mine.mkdir()
+    (mine / "file").write_text("x")
 
-    assert run.call_count == 1, "a name outside the generated pattern was acted on"
-    assert "imagescan-deadbeefcafe" in " ".join(run.call_args[0][0].command)
+    syft.remove_scratch("../important", work_dir=str(tmp_path))
+    assert keep.exists(), "a name outside the generated pattern was acted on"
+
+    syft.remove_scratch("imagescan-deadbeefcafe", work_dir=str(tmp_path))
+    assert not mine.exists()
+
+
+def test_removing_a_scratch_that_is_already_gone_is_not_an_error(tmp_path):
+    """Cleanup runs in a finally block. Raising there would turn a scan that already
+    succeeded into a failed one."""
+    from athena.scanners import syft
+
+    syft.remove_scratch("imagescan-000000000000", work_dir=str(tmp_path))

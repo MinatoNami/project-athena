@@ -7,8 +7,9 @@ answer "how do you know that, and with what".
 
 from __future__ import annotations
 
+import pathlib
 import re
-import shlex
+import shutil
 import uuid
 
 import structlog
@@ -92,25 +93,30 @@ def scan_image(reference: str) -> tuple[SandboxResult, str | None]:
     fails outright if it cannot create a cache, and the sandbox root is read-only by
     design, so it needs somewhere to write; disk rather than tmpfs because the export
     is the size of the image.
+
+    The directory is made here rather than inside the sandbox. The scanner image's
+    entrypoint is syft itself, so a shell command passed to it arrives as an argument
+    to syft — which reads it as a config path and exits. The worker already has the
+    volume mounted and runs as the same uid the sandbox does, so it can simply
+    create the directory.
     """
     settings = get_settings()
-    work_volume = settings.work_volume
     scratch = f"imagescan-{uuid.uuid4().hex[:12]}"
-    scratch_path = f"{IMAGE_SCRATCH_ROOT}/{scratch}"
+    local_path = pathlib.Path(settings.work_dir) / scratch
+    sandbox_path = f"{IMAGE_SCRATCH_ROOT}/{scratch}"
 
+    local_path.mkdir(parents=True, exist_ok=True)
     try:
         result = run_sandboxed(
             SandboxSpec(
                 image=SYFT_IMAGE,
-                command=[
-                    "sh", "-c",
-                    # The directory is created inside the sandbox rather than by the
-                    # worker, which has no write access to the volume itself.
-                    f"mkdir -p {shlex.quote(scratch_path)} && "
-                    f"exec syft scan docker:{shlex.quote(reference)} -o syft-json -q",
-                ],
+                command=["scan", f"docker:{reference}", "-o", "syft-json", "-q"],
                 mounts=[
-                    Mount(volume=work_volume, target=IMAGE_SCRATCH_ROOT, read_only=False)
+                    Mount(
+                        volume=settings.work_volume,
+                        target=IMAGE_SCRATCH_ROOT,
+                        read_only=False,
+                    )
                 ],
                 network=settings.sandbox_network,
                 timeout=SYFT_TIMEOUT,
@@ -118,19 +124,19 @@ def scan_image(reference: str) -> tuple[SandboxResult, str | None]:
                 tmpfs_size=IMAGE_TMPFS,
                 env={
                     "DOCKER_HOST": settings.docker_proxy_host,
-                    "HOME": scratch_path,
-                    "XDG_CACHE_HOME": scratch_path,
-                    "TMPDIR": scratch_path,
+                    "HOME": sandbox_path,
+                    "XDG_CACHE_HOME": sandbox_path,
+                    "TMPDIR": sandbox_path,
                 },
             )
         )
     finally:
-        remove_scratch(scratch, work_volume=work_volume)
+        remove_scratch(scratch, work_dir=settings.work_dir)
     version = None
     if result.ok:
         try:
             version = (result.json().get("descriptor") or {}).get("version")
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - version is a nicety, not a requirement
             version = None
     return result, version
 
@@ -244,23 +250,18 @@ def _direct_artifact_ids(document: dict) -> set[str] | None:
     return all_ids - depended_upon
 
 
-def remove_scratch(scratch: str, *, work_volume: str) -> None:
+def remove_scratch(scratch: str, *, work_dir: str) -> None:
     """Delete one image-scan scratch directory.
 
     Never fatal: a leaked directory costs disk, while raising here would turn a
     successful scan into a failed one after the work was already done. The name is
-    checked against the pattern this module generates so a bad value cannot widen
-    what gets removed.
+    checked against the pattern this module generates, because this deletes a tree
+    and that is not something to point at an arbitrary string.
     """
     if not re.fullmatch(r"imagescan-[0-9a-f]{12}", scratch):
         log.warning("imagescan.refused_removal", scratch=scratch)
         return
-    run_sandboxed(
-        SandboxSpec(
-            image=SYFT_IMAGE,
-            command=["sh", "-c", f"rm -rf {IMAGE_SCRATCH_ROOT}/{scratch}"],
-            mounts=[Mount(volume=work_volume, target=IMAGE_SCRATCH_ROOT, read_only=False)],
-            network="none",
-            timeout=120,
-        )
-    )
+    try:
+        shutil.rmtree(pathlib.Path(work_dir) / scratch, ignore_errors=True)
+    except OSError as exc:  # noqa: BLE001 - cleanup must never fail a good scan
+        log.warning("imagescan.scratch_not_removed", scratch=scratch, error=str(exc))
