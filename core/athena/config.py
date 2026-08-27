@@ -64,6 +64,16 @@ class Settings(BaseSettings):
     # Where the worker itself sees that volume. Scanners see it wherever their own
     # mount puts it, which is why the two are separate settings.
     work_dir: str = "/work"
+    # Memory ceiling for one image scan. Measured, not guessed: the largest image on
+    # the development host is 13.2 GB and scans inside 3g once its scratch is on disk
+    # rather than in RAM.
+    #
+    # Worth doing the arithmetic before raising this. The queue's fairness cap lets
+    # `worker_concurrency - 1` scans of one kind run at once, so the worst case is
+    # that many times this number. Three concurrent scans at 3g is 9 GB, which on a
+    # 16 GB host leaves little for Postgres — and a host-level OOM kill picks its own
+    # victim, which may not be the scanner.
+    image_scan_memory: str = "3g"
     # Network the scanner sandbox joins when it needs to reach the read-only Docker
     # proxy, and the address of that proxy. Both are explicit names rather than
     # compose-prefixed ones, so a sibling container can find them.

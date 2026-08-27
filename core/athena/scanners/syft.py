@@ -76,8 +76,6 @@ def scan_directory(path_in_volume: str, *, work_volume: str) -> tuple[SandboxRes
 # kind of thing. The tmpfs stays small for anything that still writes to /tmp.
 IMAGE_TMPFS = "256m"
 IMAGE_SCRATCH_ROOT = "/scratch"
-# Enough for syft's own working set once the export is on disk rather than in RAM.
-IMAGE_MEMORY = "2g"
 SCRATCH = "/tmp"  # noqa: S108
 
 
@@ -120,7 +118,7 @@ def scan_image(reference: str) -> tuple[SandboxResult, str | None]:
                 ],
                 network=settings.sandbox_network,
                 timeout=SYFT_TIMEOUT,
-                memory=IMAGE_MEMORY,
+                memory=settings.image_scan_memory,
                 tmpfs_size=IMAGE_TMPFS,
                 env={
                     "DOCKER_HOST": settings.docker_proxy_host,
