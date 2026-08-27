@@ -5,6 +5,9 @@ export default defineNuxtConfig({
   css: ['~/assets/css/main.css'],
 
   app: {
+    // Where this app is mounted. Root by default; set to '/athena/' when it is
+    // served under a path alongside something else on the same hostname.
+    baseURL: process.env.NUXT_APP_BASE_URL || '/',
     head: {
       titleTemplate: (title?: string) => (title ? `${title} · Athena` : 'Athena'),
       meta: [{ name: 'viewport', content: 'width=device-width, initial-scale=1' }],
