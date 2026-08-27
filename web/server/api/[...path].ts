@@ -27,9 +27,11 @@ export default defineEventHandler(async (event) => {
     redirect: 'manual',
   })
 
-  // Forward Set-Cookie so the session cookie is issued by core but scoped to this origin.
+  // Forward Set-Cookie, re-scoped to wherever this app is mounted. See
+  // server/utils/cookieScope.ts for why this is not left to core.
+  const mount = cookieMount(config.app.baseURL)
   for (const c of response.headers.getSetCookie?.() ?? []) {
-    appendHeader(event, 'set-cookie', c)
+    appendHeader(event, 'set-cookie', scopeCookie(c, mount))
   }
 
   setResponseStatus(event, response.status)
