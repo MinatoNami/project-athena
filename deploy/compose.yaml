@@ -197,17 +197,11 @@ services:
     image: athena-web:${ATHENA_TAG:-dev}
     build:
       context: ../web
-      args:
-        # Must match ATHENA_WEB_BASE_PATH below and the location block in whatever
-        # is in front of this. Baked at build time because Nuxt writes asset URLs
-        # into the client manifest.
-        NUXT_APP_BASE_URL: ${ATHENA_WEB_BASE_PATH:-/}
     restart: unless-stopped
     environment:
       NUXT_ATHENA_API_URL: http://api:8000
       NUXT_SESSION_SECRET_FILE: /run/secrets/session_secret
       NUXT_PUBLIC_APP_NAME: ${ATHENA_APP_NAME:-Athena}
-      NUXT_APP_BASE_URL: ${ATHENA_WEB_BASE_PATH:-/}
     secrets: [session_secret]
     group_add:
       - "${ATHENA_SECRET_GID:-0}"

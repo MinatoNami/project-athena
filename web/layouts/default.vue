@@ -27,7 +27,7 @@ const { data: intel } = await useAsyncData('shell-intel', () =>
 
 const connected = ref(true)
 onMounted(() => {
-  const source = new EventSource(`${apiBase()}/events?topics=findings,jobs`)
+  const source = new EventSource('/api/events?topics=findings,jobs')
   source.onopen = () => (connected.value = true)
   source.onerror = () => (connected.value = false)
   onBeforeUnmount(() => source.close())
