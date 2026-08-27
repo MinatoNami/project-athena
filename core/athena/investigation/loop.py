@@ -27,7 +27,7 @@ from athena.investigation.verdict import (
     Verdict,
     parse_verdict,
 )
-from athena.llm import ModelUnavailable, complete_json
+from athena.llm import BudgetExhausted, ModelUnavailable, complete_json
 
 log = structlog.get_logger(__name__)
 
@@ -164,6 +164,13 @@ def investigate(
                 schema=schema, system=SYSTEM_PROMPT, prompt=prompt,
                 max_tokens=2500, purpose="investigation",
             )
+        except BudgetExhausted as exc:
+            # Distinct from a model failure on purpose. The endpoint is healthy and
+            # we declined to use it; calling that an outage sends somebody to debug
+            # something that is working.
+            result.stopped_because = f"over the model call budget: {exc}"
+            log.info("investigation.deferred_over_budget")
+            break
         except (ModelUnavailable, Exception) as exc:  # noqa: BLE001
             # A model failure leaves the finding uninvestigated rather than
             # producing a verdict nobody can justify.

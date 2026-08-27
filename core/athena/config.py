@@ -101,7 +101,12 @@ class Settings(BaseSettings):
     # A local model has no invoice but does have wall-clock. Capped on calls rather
     # than tokens because that is what an operator can reason about. On exhaustion
     # work queues rather than being dropped.
-    ai_budget_calls: int = 2000
+    #
+    # 500/day against a measured steady state of roughly 80 leaves ample headroom
+    # while still being low enough to catch a runaway. The previous 2,000 was a
+    # guess made before there was anything to measure, and 25x headroom is not a
+    # limit — it is a number that only ever fires on something already pathological.
+    ai_budget_calls: int = 500
     ai_budget_window_hours: int = 24
     # How many findings each sweep hands to triage. Small enough that the queue stays
     # legible and other work keeps moving.

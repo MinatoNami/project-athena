@@ -82,6 +82,23 @@ def complete(
             "a prompt."
         )
 
+    # Checked here rather than only where work is scheduled, so the ceiling binds
+    # every caller. A refusal is recorded like any other, and recorded as blocked so
+    # it cannot itself count against the window it is enforcing.
+    from athena.db.base import session_scope
+    from athena.llm.budget import BudgetExhausted, check as check_budget
+
+    try:
+        with session_scope() as budget_session:
+            check_budget(budget_session, purpose=purpose)
+    except BudgetExhausted as exc:
+        _record_egress(
+            purpose=purpose, endpoint=base_url, model=settings.llm_model,
+            classes=set(), blocked=True, reason=str(exc),
+            payload_hash=_digest(payload_text), bytes_out=len(payload_text),
+        )
+        raise
+
     classes = classify(payload_text)
     permitted = allowed_classes(base_url=base_url, mode=settings.ai_mode)
     if disallowed := (classes - permitted):

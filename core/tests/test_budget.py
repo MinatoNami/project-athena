@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from athena.config import get_settings
 from athena.db.models import EgressLog
 from athena.llm.budget import current
@@ -66,3 +68,75 @@ def test_exhaustion_is_reported_not_inferred(session, monkeypatch):
     # The sweep logs this rather than stopping quietly: "we stopped looking" and
     # "there was nothing to find" must not look the same.
     assert budget.as_dict()["exhausted"] is True
+
+
+# ── enforcement at the gateway ───────────────────────────────────────────────
+
+
+def _spend(session, n: int, *, blocked: bool = False, purpose: str = "investigation"):
+    """Record n egress rows in the window."""
+    from athena.db.models import EgressLog
+
+    for _ in range(n):
+        session.add(EgressLog(
+            purpose=purpose, endpoint="http://local:1234", model="m", local=True,
+            data_classes=[], blocked=blocked, payload_hash="h", bytes_out=1,
+            prompt_tokens=1, completion_tokens=1, duration_ms=1,
+        ))
+    session.flush()
+
+
+def test_check_passes_while_there_is_room(session, monkeypatch):
+    from athena.config import get_settings
+    from athena.llm.budget import check
+
+    monkeypatch.setattr(get_settings(), "ai_budget_calls", 500, raising=False)
+    _spend(session, 3)
+    assert check(session, purpose="investigation").remaining > 0
+
+
+def test_check_refuses_once_the_window_is_spent(session, monkeypatch):
+    from athena.config import get_settings
+    from athena.llm.budget import BudgetExhausted, check
+
+    monkeypatch.setattr(get_settings(), "ai_budget_calls", 5, raising=False)
+    _spend(session, 6)
+    with pytest.raises(BudgetExhausted, match="queued, not dropped"):
+        check(session, purpose="investigation")
+
+
+def test_a_refusal_is_not_an_outage(session, monkeypatch):
+    """BudgetExhausted must not be a ModelUnavailable: the endpoint is healthy and
+    we declined to use it. Reporting a self-imposed limit as an outage sends
+    somebody to debug something that is working."""
+    from athena.llm import BudgetExhausted, ModelUnavailable
+
+    assert not issubclass(BudgetExhausted, ModelUnavailable)
+
+
+def test_refusals_cannot_inflate_the_window_they_enforce(session, monkeypatch):
+    """A refused call is logged as blocked, and blocked rows are not counted.
+
+    Were they counted, the first refusal would push the window further past the
+    limit, and the budget would never recover no matter how long you waited.
+    """
+    from athena.config import get_settings
+    from athena.llm.budget import current
+
+    monkeypatch.setattr(get_settings(), "ai_budget_calls", 5, raising=False)
+    _spend(session, 4)
+    before = current(session).spent
+    _spend(session, 50, blocked=True)
+    assert current(session).spent == before
+
+
+def test_triage_is_gated_by_the_same_budget(session, monkeypatch):
+    """Triage is a model call like any other, and an ungated cheap call is still a
+    call that occupies the machine."""
+    from athena.config import get_settings
+    from athena.llm.budget import BudgetExhausted, check
+
+    monkeypatch.setattr(get_settings(), "ai_budget_calls", 2, raising=False)
+    _spend(session, 3, purpose="triage")
+    with pytest.raises(BudgetExhausted):
+        check(session, purpose="triage")

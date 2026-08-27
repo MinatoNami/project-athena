@@ -23,6 +23,15 @@ from athena.db.models import EgressLog
 log = structlog.get_logger(__name__)
 
 
+class BudgetExhausted(RuntimeError):
+    """The call was refused to protect the machine, not because anything failed.
+
+    Deliberately not ModelUnavailable: the model is fine and we chose not to ask it.
+    Reporting a self-imposed limit as an outage would send somebody to debug a
+    healthy endpoint.
+    """
+
+
 @dataclass
 class Budget:
     spent: int
@@ -60,3 +69,22 @@ def current(session: Session) -> Budget:
     ).scalar_one()
 
     return Budget(spent=spent, limit=settings.ai_budget_calls, window_hours=window)
+
+
+def check(session: Session, *, purpose: str) -> Budget:
+    """Raise if the window is spent.
+
+    Called on every model call rather than once per sweep. A limit enforced only
+    where work is scheduled binds only the scheduler: anything calling the gateway
+    directly — a script, a harness, a future feature — spends freely past it, which
+    is how a 2,000-call ceiling came to sit under 6,500 calls.
+    """
+    budget = current(session)
+    if budget.exhausted:
+        log.warning("llm.budget_exhausted", purpose=purpose, **budget.as_dict())
+        raise BudgetExhausted(
+            f"{budget.spent} model calls in the last {budget.window_hours}h exceeds "
+            f"the {budget.limit} allowed. Work is queued, not dropped; it resumes as "
+            "the window rolls forward."
+        )
+    return budget

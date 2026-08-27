@@ -12,6 +12,7 @@ from athena.llm.gateway import (
     complete_json,
     health,
 )
+from athena.llm.budget import BudgetExhausted
 from athena.llm.policy import DataClass, EgressBlocked
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "health",
     "Completion",
     "ModelUnavailable",
+    "BudgetExhausted",
     "EgressBlocked",
     "DataClass",
 ]
