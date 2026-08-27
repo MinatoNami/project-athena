@@ -213,13 +213,13 @@ def test_family_groups_image_tags_together(session):
     def image(name):
         return Asset(kind="image", identity_key=name, display_name=name)
 
-    a = _family(image("lumaindex-frontend:20260819T063348Z-8583daf"))
-    b = _family(image("lumaindex-frontend:latest"))
-    c = _family(image("lumaindex-frontend@sha256:abc123"))
+    a = _family(image("storefront-web:20260819T063348Z-8583daf"))
+    b = _family(image("storefront-web:latest"))
+    c = _family(image("storefront-web@sha256:abc123"))
     d = _family(image("other-app:latest"))
 
     assert a[0] == b[0] == c[0], "tags and digests of one repository are one decision"
-    assert a[1] == "lumaindex-frontend"
+    assert a[1] == "storefront-web"
     assert d[0] != a[0]
 
 

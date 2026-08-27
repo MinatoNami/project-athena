@@ -44,15 +44,59 @@ docker compose exec api athena bootstrap    # prints a single-use admin token
 Then open <http://127.0.0.1:8080> and create the admin account with that token.
 There are no default credentials.
 
+## Ports
+
+Every published port binds to `127.0.0.1` by default. Nothing is reachable off the
+box unless you put something in front of it deliberately.
+
+| Default | Service | Purpose | Override |
+|---|---|---|---|
+| `8080` | `web` | Nuxt dashboard. **The only one a gateway should route.** | `ATHENA_WEB_PORT` / `ATHENA_WEB_BIND` |
+| `8000` | `api` | FastAPI core. Published for diagnostics, not for browsers. | `ATHENA_API_PORT` / `ATHENA_API_BIND` |
+| `2375` | `docker-proxy` | Read-only Docker socket proxy, for image scanning. | `ATHENA_DOCKER_PROXY_PORT` / `ATHENA_DOCKER_PROXY_BIND` |
+
+Not published at all, and reachable only on the internal compose network: `db`
+(Postgres 5432), `worker`, `scheduler`, `executor`.
+
+### Putting a gateway in front
+
+Route the **web** port only. The dashboard is a backend-for-frontend: it proxies
+`/api/*` to core over the internal network, and core is never meant to be
+browser-reachable. Exposing the API port through a gateway bypasses that boundary
+rather than adding to it.
+
+Two things the proxy must get right:
+
+- **Do not buffer `/api/events`.** The dashboard receives live updates over
+  Server-Sent Events. A buffering proxy holds them until the buffer fills, so the
+  page silently stops updating rather than visibly breaking.
+- **Raise the read timeout** above the gap between events. nginx's 60-second
+  default drops the connection during a quiet period; a value in the tens of
+  minutes is appropriate.
+
+Serving the dashboard under a **path prefix** rather than its own hostname needs
+more than a proxy rule: Nuxt writes asset URLs into the client bundle at build
+time, so the base path has to be baked in when the image is built. Give it a
+subdomain unless you are prepared to rebuild for the path.
+
 ## Deploy to a remote host
 
 ```bash
 ./deploy/deploy.sh
 ```
 
-Defaults to the `alena-tailscale` SSH host; override with `--host`. The script syncs
-the source, generates secrets **on the remote** (never overwriting existing ones),
-builds images there, starts the stack, waits for health, and runs `athena doctor`.
+Set the target once — the host is not committed, since it names a specific machine:
+
+```bash
+echo my-ssh-host > deploy/.deploy-host    # untracked
+```
+
+Or pass `--host`, or export `ATHENA_DEPLOY_HOST`. There is no default: a deploy
+script that guesses which machine to touch eventually touches the wrong one.
+
+The script syncs the source, generates secrets **on the remote** (never overwriting
+existing ones), builds images there, starts the stack, waits for health, and runs
+`athena doctor`.
 
 ```bash
 ./deploy/deploy.sh --dry-run    # show what would happen

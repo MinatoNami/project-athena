@@ -6,6 +6,8 @@ deploy/secrets/
 deploy/.env
 deploy/.env.*
 !deploy/.env.example
+# Names the machine you deploy to. Local to whoever is deploying.
+deploy/.deploy-host
 *.key
 *.pem
 *.p12

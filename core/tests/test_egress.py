@@ -25,7 +25,7 @@ from athena.llm.policy import (
         "http://127.0.0.1:1234",
         "http://localhost:1234",
         "http://host.docker.internal:1234",
-        "http://192.168.0.16:1234",
+        "http://192.168.1.10:1234",
         "http://10.10.0.1:1234",
         "http://100.100.100.100:1234",          # tailnet CGNAT range
         "https://example-host.tailnet.ts.net",

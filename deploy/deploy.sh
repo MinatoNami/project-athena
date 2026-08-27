@@ -22,7 +22,18 @@
 
 set -euo pipefail
 
-HOST="${ATHENA_DEPLOY_HOST:-alena-tailscale}"
+# The target host is deliberately not committed: it names somebody's machine, and
+# this repository is public. Resolution order is env var, then an untracked
+# deploy/.deploy-host, then --host. There is no default — a deploy script that
+# guesses which machine to touch is a deploy script that eventually touches the
+# wrong one.
+_host_file="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.deploy-host"
+# Read in an if, not a command substitution inside the assignment: under `set -e` a
+# substitution that exits non-zero takes the whole script with it, and the first
+# thing this script does on a machine with no host file would be to die silently.
+_host_from_file=""
+if [[ -r "$_host_file" ]]; then _host_from_file="$(tr -d '[:space:]' < "$_host_file")"; fi
+HOST="${ATHENA_DEPLOY_HOST:-$_host_from_file}"
 REMOTE_DIR="${ATHENA_REMOTE_DIR:-athena}"     # relative to the remote user's home
 DRY_RUN=0; ALLOW_DIRTY=0; NO_BUILD=0; ASSUME_YES=0
 
@@ -84,6 +95,7 @@ preflight() {
   step "Preflight"
   command -v rsync >/dev/null || die "rsync not found locally"
 
+  [[ -n "$HOST" ]] || die "No deploy host. Use --host, ATHENA_DEPLOY_HOST, or deploy/.deploy-host"
   "${SSH[@]}" "$HOST" true 2>/dev/null \
     || die "Cannot reach '$HOST' over SSH. Check ~/.ssh/config and that the host is up."
   ok "SSH to $HOST"
