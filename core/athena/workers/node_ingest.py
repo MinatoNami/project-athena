@@ -7,6 +7,7 @@ appearing clean, exactly as a failed repository scan does.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -295,6 +296,30 @@ def _retire_unseen_services(session, *, asset: Asset, seen: set[str], reported: 
     return retired
 
 
+# A 12- or 64-character hex string is an image ID, not a repository name.
+_IMAGE_ID = re.compile(r"^[0-9a-f]{12}$|^[0-9a-f]{64}$")
+
+
+def _normalise_image_ref(ref: str) -> str:
+    """Apply Docker's own default-tag rule so a bare name matches its image.
+
+    `docker ps` prints whatever the container was created with, so a container
+    started from `hello-world` reports exactly that, while the image is inventoried
+    as `hello-world:latest`. Docker resolves the two to the same thing and so should
+    this; without it the container looks like it came from nowhere and its packages
+    go uncounted.
+
+    An image ID is left alone. Appending a tag to one would invent a repository that
+    does not exist, and a container reporting an ID genuinely has no tagged image to
+    point at — the agent would need to report the image digest to resolve those, and
+    it does not collect one.
+    """
+    ref = (ref or "").strip()
+    if not ref or ":" in ref or "@" in ref or _IMAGE_ID.match(ref):
+        return ref
+    return f"{ref}:latest"
+
+
 def _docker(session, *, asset: Asset, data: dict) -> dict[str, Any]:
     data = data or {}
     images_by_ref: dict[str, Asset] = {}
@@ -336,7 +361,7 @@ def _docker(session, *, asset: Asset, data: dict) -> dict[str, Any]:
         # repository → image → container → host becomes traversable here. The image
         # link is by reference because the runtime reports a tag; where the tag has
         # moved, provenance is genuinely unknown rather than assumed.
-        image_asset = images_by_ref.get(container.get("image", ""))
+        image_asset = images_by_ref.get(_normalise_image_ref(container.get("image", "")))
         if image_asset is not None:
             link(
                 session, src=container_asset, dst=image_asset,

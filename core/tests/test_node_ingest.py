@@ -140,3 +140,43 @@ def test_retiring_one_host_leaves_another_alone(session):
     _ports(session, asset=a, data=_ports_payload(22))
     session.flush()
     assert len(_live_services(session, b)) == 1, "another host's services were retired"
+
+
+# ── container to image linking ───────────────────────────────────────────────
+
+
+def test_a_bare_image_name_resolves_the_way_docker_resolves_it():
+    """`docker ps` prints what the container was created with, so one started from
+    `hello-world` reports that while the image is inventoried as `hello-world:latest`.
+    Docker treats them as the same thing; without this the container looks like it
+    came from nowhere and its packages go uncounted."""
+    from athena.workers.node_ingest import _normalise_image_ref
+
+    assert _normalise_image_ref("hello-world") == "hello-world:latest"
+    assert _normalise_image_ref("ghcr.io/org/app") == "ghcr.io/org/app:latest"
+
+
+def test_an_existing_tag_or_digest_is_left_alone():
+    from athena.workers.node_ingest import _normalise_image_ref
+
+    assert _normalise_image_ref("app:2026.3") == "app:2026.3"
+    assert _normalise_image_ref("app@sha256:abc") == "app@sha256:abc"
+    # A registry with a port is not a tag.
+    assert _normalise_image_ref("registry:5000/app:1") == "registry:5000/app:1"
+
+
+def test_an_image_id_is_not_given_a_tag():
+    """Appending :latest to an ID would invent a repository that does not exist. A
+    container reporting an ID genuinely has no tagged image to point at."""
+    from athena.workers.node_ingest import _normalise_image_ref
+
+    assert _normalise_image_ref("a2b225992301") == "a2b225992301"
+    assert _normalise_image_ref("9e4b9e7517a6") == "9e4b9e7517a6"
+    assert _normalise_image_ref("a" * 64) == "a" * 64
+
+
+def test_an_empty_reference_stays_empty():
+    from athena.workers.node_ingest import _normalise_image_ref
+
+    assert _normalise_image_ref("") == ""
+    assert _normalise_image_ref(None) == ""
