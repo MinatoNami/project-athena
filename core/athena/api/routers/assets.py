@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from athena.api.deps import Principal, current_principal, db
 from athena.audit import record
+from athena.inventory.classify import mark_operator
 from athena.remediation import link_built_images
 from athena.db.models import (
     Asset,
@@ -69,6 +70,9 @@ def _serialise(asset: Asset, *, component_count: int | None = None) -> dict[str,
         "display_name": asset.display_name,
         "tier": asset.tier,
         "exposure": asset.exposure,
+        # Why each holds its value. "Athena worked it out" and "somebody decided" are
+        # different claims and the page must not present them alike.
+        "classification": asset.attributes.get("classification") or {},
         # Explicitly null rather than 0 — nobody has set it, which is not the same as
         # "unimportant". The UI surfaces this as a configuration gap.
         "criticality": asset.criticality,
@@ -338,6 +342,10 @@ def update_asset(
         asset.criticality = body.criticality
     if body.owner is not None:
         asset.owner = body.owner
+    mark_operator(
+        asset,
+        *[f for f in ("tier", "exposure") if getattr(body, f) is not None],
+    )
 
     record(
         session,
@@ -426,6 +434,13 @@ def classify(
                 asset.exposure = group.exposure
             if group.criticality is not None:
                 asset.criticality = group.criticality
+            mark_operator(
+                asset,
+                *[
+                    f for f in ("tier", "exposure")
+                    if getattr(group, f) is not None
+                ],
+            )
             after = (asset.tier, asset.exposure, asset.criticality)
             if before == after:
                 continue

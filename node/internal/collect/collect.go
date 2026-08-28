@@ -281,6 +281,10 @@ type DockerState struct {
 }
 
 type DockerImage struct {
+	// The local image ID, which is what `docker ps` prints for a container whose
+	// image carries no usable tag. Without it such a container cannot be matched to
+	// the image it runs, and the image looks like one nothing uses.
+	ID         string `json:"id"`
 	Digest     string `json:"digest"`
 	Repository string `json:"repository"`
 	Tag        string `json:"tag"`
@@ -292,6 +296,12 @@ type DockerContainer struct {
 	Image  string `json:"image"`
 	Digest string `json:"digest,omitempty"`
 	State  string `json:"state"`
+	// Published port mappings, verbatim, e.g. "0.0.0.0:8080->80/tcp". Reported
+	// rather than interpreted: whether binding to loopback means a container is
+	// unreachable depends on what else runs on the host, which the agent cannot see.
+	// The empty string and "no ports reported" are different facts, so the field is
+	// always present once an agent is new enough to send it.
+	Ports string `json:"ports"`
 }
 
 func Docker() (DockerState, error) {
@@ -299,13 +309,14 @@ func Docker() (DockerState, error) {
 
 	// Images are identified by digest, never by tag: a tag is a moving pointer.
 	if out, err := run("docker", "image", "ls", "--digests", "--format",
-		"{{.Digest}}\t{{.Repository}}\t{{.Tag}}"); err == nil {
+		"{{.ID}}\t{{.Digest}}\t{{.Repository}}\t{{.Tag}}"); err == nil {
 		for _, line := range strings.Split(out, "\n") {
 			f := strings.Split(strings.TrimSpace(line), "\t")
-			if len(f) < 3 || !strings.HasPrefix(f[0], "sha256:") {
+			if len(f) < 4 || !strings.HasPrefix(f[1], "sha256:") {
 				continue
 			}
-			state.Images = append(state.Images, DockerImage{Digest: f[0], Repository: f[1], Tag: f[2]})
+			state.Images = append(state.Images,
+				DockerImage{ID: f[0], Digest: f[1], Repository: f[2], Tag: f[3]})
 		}
 	} else {
 		// Distinguishing "no Docker here" from "the read-only proxy is unreachable"
@@ -319,14 +330,20 @@ func Docker() (DockerState, error) {
 	}
 
 	if out, err := run("docker", "ps", "-a", "--format",
-		"{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.State}}"); err == nil {
+		"{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Ports}}"); err == nil {
 		for _, line := range strings.Split(out, "\n") {
-			f := strings.Split(strings.TrimSpace(line), "\t")
+			// Ports is last and is routinely empty, so the line is split to a fixed
+			// width rather than requiring every field to be non-empty.
+			f := strings.SplitN(strings.TrimSpace(line), "\t", 5)
 			if len(f) < 4 {
 				continue
 			}
+			ports := ""
+			if len(f) == 5 {
+				ports = f[4]
+			}
 			state.Containers = append(state.Containers,
-				DockerContainer{ID: f[0], Name: f[1], Image: f[2], State: f[3]})
+				DockerContainer{ID: f[0], Name: f[1], Image: f[2], State: f[3], Ports: ports})
 		}
 	}
 	return state, nil

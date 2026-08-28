@@ -17,6 +17,7 @@ from sqlalchemy import select
 from athena.audit import record
 from athena.db.base import session_scope
 from athena.db.models import Asset, AssetEdge, Node, NodeTask
+from athena.inventory.classify import derive
 from athena.inventory.identity import AssetKind, IdentityError, identity_for
 from athena.inventory.purl import build_purl
 from athena.inventory.service import (
@@ -88,6 +89,18 @@ def ingest(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _apply(session, *, asset: Asset, run, capability: str, data: Any) -> dict[str, Any]:
+    stats = _dispatch(session, asset=asset, run=run, capability=capability, data=data)
+
+    # Both of these change what can be derived: ports settle a host's exposure, and
+    # the container list settles which images run where. Deriving here rather than on
+    # a timer means a newly-observed container is classified in the same breath as
+    # being discovered, instead of scoring against an unknown until a sweep catches up.
+    if capability in ("list_ports", "inspect_docker"):
+        stats = {**stats, "derived": derive(session)}
+    return stats
+
+
+def _dispatch(session, *, asset: Asset, run, capability: str, data: Any) -> dict[str, Any]:
     match capability:
         case "get_system_info":
             return _system_info(session, asset=asset, data=data)
@@ -311,9 +324,8 @@ def _normalise_image_ref(ref: str) -> str:
     go uncounted.
 
     An image ID is left alone. Appending a tag to one would invent a repository that
-    does not exist, and a container reporting an ID genuinely has no tagged image to
-    point at — the agent would need to report the image digest to resolve those, and
-    it does not collect one.
+    does not exist. Those are resolved separately, by the ID the agent now reports
+    alongside each image — see `_docker`.
     """
     ref = (ref or "").strip()
     if not ref or ":" in ref or "@" in ref or _IMAGE_ID.match(ref):
@@ -324,6 +336,12 @@ def _normalise_image_ref(ref: str) -> str:
 def _docker(session, *, asset: Asset, data: dict) -> dict[str, Any]:
     data = data or {}
     images_by_ref: dict[str, Asset] = {}
+    # Keyed separately because `docker ps` prints an image ID, not a reference,
+    # whenever the container's image has no usable tag — after a rebuild retags it,
+    # for instance. Sixty-one images looked like images nothing runs for exactly this
+    # reason, which in turn left them unclassified and their findings scored against
+    # a placeholder.
+    images_by_id: dict[str, Asset] = {}
 
     for image in data.get("images") or []:
         digest = image.get("digest")
@@ -334,6 +352,7 @@ def _docker(session, *, asset: Asset, data: dict) -> dict[str, Any]:
         except IdentityError:
             continue
         repo, tag = image.get("repository", "<none>"), image.get("tag", "<none>")
+        image_id = (image.get("id") or "").strip().lower()
         image_asset, _ = register_asset(
             session,
             kind=AssetKind.IMAGE,
@@ -345,6 +364,8 @@ def _docker(session, *, asset: Asset, data: dict) -> dict[str, Any]:
         # new tag was pushed this morning.
         link_image_source(session, image_asset)
         images_by_ref[f"{repo}:{tag}"] = image_asset
+        if image_id:
+            images_by_id[image_id] = image_asset
 
     containers = 0
     for container in data.get("containers") or []:
@@ -357,7 +378,19 @@ def _docker(session, *, asset: Asset, data: dict) -> dict[str, Any]:
             kind=AssetKind.CONTAINER,
             identity_key=key,
             display_name=container.get("name") or cid[:12],
-            attributes={"image": container.get("image"), "state": container.get("state")},
+            attributes={
+                "image": container.get("image"),
+                "state": container.get("state"),
+                # Recorded verbatim, and only when the agent sent the field at all:
+                # an agent too old to report ports is a different fact from a
+                # container that publishes none, and conflating them would let
+                # "we did not ask" read as "nothing is exposed".
+                **(
+                    {"published_ports": container["ports"]}
+                    if "ports" in container
+                    else {}
+                ),
+            },
         )
         containers += 1
         link(session, src=container_asset, dst=asset, relation="runs_on")
@@ -365,7 +398,10 @@ def _docker(session, *, asset: Asset, data: dict) -> dict[str, Any]:
         # repository → image → container → host becomes traversable here. The image
         # link is by reference because the runtime reports a tag; where the tag has
         # moved, provenance is genuinely unknown rather than assumed.
-        image_asset = images_by_ref.get(_normalise_image_ref(container.get("image", "")))
+        raw_ref = (container.get("image") or "").strip()
+        image_asset = images_by_ref.get(_normalise_image_ref(raw_ref))
+        if image_asset is None and _IMAGE_ID.match(raw_ref):
+            image_asset = images_by_id.get(raw_ref.lower())
         if image_asset is not None:
             link(
                 session, src=container_asset, dst=image_asset,

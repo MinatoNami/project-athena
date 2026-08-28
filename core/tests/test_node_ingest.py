@@ -180,3 +180,61 @@ def test_an_empty_reference_stays_empty():
 
     assert _normalise_image_ref("") == ""
     assert _normalise_image_ref(None) == ""
+
+
+# ── containers whose image has no usable tag ─────────────────────────────────
+
+
+def test_a_container_reporting_an_image_id_is_linked_to_its_image(session):
+    """`docker ps` prints an image ID whenever the container's image carries no
+    usable tag — after a rebuild retags it, for instance. Sixty-one images looked
+    like images nothing runs for exactly this reason, which left them unclassified
+    and their findings scored against a placeholder."""
+    from athena.db.models import Asset, AssetEdge
+    from athena.inventory.identity import AssetKind
+    from athena.inventory.service import register_asset
+    from athena.workers.node_ingest import _docker
+
+    host, _ = register_asset(
+        session, kind=AssetKind.HOST, identity_key="host:h1", display_name="h1"
+    )
+    session.flush()
+    _docker(session, asset=host, data={
+        "images": [{"id": "1b7a147cf440", "digest": "sha256:" + "a" * 64,
+                    "repository": "athena-web", "tag": "dev"}],
+        "containers": [{"id": "c1", "name": "athena-web-1",
+                        "image": "1b7a147cf440", "state": "running", "ports": ""}],
+    })
+    session.flush()
+
+    image = session.query(Asset).filter_by(display_name="athena-web:dev").one()
+    container = session.query(Asset).filter_by(display_name="athena-web-1").one()
+    assert session.query(AssetEdge).filter_by(
+        src_id=container.id, dst_id=image.id, relation="built_from"
+    ).count() == 1
+
+
+def test_published_ports_are_recorded_only_when_the_agent_reported_them(session):
+    """An agent too old to report ports is a different fact from a container that
+    publishes none. Conflating them would let "we did not ask" read as "nothing is
+    exposed"."""
+    from athena.db.models import Asset
+    from athena.inventory.identity import AssetKind
+    from athena.inventory.service import register_asset
+    from athena.workers.node_ingest import _docker
+
+    host, _ = register_asset(
+        session, kind=AssetKind.HOST, identity_key="host:h2", display_name="h2"
+    )
+    session.flush()
+    _docker(session, asset=host, data={"images": [], "containers": [
+        {"id": "n1", "name": "new-agent", "image": "x", "state": "running",
+         "ports": "0.0.0.0:8080->80/tcp"},
+        {"id": "o1", "name": "old-agent", "image": "x", "state": "running"},
+    ]})
+    session.flush()
+
+    new = session.query(Asset).filter_by(display_name="new-agent").one()
+    old = session.query(Asset).filter_by(display_name="old-agent").one()
+    assert new.attributes["published_ports"] == "0.0.0.0:8080->80/tcp"
+    assert "published_ports" not in old.attributes
