@@ -22,6 +22,30 @@ const { data, pending, error, refresh } = await useAsyncData('unclassified', () 
 )
 
 const picks = reactive<Record<string, { tier?: string; exposure?: string }>>({})
+
+/**
+ * A field Athena already worked out is not a question. Tier flows along the graph —
+ * a container on the production host is production — so most groups arrive with it
+ * settled, and asking again is how a queue of decisions stops being worked through.
+ * Exposure is not derived for images and containers on purpose: one bound to loopback
+ * may still be reached through a reverse proxy on the same host, and this estate runs
+ * one. That is the question left, and the evidence for it is shown beside it.
+ */
+function settled(g: any, field: 'tier' | 'exposure'): string | null {
+  const why = g.classification?.[field]
+  const value = field === 'tier' ? g.tier : g.exposure
+  return why && value && value !== 'unknown' ? why : null
+}
+function needs(g: any, field: 'tier' | 'exposure'): boolean {
+  return !settled(g, field)
+}
+function answered(g: any): boolean {
+  return (['tier', 'exposure'] as const).every(f => !needs(g, f) || picks[g.key]?.[f])
+}
+function why(g: any, field: 'tier' | 'exposure'): string {
+  const w = settled(g, field)
+  return w === 'operator' ? 'you set this' : (w ?? '')
+}
 const applying = ref(false)
 const applied = ref<{ assets: number; rescore: boolean } | null>(null)
 const failed = ref<string | null>(null)
@@ -32,8 +56,11 @@ function set(key: string, field: 'tier' | 'exposure', value: string) {
 }
 
 const groups = computed(() => data.value?.groups ?? [])
+// A group counts as complete when everything still open has been answered — not
+// when every field has been clicked. Re-answering what is already settled is work
+// without a decision in it.
 const complete = computed(() =>
-  groups.value.filter((g: any) => picks[g.key]?.tier && picks[g.key]?.exposure),
+  groups.value.filter((g: any) => answered(g) && Object.keys(picks[g.key] ?? {}).length),
 )
 const findingsAffected = computed(() =>
   complete.value.reduce((n: number, g: any) => n + (g.finding_count ?? 0), 0),
@@ -49,12 +76,16 @@ const progress = computed(() =>
  */
 function impact(g: any) {
   const p = picks[g.key]
-  if (!p?.tier || !p?.exposure) return { text: '—', note: 'set both to see the effect', tone: 'idle' }
+  const tier = p?.tier ?? (settled(g, 'tier') ? g.tier : undefined)
+  const exposure = p?.exposure ?? (settled(g, 'exposure') ? g.exposure : undefined)
+  if (!tier || !exposure) {
+    return { text: '—', note: 'answer what is open to see the effect', tone: 'idle' }
+  }
   if (!g.finding_count) return { text: 'No findings', note: 'nothing to rescore', tone: 'idle' }
-  if (p.tier === 'production' && p.exposure === 'internet') {
+  if (tier === 'production' && exposure === 'internet') {
     return { text: `${g.finding_count} rescored up`, note: 'production and internet-facing', tone: 'up' }
   }
-  if (p.tier === 'development' || p.tier === 'personal' || p.exposure === 'isolated') {
+  if (tier === 'development' || tier === 'personal' || exposure === 'isolated') {
     return { text: `${g.finding_count} rescored down`, note: 'lower consequence than assumed', tone: 'down' }
   }
   return { text: `${g.finding_count} rescored`, note: 'importance measured, not assumed', tone: 'flat' }
@@ -67,8 +98,10 @@ async function apply() {
     const body = {
       groups: complete.value.map((g: any) => ({
         asset_ids: g.asset_ids,
-        tier: picks[g.key]!.tier,
-        exposure: picks[g.key]!.exposure,
+        // Only what was actually decided here. Sending back a derived value would
+        // stamp it as an operator decision and freeze it against future evidence.
+        tier: picks[g.key]?.tier,
+        exposure: picks[g.key]?.exposure,
       })),
     }
     const result = await api<any>('assets/classify', { method: 'POST', body })
@@ -121,7 +154,9 @@ async function apply() {
         Grouped by what they appear to be — {{ groups.length }}
         {{ groups.length === 1 ? 'decision' : 'decisions' }} instead of
         {{ (data?.asset_count ?? 0).toLocaleString() }} assets. Setting a group applies to
-        every asset in it.
+        every asset in it. Where a value was worked out from the estate itself it is
+        shown rather than asked for; answering over it makes it yours, and no later
+        pass will change it.
       </span>
     </div>
 
@@ -144,10 +179,10 @@ async function apply() {
     <div v-else class="groups">
       <div
         v-for="g in groups" :key="g.key" class="grp"
-        :class="{ done: picks[g.key]?.tier && picks[g.key]?.exposure }"
+        :class="{ done: answered(g) }"
       >
         <div class="who">
-          <span class="dot" :class="picks[g.key]?.tier && picks[g.key]?.exposure ? 'live' : 'idle'" />
+          <span class="dot" :class="answered(g) ? 'live' : 'idle'" />
           <div class="names">
             <span class="name">{{ g.label }}</span>
             <span class="detail">
@@ -157,12 +192,28 @@ async function apply() {
               {{ g.finding_count === 1 ? 'finding' : 'findings' }}
               <span v-if="g.mixed" class="mixed" title="Members do not currently agree">mixed</span>
             </span>
+
+            <!-- What was observed about reachability, since that is the question left
+                 open. Shown rather than acted on: whether loopback means unreachable
+                 depends on what else runs on the host, which Athena cannot see. -->
+            <ul v-if="g.evidence?.length && needs(g, 'exposure')" class="ev">
+              <li v-for="(line, n) in g.evidence.slice(0, 4)" :key="n">
+                <UntrustedText :text="line" />
+              </li>
+              <li v-if="g.evidence.length > 4" class="more">
+                and {{ g.evidence.length - 4 }} more
+              </li>
+            </ul>
           </div>
         </div>
 
         <div class="field">
           <span class="lbl">Tier</span>
-          <div class="seg">
+          <div v-if="!needs(g, 'tier')" class="already">
+            <span class="val">{{ g.tier }}</span>
+            <span class="src">{{ why(g, 'tier') }}</span>
+          </div>
+          <div v-else class="seg">
             <button
               v-for="t in TIERS" :key="t" :class="{ on: picks[g.key]?.tier === t }"
               @click="set(g.key, 'tier', t)"
@@ -172,7 +223,11 @@ async function apply() {
 
         <div class="field">
           <span class="lbl">Exposure</span>
-          <div class="seg">
+          <div v-if="!needs(g, 'exposure')" class="already">
+            <span class="val">{{ g.exposure }}</span>
+            <span class="src">{{ why(g, 'exposure') }}</span>
+          </div>
+          <div v-else class="seg">
             <button
               v-for="e in EXPOSURES" :key="e" :class="{ on: picks[g.key]?.exposure === e }"
               @click="set(g.key, 'exposure', e)"
@@ -265,4 +320,11 @@ async function apply() {
   .who { width: 100%; }
   .impact { margin-left: 0; width: auto; text-align: left; }
 }
+.ev { margin: .35rem 0 0; padding-left: 0; list-style: none;
+      display: flex; flex-direction: column; gap: .15rem; }
+.ev li { font-size: .72rem; line-height: 1.45; color: var(--ink-muted); }
+.ev li.more { font-style: italic; }
+.already { display: flex; flex-direction: column; gap: .1rem; }
+.already .val { font-size: .82rem; font-weight: 600; color: var(--ink); }
+.already .src { font-size: .68rem; line-height: 1.4; color: var(--ink-muted); }
 </style>

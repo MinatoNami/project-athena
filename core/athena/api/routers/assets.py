@@ -15,6 +15,7 @@ from athena.remediation import link_built_images
 from athena.db.models import (
     Asset,
     AssetComponent,
+    AssetEdge,
     Component,
     Finding,
     MergeCandidate,
@@ -213,6 +214,8 @@ def unclassified(
         ).all()
     )
 
+    evidence = _exposure_evidence(session, assets)
+
     groups: dict[str, dict[str, Any]] = {}
     for asset in assets:
         key, label = _family(asset)
@@ -227,9 +230,19 @@ def unclassified(
                 "finding_count": 0,
                 "tier": asset.tier,
                 "exposure": asset.exposure,
+                # What Athena settled on its own, so the page can show a decision as
+                # already made rather than asking for it a second time.
+                "classification": asset.attributes.get("classification") or {},
+                # Exposure is deliberately not derived for containers and images: one
+                # bound to loopback may still be reached through a reverse proxy on the
+                # same host. So the observations go to the person making the call.
+                "evidence": [],
                 "mixed": False,
             },
         )
+        for line in evidence.get(asset.id, []):
+            if line not in group["evidence"]:
+                group["evidence"].append(line)
         group["asset_ids"].append(str(asset.id))
         group["asset_count"] += 1
         group["finding_count"] += finding_counts.get(asset.id, 0)
@@ -247,6 +260,72 @@ def unclassified(
         "group_count": len(ordered),
         "findings_affected": sum(g["finding_count"] for g in ordered),
     }
+
+
+def _exposure_evidence(session: Session, assets: list[Asset]) -> dict[Any, list[str]]:
+    """What was observed about how each asset can be reached.
+
+    Assembled here rather than left to the browser: answering "is this internet-facing"
+    means knowing what runs the image, where, and what it publishes, which is three
+    joins the client should not have to make to answer one question.
+    """
+    ids = {a.id for a in assets}
+    if not ids:
+        return {}
+    out: dict[Any, list[str]] = {}
+
+    # Which containers run these images, and where each of those runs. Two passes
+    # rather than one wide join: the second hop is optional, and a container whose
+    # host is unknown still tells you what it publishes.
+    runs = session.execute(
+        select(AssetEdge.src_id, Asset.display_name)
+        .join(Asset, Asset.id == AssetEdge.dst_id)
+        .where(AssetEdge.relation == "runs_on", Asset.kind == "host")
+    ).all()
+    host_of = dict(runs)
+
+    rows = session.execute(
+        select(AssetEdge.dst_id, Asset)
+        .join(Asset, Asset.id == AssetEdge.src_id)
+        .where(
+            AssetEdge.dst_id.in_(ids),
+            AssetEdge.relation == "built_from",
+            Asset.tombstoned_at.is_(None),
+        )
+    ).all()
+    for image_id, container in rows:
+        where = f" on {host_of[container.id]}" if container.id in host_of else ""
+        ports = container.attributes.get("published_ports")
+        if ports is None:
+            # An agent too old to report ports is not a container that publishes none.
+            how = "ports not reported by this host's agent"
+        elif not ports.strip():
+            how = "publishing no ports"
+        else:
+            how = f"publishing {ports}"
+        out.setdefault(image_id, []).append(f"{container.display_name}{where}, {how}")
+
+    # A host speaks for itself: its own listening sockets were observed directly.
+    for host in (a for a in assets if a.kind == "host"):
+        seen = session.execute(
+            select(Asset.display_name, Asset.exposure)
+            .join(AssetEdge, AssetEdge.src_id == Asset.id)
+            .where(
+                AssetEdge.dst_id == host.id,
+                AssetEdge.relation == "runs_on",
+                Asset.kind == "service",
+                Asset.tombstoned_at.is_(None),
+            )
+        ).all()
+        if not seen:
+            continue
+        reachable = [n for n, e in seen if e != "isolated"]
+        detail = f" — e.g. {', '.join(reachable[:3])}" if reachable else ""
+        out.setdefault(host.id, []).append(
+            f"{len(reachable)} of {len(seen)} listening services accept connections "
+            f"from off-host{detail}"
+        )
+    return out
 
 
 @router.get("/assets/{asset_id}")

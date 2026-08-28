@@ -199,3 +199,71 @@ def test_edges_are_read_but_never_written(session):
     before = session.query(AssetEdge).count()
     derive(session)
     assert session.query(AssetEdge).count() == before
+
+
+# ── the evidence handed to whoever decides exposure ──────────────────────────
+
+
+def test_the_evidence_names_what_runs_an_image_and_what_it_publishes(session):
+    """The question left open is exposure, and answering it means knowing what runs
+    the image, where, and what it publishes. Three joins the browser should not have
+    to make to answer one question."""
+    from athena.api.routers.assets import _exposure_evidence
+
+    host = _host(session)
+    image = _asset(session, AssetKind.IMAGE, "athena-web:dev")
+    c = _asset(session, AssetKind.CONTAINER, "athena-web-1")
+    c.attributes = {**c.attributes, "published_ports": "127.0.0.1:8099->3000/tcp"}
+    link(session, src=c, dst=host, relation="runs_on")
+    link(session, src=c, dst=image, relation="built_from")
+    session.flush()
+
+    line = _exposure_evidence(session, [image])[image.id][0]
+    assert "athena-web-1 on alena-server" in line
+    assert "publishing 127.0.0.1:8099->3000/tcp" in line
+
+
+def test_an_agent_that_never_reported_ports_is_not_read_as_publishing_none(session):
+    """"We did not ask" and "nothing is exposed" are different facts, and only one of
+    them is a reason to relax."""
+    from athena.api.routers.assets import _exposure_evidence
+
+    host = _host(session)
+    image = _asset(session, AssetKind.IMAGE, "old:1")
+    c = _asset(session, AssetKind.CONTAINER, "old-1")     # no published_ports key
+    link(session, src=c, dst=host, relation="runs_on")
+    link(session, src=c, dst=image, relation="built_from")
+    session.flush()
+
+    line = _exposure_evidence(session, [image])[image.id][0]
+    assert "not reported" in line
+    assert "publishing no ports" not in line
+
+
+def test_a_container_publishing_nothing_says_so_plainly(session):
+    from athena.api.routers.assets import _exposure_evidence
+
+    host = _host(session)
+    image = _asset(session, AssetKind.IMAGE, "worker:1")
+    c = _asset(session, AssetKind.CONTAINER, "worker-1")
+    c.attributes = {**c.attributes, "published_ports": ""}
+    link(session, src=c, dst=host, relation="runs_on")
+    link(session, src=c, dst=image, relation="built_from")
+    session.flush()
+
+    assert "publishing no ports" in _exposure_evidence(session, [image])[image.id][0]
+
+
+def test_a_host_speaks_for_itself(session):
+    """Its own listening sockets were observed directly — no inference involved."""
+    from athena.api.routers.assets import _exposure_evidence
+
+    host = _host(session)
+    for name, exposure in (("sshd tcp/22", "internal"), ("pg tcp/5432", "isolated")):
+        svc = _asset(session, AssetKind.SERVICE, name)
+        svc.exposure = exposure
+        link(session, src=svc, dst=host, relation="runs_on")
+    session.flush()
+
+    line = _exposure_evidence(session, [host])[host.id][0]
+    assert "1 of 2 listening services" in line and "sshd tcp/22" in line
