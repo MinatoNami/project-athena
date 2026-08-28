@@ -21,6 +21,10 @@ x-core: &core
     ATHENA_AI_MODE: ${ATHENA_AI_MODE:-local_only}
     ATHENA_LLM_BASE_URL: ${ATHENA_LLM_BASE_URL:-http://127.0.0.1:1234}
     ATHENA_LLM_MODEL: ${ATHENA_LLM_MODEL:-}
+    # Declared so it can be tuned per deployment. A .env entry alone only reaches
+    # compose's own substitution, never the container, so setting it there without
+    # this line changes nothing and looks like it should have.
+    ATHENA_AI_BUDGET_CALLS: ${ATHENA_AI_BUDGET_CALLS:-500}
     ATHENA_ENVIRONMENT: ${ATHENA_ENVIRONMENT:-production}
     ATHENA_COOKIE_SECURE: ${ATHENA_COOKIE_SECURE:-true}
   secrets: [db_password, master_key, node_signing_key]
