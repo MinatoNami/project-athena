@@ -271,7 +271,36 @@ def get_finding(
         ),
         "investigation": _investigation_of(session, finding),
         "risk_explained": _risk_explained(session, finding),
+        "remediation": _remediation(session, finding, asset, component),
     }
+
+
+def _remediation(session: Session, finding: Finding, asset: Asset, component: Component):
+    """What kind of fix this needs, and where the change has to be made.
+
+    Derived rather than stored: it is a function of facts already on the finding, so
+    computing it here means it can never describe a state the finding has left.
+    """
+    from athena.db.models import AssetComponent
+    from athena.remediation import plan_for
+
+    scope = session.execute(
+        select(AssetComponent.scope).where(
+            AssetComponent.asset_id == finding.asset_id,
+            AssetComponent.component_id == finding.component_id,
+        )
+    ).scalars().first()
+
+    return plan_for(
+        ecosystem=component.ecosystem,
+        package=component.name,
+        installed_version=component.version,
+        fixed_version=finding.fixed_version,
+        asset_kind=asset.kind,
+        asset_name=asset.display_name,
+        scope=scope,
+        fix_channel=finding.fix_channel,
+    ).as_dict()
 
 
 def _risk_explained(session: Session, finding: Finding) -> dict[str, Any] | None:
