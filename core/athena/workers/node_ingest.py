@@ -28,6 +28,7 @@ from athena.inventory.service import (
     start_scan,
 )
 from athena.queue import publish
+from athena.remediation import link_image_source
 from athena.queue.registry import handler
 
 log = structlog.get_logger(__name__)
@@ -340,6 +341,9 @@ def _docker(session, *, asset: Asset, data: dict) -> dict[str, Any]:
             display_name=f"{repo}:{tag}",
             attributes={"repository": repo, "tag": tag, "digest": digest},
         )
+        # A repository registered last week should not need revisiting because a
+        # new tag was pushed this morning.
+        link_image_source(session, image_asset)
         images_by_ref[f"{repo}:{tag}"] = image_asset
 
     containers = 0

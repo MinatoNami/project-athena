@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from athena.remediation.source import SourceRef
+
 # Ecosystems whose packages are installed by a distribution's package manager rather
 # than by an application's manifest.
 DISTRO_ECOSYSTEMS = {"deb", "rpm", "apk"}
@@ -89,6 +91,7 @@ def plan_for(
     asset_name: str,
     scope: str | None,
     fix_channel: str | None,
+    source: SourceRef | None = None,
 ) -> RemediationPlan:
     """Classify one finding and describe the route to fixing it.
 
@@ -124,7 +127,7 @@ def plan_for(
     if ecosystem in DISTRO_ECOSYSTEMS:
         return _distro_plan(
             ecosystem=ecosystem, package=package, fixed_version=fixed_version,
-            asset_kind=asset_kind, asset_name=asset_name,
+            asset_kind=asset_kind, asset_name=asset_name, source=source,
         )
 
     if scope == "transitive":
@@ -146,28 +149,60 @@ def plan_for(
             ],
         )
 
+    change_at, unknowns = _change_site(
+        asset_kind=asset_kind, asset_name=asset_name, artefact="manifest", source=source
+    )
     return RemediationPlan(
         klass=RemediationClass.DEPENDENCY,
         summary=f"Upgrade {package} from {installed_version} to {fixed_version}.",
         command=_manifest_command(ecosystem, package, fixed_version),
-        change_at=(
-            f"the manifest that builds {asset_name}"
-            if asset_kind == "image"
-            else asset_name
-        ),
-        unknowns=(
-            [
-                f"Which repository builds {asset_name} — no source is registered "
-                "for it, so the change cannot be located automatically"
-            ]
-            if asset_kind == "image"
-            else []
-        ),
+        change_at=change_at,
+        unknowns=unknowns,
     )
 
 
+def _change_site(
+    *, asset_kind: str, asset_name: str, artefact: str, source: SourceRef | None
+) -> tuple[str, list[str]]:
+    """Where a change has to be made, and what remains unsettled about getting there.
+
+    Shared by both image classes on purpose. A manifest and a Dockerfile are found the
+    same way — through the repository that builds the image — and the previous version
+    of this module answered the question twice, which is how the two answers start to
+    disagree.
+    """
+    if asset_kind != "image":
+        return asset_name, []
+
+    if source is None:
+        return (
+            f"the {artefact} that builds {asset_name}",
+            [
+                f"Which repository builds {asset_name} — no source is registered "
+                "for it, so the change cannot be located automatically"
+            ],
+        )
+
+    site = f"the {artefact} in {source.repository}"
+    hint, scanned = source.commit_hint, source.scanned_commit
+
+    # A tag that is seven hex characters is a build convention, not a record — until
+    # it turns out to be a prefix of a commit that repository actually has. At that
+    # point it is no longer a coincidence, and the checkout to work from is known.
+    if hint and scanned and scanned.startswith(hint):
+        return f"{site}, at commit {hint}", []
+    if hint:
+        return site, [
+            f"Whether the source has moved since {asset_name} was built — its tag "
+            f"implies commit {hint}, which is a build convention rather than "
+            f"anything {asset_name} records"
+        ]
+    return site, [f"Which commit {asset_name} was built from — its tag does not say"]
+
+
 def _distro_plan(
-    *, ecosystem: str, package: str, fixed_version: str, asset_kind: str, asset_name: str
+    *, ecosystem: str, package: str, fixed_version: str, asset_kind: str, asset_name: str,
+    source: SourceRef | None = None,
 ) -> RemediationPlan:
     """A distribution package. Where it lives decides who can fix it.
 
@@ -177,6 +212,9 @@ def _distro_plan(
     restart — the image has to be rebuilt.
     """
     if asset_kind == "image":
+        change_at, unknowns = _change_site(
+            asset_kind=asset_kind, asset_name=asset_name, artefact="Dockerfile", source=source
+        )
         return RemediationPlan(
             klass=RemediationClass.BASE_IMAGE,
             summary=(
@@ -185,10 +223,11 @@ def _distro_plan(
             ),
             # No command on purpose: upgrading inside a running container is undone by
             # the next restart, and offering the command invites exactly that.
-            change_at=f"the Dockerfile behind {asset_name}",
+            change_at=change_at,
             actionable=False,
             blocked_by="the image has to be rebuilt; patching a running container does not persist",
             unknowns=[
+                *unknowns,
                 f"Which base image {asset_name} is built from",
                 "Whether a rebuilt base already carries the fix",
             ],

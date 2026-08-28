@@ -282,7 +282,7 @@ def _remediation(session: Session, finding: Finding, asset: Asset, component: Co
     computing it here means it can never describe a state the finding has left.
     """
     from athena.db.models import AssetComponent
-    from athena.remediation import plan_for
+    from athena.remediation import plan_for, source_for
 
     scope = session.execute(
         select(AssetComponent.scope).where(
@@ -300,6 +300,7 @@ def _remediation(session: Session, finding: Finding, asset: Asset, component: Co
         asset_name=asset.display_name,
         scope=scope,
         fix_channel=finding.fix_channel,
+        source=source_for(session, asset),
     ).as_dict()
 
 

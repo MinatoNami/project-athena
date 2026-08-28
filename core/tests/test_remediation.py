@@ -129,3 +129,69 @@ def test_every_class_is_reachable():
         RemediationClass.OS_PACKAGE, RemediationClass.BASE_IMAGE,
         RemediationClass.TRANSITIVE, RemediationClass.DEPENDENCY,
     }
+
+
+# ── where the change goes, once the source is known ──────────────────────────
+
+
+def _source(**kw):
+    from athena.remediation import SourceRef
+
+    base = dict(
+        repository="project-athena",
+        clone_url="https://github.com/example/project-athena.git",
+        default_branch="main",
+    )
+    return SourceRef(**{**base, **kw})
+
+
+def test_a_registered_source_turns_a_dead_end_into_a_file_to_edit():
+    """The difference the link makes: the same finding stops saying "somewhere"."""
+    without = _plan(ecosystem="npm", package="tar")
+    with_source = _plan(ecosystem="npm", package="tar", source=_source())
+
+    assert "no source is registered" in " ".join(without.unknowns)
+    assert with_source.change_at == "the manifest in project-athena"
+    assert not any("no source is registered" in u for u in with_source.unknowns)
+
+
+def test_a_base_image_rebuild_is_located_the_same_way():
+    """A Dockerfile is found through the repository exactly as a manifest is. The
+    two answers are computed once so they cannot drift apart."""
+    p = _plan(ecosystem="deb", package="zlib1g", source=_source())
+    assert p.klass is RemediationClass.BASE_IMAGE
+    assert p.change_at == "the Dockerfile in project-athena"
+    assert p.command is None
+
+
+def test_a_tag_that_looks_like_a_commit_is_not_treated_as_one():
+    """Seven hex characters is a build convention, not a record. Until it is
+    corroborated it is reported as an inference and nothing more."""
+    p = _plan(ecosystem="npm", source=_source(commit_hint="cfbe483"))
+    assert p.change_at == "the manifest in project-athena"
+    assert any("build convention" in u and "cfbe483" in u for u in p.unknowns)
+
+
+def test_a_tag_matching_a_real_commit_stops_being_a_guess():
+    """A tag that turns out to be a prefix of a commit that repository actually has
+    is no longer a coincidence, and the checkout to work from is known."""
+    p = _plan(
+        ecosystem="npm",
+        source=_source(commit_hint="cfbe483", scanned_commit="cfbe483d9a71c0ff1e2b"),
+    )
+    assert p.change_at == "the manifest in project-athena, at commit cfbe483"
+    assert p.unknowns == []
+
+
+def test_a_tag_that_says_nothing_admits_the_revision_is_unknown():
+    p = _plan(ecosystem="npm", asset_name="app:latest", source=_source())
+    assert any("does not say" in u for u in p.unknowns)
+
+
+def test_a_host_finding_is_unaffected_by_source_registration():
+    """Source location is an image problem. A host's package manager installs onto
+    the host, and a repository has nothing to do with it."""
+    p = _plan(ecosystem="deb", asset_kind="host", asset_name="node-1", source=_source())
+    assert p.klass is RemediationClass.OS_PACKAGE
+    assert p.change_at == "node-1"
+    assert p.unknowns == []

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from athena.api.deps import Principal, current_principal, db
 from athena.audit import record
+from athena.remediation import link_built_images
 from athena.db.models import (
     Asset,
     AssetComponent,
@@ -35,6 +36,11 @@ class RegisterRepository(BaseModel):
     default_branch: str | None = None
     tier: str = "unknown"
     owner: str | None = None
+    # The images this repository builds, named the way the runtime reports them
+    # (`lumaindex-frontend`, no tag). Nothing in an image records the source that
+    # produced it, so this is the only way the two are ever connected — and it is
+    # what turns an image finding from "upgrade this somewhere" into a file to edit.
+    builds: list[str] = Field(default_factory=list, max_length=200)
 
 
 class ClassifyGroup(BaseModel):
@@ -121,7 +127,11 @@ def register_repository(
         kind=AssetKind.REPOSITORY,
         identity_key=key,
         display_name=body.display_name or key,
-        attributes={"clone_url": body.url, "default_branch": body.default_branch},
+        attributes={
+            "clone_url": body.url,
+            "default_branch": body.default_branch,
+            "builds": [n.strip() for n in body.builds if n.strip()],
+        },
         tier=body.tier,
         owner=body.owner,
     )
@@ -132,6 +142,11 @@ def register_repository(
         subject=f"asset:{asset.id}",
         detail={"kind": "repository", "identity_key": key},
     )
+    # Reported rather than left silent. Matching is exact on the image name, so a
+    # name that does not match the runtime's spelling links nothing — and the only
+    # moment anybody can correct that is now, while they are looking at what they
+    # typed. A zero here against a non-empty `builds` is the whole signal.
+    linked = link_built_images(session, asset)
     enqueue(
         session,
         kind="scan.repository",
@@ -139,7 +154,7 @@ def register_repository(
         payload={"asset_id": str(asset.id)},
         priority=3,
     )
-    return {"created": created, **_serialise(asset)}
+    return {"created": created, "images_linked": linked, **_serialise(asset)}
 
 
 # ── classification ───────────────────────────────────────────────────────────
