@@ -6,6 +6,7 @@ handler is written so that no failure path can leave an asset looking inventorie
 
 from __future__ import annotations
 
+import pathlib
 from typing import Any
 
 import structlog
@@ -21,7 +22,7 @@ from athena.inventory.service import (
 )
 from athena.queue import publish
 from athena.queue.registry import handler
-from athena.scanners import syft
+from athena.scanners import manifests, syft
 from athena.scanners.git import CheckoutError, clone, remove_checkout
 from athena.scanners.sandbox import SandboxError
 
@@ -64,6 +65,17 @@ def scan_repository(payload: dict[str, Any]) -> dict[str, Any]:
 
         components, warnings, notes = syft.parse(result.json())
 
+        # The one check the SBOM cannot perform on itself. Syft reported 754 npm
+        # packages for this repository and nothing else, and every downstream check
+        # asked whether what it found was sound — none could ask whether it had
+        # looked at `core/pyproject.toml` at all. Reading the tree answers that.
+        declared = manifests.declarations(pathlib.Path(get_settings().work_dir) / checkout)
+        manifest_gaps = manifests.gaps(declared, {c.ecosystem for c in components})
+        # First, not appended. A whole ecosystem being invisible outranks any
+        # number of individually unresolved artifacts, and the sample kept on the
+        # run is capped at ten.
+        warnings = manifest_gaps + warnings
+
     except CheckoutError as exc:
         _record_failure(asset_id, None, str(exc), status="failed")
         return {"status": "failed", "reason": "clone failed"}
@@ -92,15 +104,15 @@ def scan_repository(payload: dict[str, Any]) -> dict[str, Any]:
             stats={
                 "components": count,
                 "commit": commit,
+                "manifests": [
+                    {"path": d.path, "ecosystem": d.ecosystem, "declared": d.declared}
+                    for d in declared
+                ],
                 "warnings": len(warnings),
                 "warning_sample": warnings[:10],
                 "notes": sorted(set(notes))[:10],
             },
-            error=(
-                f"{len(warnings)} component(s) could not be fully resolved"
-                if warnings
-                else None
-            ),
+            error=_gap_summary(warnings, gap_count=len(manifest_gaps)),
         )
         asset.attributes = {**asset.attributes, "last_commit": commit}
 
@@ -123,6 +135,24 @@ def scan_repository(payload: dict[str, Any]) -> dict[str, Any]:
         "warnings": len(warnings),
         "notes": len(set(notes)),
     }
+
+
+def _gap_summary(warnings: list[str], *, gap_count: int) -> str | None:
+    """One line saying what kind of incompleteness this was.
+
+    An ecosystem nothing was found for and an artifact whose version would not resolve
+    are both gaps, but only the first means a part of the repository was never read —
+    so the summary leads with it rather than reporting a single count for both.
+    """
+    if not warnings:
+        return None
+    unresolved = len(warnings) - gap_count
+    parts = []
+    if gap_count:
+        parts.append(f"{gap_count} declared ecosystem(s) produced no components")
+    if unresolved > 0:
+        parts.append(f"{unresolved} component(s) could not be fully resolved")
+    return "; ".join(parts)
 
 
 def _record_failure(
