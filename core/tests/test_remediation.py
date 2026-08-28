@@ -64,7 +64,9 @@ def test_the_same_package_inside_an_image_is_a_rebuild_not_a_command():
     assert p.klass is RemediationClass.BASE_IMAGE
     assert p.command is None
     assert "rebuilt" in p.blocked_by
-    assert "Dockerfile" in p.change_at
+    # Where the Dockerfile actually is, once a source is registered, is the subject of
+    # test_a_base_image_rebuild_is_located_the_same_way. Naming one for an image with
+    # no registered source is a separate mistake, covered separately.
 
 
 # ── transitive dependencies ──────────────────────────────────────────────────
@@ -103,7 +105,7 @@ def test_an_image_dependency_admits_it_cannot_find_the_source():
     is registered for it — so the plan says so rather than implying the change can be
     made on the image."""
     p = _plan(asset_kind="image", asset_name="app:2026.3")
-    assert "manifest that builds" in p.change_at
+    assert p.change_at == "wherever app:2026.3 is built or pulled from"
     assert any("no source is registered" in u for u in p.unknowns)
 
 
@@ -195,3 +197,18 @@ def test_a_host_finding_is_unaffected_by_source_registration():
     assert p.klass is RemediationClass.OS_PACKAGE
     assert p.change_at == "node-1"
     assert p.unknowns == []
+
+
+def test_an_unsourced_image_is_not_assumed_to_be_one_you_build():
+    """Half an estate's images are pulled. There is no Dockerfile of yours behind
+    `caddy:2-alpine`, and naming one sends somebody hunting for a file that does not
+    exist before they work out why."""
+    p = _plan(ecosystem="apk", package="curl", asset_name="caddy:2-alpine")
+    assert p.klass is RemediationClass.BASE_IMAGE
+    assert "Dockerfile" not in p.change_at
+    assert any("build or one you pull" in u for u in p.unknowns)
+
+
+def test_the_entitlement_channel_reads_as_english():
+    p = _plan(ecosystem="deb", asset_kind="host", fix_channel="esm")
+    assert "subscription to ESM" in (p.blocked_by or "")

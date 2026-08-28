@@ -120,7 +120,7 @@ def plan_for(
             ),
             change_at=asset_name,
             actionable=False,
-            blocked_by=f"the fix requires a {fix_channel.upper()} subscription",
+            blocked_by=f"the fix requires a subscription to {fix_channel.upper()}",
             unknowns=["Whether this host carries that entitlement"],
         )
 
@@ -175,11 +175,17 @@ def _change_site(
         return asset_name, []
 
     if source is None:
+        # Deliberately does not name the artefact. Half this estate's images are
+        # pulled, not built, and there is no Dockerfile of yours behind `caddy:2-alpine`
+        # — sending somebody to edit one wastes the search before they conclude it
+        # does not exist. Which of the two this is cannot be told from the image, so
+        # it is asked rather than assumed.
         return (
-            f"the {artefact} that builds {asset_name}",
+            f"wherever {asset_name} is built or pulled from",
             [
-                f"Which repository builds {asset_name} — no source is registered "
-                "for it, so the change cannot be located automatically"
+                f"Whether {asset_name} is an image you build or one you pull — no "
+                "source is registered for it, so the change cannot be located "
+                "automatically"
             ],
         )
 
