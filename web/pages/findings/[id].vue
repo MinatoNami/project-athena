@@ -12,7 +12,7 @@ const route = useRoute()
 const { data: me } = await useMe()
 if (!me.value) await navigateTo('/login')
 
-const tab = ref<'verdict' | 'risk' | 'evidence' | 'advisory'>('verdict')
+const tab = ref<'verdict' | 'fix' | 'risk' | 'evidence' | 'advisory'>('verdict')
 
 const { data, pending, error, refresh } = await useAsyncData(`finding-${route.params.id}`, () =>
   api<any>(`findings/${route.params.id}`),
@@ -63,8 +63,37 @@ function evidenceLabel(s: any) {
   return s.evidence?.length ? s.evidence.join(', ') : 'nothing cited'
 }
 
+// Named for what the operator has to do about it, not for the taxonomy. Nobody
+// arrives wanting to know that something is `base_image`; they want to know that the
+// command they were about to run will not survive a restart.
+const FIX_KIND: Record<string, string> = {
+  os_package: 'The package manager installs this',
+  base_image: 'This needs the image rebuilt',
+  dependency: 'This is a change to a manifest',
+  transitive: 'Something else has to move first',
+  no_fix: 'There is nothing to install yet',
+  entitlement: 'The fix is behind a subscription',
+  unknown: 'Not enough is recorded to say',
+}
+
+const fix = computed(() => data.value?.remediation ?? null)
+
+const copied = ref(false)
+async function copyCommand() {
+  if (!fix.value?.command) return
+  try {
+    await navigator.clipboard.writeText(fix.value.command)
+    copied.value = true
+    setTimeout(() => { copied.value = false }, 1600)
+  } catch {
+    // A refused clipboard is not worth an error state — the text is on screen and
+    // selectable, which is what it was there for.
+  }
+}
+
 const tabs = [
   { id: 'verdict', label: 'Verdict' },
+  { id: 'fix', label: 'Fix' },
   { id: 'risk', label: 'Why this score' },
   { id: 'evidence', label: 'Raw evidence' },
   { id: 'advisory', label: 'Advisory' },
@@ -290,6 +319,58 @@ const tabs = [
       </div>
 
       <!-- ══ Why this score ══ -->
+      <!-- ══ Fix ══ -->
+      <div v-else-if="tab === 'fix'" class="narrow">
+        <StateBlock v-if="!fix" kind="never" title="No route to a fix has been worked out">
+          This finding has not been classified, so nothing here would be more than a
+          guess about where the change belongs.
+        </StateBlock>
+
+        <template v-else>
+          <div class="card" :class="{ blocked: !fix.actionable }">
+            <div class="lbl">{{ FIX_KIND[fix.class] ?? FIX_KIND.unknown }}</div>
+            <p class="fixsummary"><UntrustedText :text="fix.summary" /></p>
+
+            <!-- Deliberately absent for a transitive dependency and for a package
+                 baked into an image: there is no command that would work, and
+                 offering a plausible one invites exactly the wrong attempt. -->
+            <div v-if="fix.command" class="cmdrow">
+              <code class="cmd">{{ fix.command }}</code>
+              <button class="btn" @click="copyCommand">{{ copied ? 'Copied' : 'Copy' }}</button>
+            </div>
+            <p v-else-if="fix.actionable" class="fine">
+              This ecosystem has no single command worth pretending to; the change is
+              made by editing the manifest.
+            </p>
+
+            <div class="kv"><span>Change it at</span>
+              <span class="muted"><UntrustedText :text="fix.change_at" /></span></div>
+          </div>
+
+          <!-- Why it cannot be done now sits on its own, above the unknowns: it is a
+               different kind of statement from "we did not check". -->
+          <div v-if="fix.blocked_by" class="card blocked">
+            <div class="lbl warn">Not actionable yet</div>
+            <p class="rationale">
+              Blocked because <UntrustedText :text="fix.blocked_by" />.
+            </p>
+          </div>
+
+          <div v-if="fix.unknowns?.length" class="card">
+            <div class="lbl">Could not determine</div>
+            <ul class="unknowns">
+              <li v-for="(u, n) in fix.unknowns" :key="`f${n}`">
+                <span class="hatchdot hatch" /><UntrustedText :text="u" />
+              </li>
+            </ul>
+            <p class="fine">
+              Worked out from what has been recorded about this finding, not from
+              anything anyone has attempted. Nothing here has been applied or tested.
+            </p>
+          </div>
+        </template>
+      </div>
+
       <div v-else-if="tab === 'risk'" class="narrow">
         <StateBlock v-if="!risk" kind="never" title="No score to explain">
           Nothing has been scored for this finding yet.
@@ -460,6 +541,13 @@ const tabs = [
 .hatchdot { width: 11px; height: 11px; flex-shrink: 0; border-radius: 2px;
             border: 1px solid var(--rule); transform: translateY(1px); }
 .fine { margin: .6rem 0 0; font-size: .72rem; line-height: 1.5; color: var(--ink-muted); }
+
+.card.blocked { border-left: 3px solid var(--warn); }
+.fixsummary { margin: .35rem 0 0; font-size: .92rem; line-height: 1.55; color: var(--ink); }
+.cmdrow { display: flex; align-items: center; gap: .5rem; margin: .7rem 0 .2rem; }
+.cmd { flex-grow: 1; min-width: 0; overflow-x: auto; white-space: pre;
+       background: var(--plane); border: 1px solid var(--rule); border-radius: 6px;
+       padding: .45rem .6rem; font-size: .78rem; }
 
 .kv { display: flex; justify-content: space-between; gap: .6rem; padding: .24rem 0;
       font-size: .79rem; color: var(--ink-2); }
