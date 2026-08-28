@@ -284,6 +284,10 @@ def _exposure_evidence(session: Session, assets: list[Asset]) -> dict[Any, list[
     ).all()
     host_of = dict(runs)
 
+    # Oldest first, so a later observation of the same container overwrites an
+    # earlier one. A container recreated under the same name, or observed once by an
+    # agent too old to report ports, would otherwise contribute two contradictory
+    # lines about the same thing — and a reader has no way to tell which is current.
     rows = session.execute(
         select(AssetEdge.dst_id, Asset)
         .join(Asset, Asset.id == AssetEdge.src_id)
@@ -292,7 +296,9 @@ def _exposure_evidence(session: Session, assets: list[Asset]) -> dict[Any, list[
             AssetEdge.relation == "built_from",
             Asset.tombstoned_at.is_(None),
         )
+        .order_by(Asset.last_seen)
     ).all()
+    latest: dict[tuple[Any, str], str] = {}
     for image_id, container in rows:
         where = f" on {host_of[container.id]}" if container.id in host_of else ""
         ports = container.attributes.get("published_ports")
@@ -303,7 +309,9 @@ def _exposure_evidence(session: Session, assets: list[Asset]) -> dict[Any, list[
             how = "publishing no ports"
         else:
             how = f"publishing {ports}"
-        out.setdefault(image_id, []).append(f"{container.display_name}{where}, {how}")
+        latest[(image_id, container.display_name)] = f"{container.display_name}{where}, {how}"
+    for (image_id, _), line in latest.items():
+        out.setdefault(image_id, []).append(line)
 
     # A host speaks for itself: its own listening sockets were observed directly.
     for host in (a for a in assets if a.kind == "host"):

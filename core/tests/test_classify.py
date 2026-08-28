@@ -267,3 +267,30 @@ def test_a_host_speaks_for_itself(session):
 
     line = _exposure_evidence(session, [host])[host.id][0]
     assert "1 of 2 listening services" in line and "sshd tcp/22" in line
+
+
+def test_the_same_container_observed_twice_yields_one_current_line(session):
+    """A container recreated under the same name, or seen once by an agent too old to
+    report ports, would otherwise contribute two contradictory lines about the same
+    thing — and a reader has no way to tell which is current."""
+    from datetime import UTC, datetime, timedelta
+
+    from athena.api.routers.assets import _exposure_evidence
+
+    host = _host(session)
+    image = _asset(session, AssetKind.IMAGE, "lumaindex-backend:1")
+    old = _asset(session, AssetKind.CONTAINER, "old-record")
+    old.display_name = "lumaindex-backend-1"
+    old.last_seen = datetime.now(UTC) - timedelta(days=2)
+    new = _asset(session, AssetKind.CONTAINER, "new-record")
+    new.display_name = "lumaindex-backend-1"
+    new.attributes = {**new.attributes, "published_ports": "8000/tcp"}
+    new.last_seen = datetime.now(UTC)
+    for c in (old, new):
+        link(session, src=c, dst=host, relation="runs_on")
+        link(session, src=c, dst=image, relation="built_from")
+    session.flush()
+
+    lines = _exposure_evidence(session, [image])[image.id]
+    assert len(lines) == 1
+    assert "publishing 8000/tcp" in lines[0]
