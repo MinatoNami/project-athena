@@ -25,6 +25,10 @@ x-core: &core
     # compose's own substitution, never the container, so setting it there without
     # this line changes nothing and looks like it should have.
     ATHENA_AI_BUDGET_CALLS: ${ATHENA_AI_BUDGET_CALLS:-500}
+    # all | low | medium | high | critical — the severity at or above which a
+    # finding earns a model call. Declared here and not only in .env, because
+    # compose substitution reads .env but does not pass it into a container.
+    ATHENA_INVESTIGATION_FLOOR: ${ATHENA_INVESTIGATION_FLOOR:-all}
     ATHENA_ENVIRONMENT: ${ATHENA_ENVIRONMENT:-production}
     ATHENA_COOKIE_SECURE: ${ATHENA_COOKIE_SECURE:-true}
   secrets: [db_password, master_key, node_signing_key]
