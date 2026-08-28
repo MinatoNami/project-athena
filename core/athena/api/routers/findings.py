@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from athena.api.deps import Principal, current_principal, db
 from athena.audit import record
+from athena.config import get_settings
 from athena.db.models import (
     AffectedRange,
     Asset,
@@ -20,6 +21,7 @@ from athena.db.models import (
 from athena.findings import FindingQuery, query_findings
 from athena.findings.query import DEFAULT_LIMIT, MAX_LIMIT, SORTS
 from athena.intel.ingest import source_health
+from athena.investigation.priority import decide
 from athena.queue import enqueue
 
 router = APIRouter(tags=["findings"])
@@ -256,6 +258,7 @@ def get_finding(
             for r in ranges
         ],
         "not_yet_investigated": finding.risk_band is None,
+        "deferred": _deferred(finding, asset, vulnerability),
         "risk_band": finding.risk_band,
         "risk_score": finding.risk_score,
         "confidence": finding.confidence,
@@ -273,6 +276,36 @@ def get_finding(
         "risk_explained": _risk_explained(session, finding),
         "remediation": _remediation(session, finding, asset, component),
     }
+
+
+def _deferred(finding: Finding, asset: Asset, vulnerability) -> dict[str, Any] | None:
+    """Whether the configured floor is why nothing has looked at this.
+
+    Computed here rather than stored, from the same function the scheduler applies, so
+    the page cannot claim a finding is waiting its turn when the scheduler will never
+    select it — nor go on calling it deferred after the floor has moved.
+
+    None means the floor is not the reason. An already-investigated finding returns
+    None too: what the floor would say about it now is of no consequence once the work
+    has been done.
+    """
+    if finding.investigation_id is not None:
+        return None
+    decision = decide(
+        {
+            "advisory": {
+                "severity": vulnerability.severity,
+                "cvss": vulnerability.cvss_score,
+                "epss": vulnerability.epss_score,
+                "known_exploited": vulnerability.kev,
+            },
+            "asset": {"tier": asset.tier, "exposure": asset.exposure},
+        },
+        floor=get_settings().investigation_floor,
+    )
+    if decision.investigate:
+        return None
+    return {"reason": decision.reason, "floor": get_settings().investigation_floor}
 
 
 def _remediation(session: Session, finding: Finding, asset: Asset, component: Component):

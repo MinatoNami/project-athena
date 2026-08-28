@@ -165,8 +165,22 @@ const tabs = [
         </div>
       </div>
 
-      <!-- Not investigated is its own state, never a low score. -->
-      <div v-if="data.not_yet_investigated" class="banner">
+      <!-- Not investigated is its own state, never a low score. And "waiting its
+           turn" is not the same as "the floor will never select it" — a page that
+           says the first while the second is true is telling the operator something
+           is coming that is not. -->
+      <div v-if="data.deferred" class="banner">
+        <strong>This has not been investigated, and will not be at the current
+          setting.</strong>
+        <UntrustedText :text="data.deferred.reason" />
+        <span class="fineline">
+          The investigation floor is set to “{{ data.deferred.floor }}”. Known-exploited,
+          CVSS 9+, EPSS 10%+ and internet-facing production findings are investigated
+          regardless of it.
+        </span>
+      </div>
+
+      <div v-else-if="data.not_yet_investigated" class="banner">
         <strong>This has not been investigated.</strong>
         It is a version match against a published advisory. Nothing has checked whether
         the component runs here, is reachable, or is exploitable — so it has no score,

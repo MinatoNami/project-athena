@@ -129,6 +129,14 @@ class Settings(BaseSettings):
     # legible and other work keeps moving.
     triage_batch: int = 40
 
+    # Severity at or above which a finding earns a model call: all | low | medium |
+    # high | critical. `all` is the default because an upgrade must not quietly stop
+    # investigating things a deployment was already looking at. Findings below the
+    # floor are not closed, scored or dismissed — they stay listed as unexamined and
+    # return the moment the floor moves. Known-exploited, CVSS 9+, EPSS 10%+ and
+    # internet-facing production findings are investigated regardless.
+    investigation_floor: str = "all"
+
     log_level: str = "INFO"
     environment: str = Field(default="production")
 

@@ -120,11 +120,18 @@ def _sweep_correlation(session, last_run: dict[str, float], now: float) -> None:
 
 
 def _sweep_triage(session, last_run: dict[str, float], now: float) -> None:
-    """Hand untriaged findings to triage, most consequential first.
+    """Feed the model loop, most consequential first, subject to the floor.
 
-    Triage decides which earn a full investigation and enqueues those itself, so this
-    sweep only has to feed it. Ordering by exploitation and severity means that if the
-    budget runs out, what got done was the part that mattered.
+    Two populations, one sweep. A finding nobody has triaged needs the cheap call that
+    decides whether it earns the expensive one. A finding triage already accepted, and
+    whose investigation never ran, needs the expensive one directly.
+
+    The second case is not hypothetical: 528 findings had been triaged as worth
+    investigating and were waiting for a job that no longer existed. Their
+    `investigate.finding` jobs had exhausted their retries while the budget was spent,
+    and the sweep only ever selected untriaged rows — so nothing would ever have
+    looked at them again. Ordering by exploitation and severity means that when the
+    budget does run out, what got done was the part that mattered.
     """
     if now - last_run.get("triage-sweep", 0) < TRIAGE_SWEEP_INTERVAL:
         return
@@ -133,6 +140,7 @@ def _sweep_triage(session, last_run: dict[str, float], now: float) -> None:
     from sqlalchemy import text
 
     from athena.config import get_settings
+    from athena.investigation.priority import decide
     from athena.llm.budget import current
     from athena.queue import enqueue
 
@@ -143,32 +151,61 @@ def _sweep_triage(session, last_run: dict[str, float], now: float) -> None:
         log.warning("scheduler.ai_budget_exhausted", **budget.as_dict())
         return
 
+    floor = get_settings().investigation_floor
     batch = min(get_settings().triage_batch, budget.remaining)
+
+    # Selected wider than the batch and filtered in Python, because the floor is one
+    # rule and it is written once. Expressing it a second time in SQL is how the
+    # scheduler and the finding page come to disagree about what was skipped.
     rows = session.execute(
         text(
             """
-            SELECT f.id::text
+            SELECT f.id::text, f.triage_disposition, v.severity, v.cvss_score,
+                   v.epss_score, v.kev, a.tier, a.exposure
               FROM finding f
               JOIN vulnerability v ON v.id = f.vulnerability_id
+              JOIN asset a ON a.id = f.asset_id
              WHERE f.state = 'discovered'
-               AND f.triage_disposition IS NULL
+               AND f.investigation_id IS NULL
+               AND (f.triage_disposition IS NULL OR f.triage_disposition = 'investigate')
              ORDER BY v.kev DESC,
                       COALESCE(v.cvss_score, 0) DESC,
                       COALESCE(v.epss_score, 0) DESC,
                       f.first_seen
-             LIMIT :batch
+             LIMIT :scan
             """
         ),
-        {"batch": batch},
+        {"scan": max(batch * 20, 500)},
     ).all()
 
-    for (finding_id,) in rows:
+    queued = deferred = 0
+    for row in rows:
+        if queued >= batch:
+            break
+        facts = {
+            "advisory": {
+                "severity": row.severity, "cvss": row.cvss_score,
+                "epss": row.epss_score, "known_exploited": row.kev,
+            },
+            "asset": {"tier": row.tier, "exposure": row.exposure},
+        }
+        if not decide(facts, floor=floor).investigate:
+            deferred += 1
+            continue
+        # Untriaged findings need the cheap decision first; ones triage already
+        # accepted go straight to the loop it never got to run.
+        kind = "triage.finding" if row.triage_disposition is None else "investigate.finding"
         enqueue(
-            session, kind="triage.finding", key=finding_id,
-            payload={"finding_id": finding_id}, priority=6,
+            session, kind=kind, key=row[0],
+            payload={"finding_id": row[0]}, priority=6 if kind == "triage.finding" else 5,
         )
-    if rows:
-        log.info("scheduler.triage_queued", count=len(rows), budget_remaining=budget.remaining)
+        queued += 1
+
+    if queued or deferred:
+        log.info(
+            "scheduler.triage_queued", count=queued, deferred_below_floor=deferred,
+            floor=floor, budget_remaining=budget.remaining,
+        )
 
 
 def _sweep_images(session, last_run: dict[str, float], now: float) -> None:

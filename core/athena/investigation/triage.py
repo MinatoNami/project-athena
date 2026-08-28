@@ -21,6 +21,7 @@ from typing import Any
 
 import structlog
 
+from athena.investigation.priority import always_investigate
 from athena.llm import ModelUnavailable, complete_json
 
 log = structlog.get_logger(__name__)
@@ -73,25 +74,10 @@ class Triage:
     duration_ms: int = 0
 
 
-def _hard_gates(facts: dict[str, Any]) -> str | None:
-    """Reasons a finding is always investigated, whatever triage thinks.
-
-    These are in code rather than in the prompt because they are requirements. A
-    model asked nicely not to skip known-exploited vulnerabilities will still
-    occasionally skip one.
-    """
-    advisory = facts.get("advisory") or {}
-    asset = facts.get("asset") or {}
-
-    if advisory.get("known_exploited"):
-        return "known to be exploited in the wild"
-    if (advisory.get("cvss") or 0) >= 9.0:
-        return f"CVSS {advisory['cvss']}"
-    if (advisory.get("epss") or 0) >= 0.1:
-        return f"EPSS {advisory['epss']:.0%} — materially likely to be exploited"
-    if asset.get("exposure") == "internet" and asset.get("tier") == "production":
-        return "internet-facing production asset"
-    return None
+# The gates live in `priority` now: the scheduler has to apply the same ones when it
+# decides what to spend on, and two copies of "never skip a KEV entry" is one copy too
+# many. Re-exported so the name still reads at the call site below.
+_hard_gates = always_investigate
 
 
 def triage(facts: dict[str, Any]) -> Triage:
