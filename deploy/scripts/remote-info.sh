@@ -16,7 +16,8 @@ free_gb="$(df -Pk / | awk 'NR==2 {print int($4/1048576)}')"
 busy=""
 deploy_dir="$HOME/${ATHENA_REMOTE_DIR:-athena}/deploy"
 if [[ -f "$deploy_dir/.env" ]]; then
-    # shellcheck disable=SC1090
+    # Written on the host at deploy time, so there is no file to follow at lint time.
+    # shellcheck source=/dev/null
     . "$deploy_dir/.env" 2>/dev/null || true
 
     ours=""

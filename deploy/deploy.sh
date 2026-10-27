@@ -203,6 +203,9 @@ do_deploy() {
   info "Dashboard: http://${bind:-127.0.0.1}:${port:-8080}${base:-/}"
   if [[ "${bind:-127.0.0.1}" == "127.0.0.1" ]]; then
     info "Bound to loopback. To reach it over the tailnet, set ATHENA_WEB_BIND in"
+    # The tilde is the remote home and stays literal: $HOME would expand here and
+    # point the operator at a path on their own machine.
+    # shellcheck disable=SC2088
     info "~/$REMOTE_DIR/deploy/.env to the host's tailnet IP and re-run deploy."
   fi
 }
