@@ -279,7 +279,6 @@ def _apply(
         if finding is None:
             return {}
 
-        asset = session.get(Asset, finding.asset_id)
         risk = score(signals_for(session, finding, verdict))
 
         _notify_if_worth_it(session, finding, verdict, risk)

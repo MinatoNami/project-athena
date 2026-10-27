@@ -46,7 +46,8 @@ def test_process_names_are_extracted_from_ss_output(raw, expected):
 
 
 def _ports_payload(*ports):
-    return [{"port": p, "protocol": "tcp", "address": "0.0.0.0"} for p in ports]
+    # The address the agent reported a service listening on, not one we bind.
+    return [{"port": p, "protocol": "tcp", "address": "0.0.0.0"} for p in ports]  # noqa: S104
 
 
 def _host_for_ports(session):

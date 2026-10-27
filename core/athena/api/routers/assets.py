@@ -10,8 +10,6 @@ from sqlalchemy.orm import Session
 
 from athena.api.deps import Principal, current_principal, db
 from athena.audit import record
-from athena.inventory.classify import mark_operator
-from athena.remediation import link_built_images
 from athena.db.models import (
     Asset,
     AssetComponent,
@@ -22,9 +20,11 @@ from athena.db.models import (
     ScanRun,
     Vulnerability,
 )
+from athena.inventory.classify import mark_operator
 from athena.inventory.identity import AssetKind, IdentityError, identity_for
 from athena.inventory.service import coverage, is_stale, register_asset
 from athena.queue import enqueue
+from athena.remediation import link_built_images
 
 router = APIRouter(tags=["inventory"])
 

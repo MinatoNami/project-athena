@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import select
 
-from athena.db.models import Asset, Finding, IntelSource, Notification, Suppression, Vulnerability
+from athena.db.models import Asset, Finding, IntelSource, Vulnerability
 from athena.metrics import all_metrics, sla_report
 from athena.metrics.service import (
     MIN_FOR_RATE,
@@ -22,7 +22,6 @@ from athena.metrics.service import (
     false_positive_rate,
     investigation_quality,
     mean_time_to_remediation,
-    notification_precision,
     patch_success_rate,
 )
 
