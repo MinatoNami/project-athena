@@ -115,3 +115,28 @@ pip install -e ".[dev]"
 pytest tests/test_boundaries.py tests/test_envelope.py    # no database needed
 ATHENA_TEST_DB_URL=postgresql+psycopg://... pytest         # full suite
 ```
+
+### Linting and formatting
+
+```bash
+cd core
+ruff check athena tests     # the whole lint gate; run it before pushing
+```
+
+**`ruff format` is not run on this repository, and CI does not check it.** The code is
+hand-wrapped throughout — keyword arguments grouped onto shared lines, trailing
+comments aligned, query chains left on one line where they read as one thought — and
+the formatter disagrees with that in most of the package. Running it would rewrite
+those files without changing what any of them do.
+
+So if your editor formats with Ruff on save, turn that off for this repository.
+Otherwise an unrelated change will arrive carrying a rewrite of everything it touched,
+and the diff will be unreviewable. Adopting the formatter is a reasonable thing to
+decide — it is one command — but it is a decision to make deliberately, with the diff
+in front of you, not a side effect of editing one function.
+
+Ruff itself is pinned to an exact version in `core/pyproject.toml`, and CI installs
+from there, so the lint result you get locally is the one CI gets. A new ruff ships new
+rules under the selections this project enables, which is how an unchanged commit
+otherwise goes red on a later run. Upgrading means moving that pin and fixing what the
+new version finds, in the same change.

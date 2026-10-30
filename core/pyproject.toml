@@ -18,7 +18,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "ruff>=0.8", "mypy>=1.13"]
+# Ruff is pinned exactly, and the others are not, because only ruff decides whether
+# CI is green. A new ruff ships new rules under the `E`/`F`/`I`/`UP`/`B`/`S`
+# selections below, so a floor like `>=0.8` lets an unchanged commit go red on a
+# later run for a reason nobody introduced. Upgrading is then done deliberately, by
+# moving this pin and fixing what the new version finds in the same change — and
+# because CI installs from here, the version a contributor runs is the version that
+# judges them.
+dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "ruff==0.17.3", "mypy>=1.13"]
 
 [project.scripts]
 athena = "athena.cli:main"

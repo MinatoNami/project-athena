@@ -28,15 +28,18 @@ jobs:
 
       - run: pip install -e ".[dev]"
 
-      # `ruff format --check` is deliberately not part of this gate. The formatter
-      # disagrees with the hand-wrapped style used throughout core — grouped keyword
-      # arguments, aligned trailing comments — in 88 of 143 files, and it has never
-      # once passed: it was chained after `ruff check` with `&&`, and `ruff check`
-      # failed first, so the format half never ran and its failure never showed up in
-      # a log. Adopting the formatter would rewrite most of the package and is a style
-      # decision to take on purpose, not one to make while repairing CI.
+      # `ruff format --check` is deliberately not part of this gate: the formatter
+      # disagrees with this package's hand-wrapped style in most of its files, so
+      # adopting it would rewrite them, and that is a decision to take on purpose
+      # rather than while repairing CI. What contributors need to know about it lives
+      # under "Linting and formatting" in README.md, where they will look for it.
+      #
+      # The version is printed because the pin in core/pyproject.toml is what makes a
+      # failure here reproducible locally, and a log that names it saves the guess.
       - name: Lint
-        run: ruff check athena tests
+        run: |
+          ruff --version
+          ruff check athena tests
 
       # These gates are security controls, not style. They run before anything else
       # that could mask a failure.
