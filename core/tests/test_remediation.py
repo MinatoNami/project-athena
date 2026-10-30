@@ -9,8 +9,6 @@ sends somebody to the wrong one is worse than no plan, because they will try it.
 
 from __future__ import annotations
 
-import pytest
-
 from athena.remediation import RemediationClass, plan_for
 
 

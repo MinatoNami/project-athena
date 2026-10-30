@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from athena.api.deps import Principal, current_principal, db
-from athena.db.models import Asset, Finding, Suppression, Vulnerability
+from athena.db.models import Asset, Finding, Suppression
 from athena.suppression import (
     REASON_CODES,
     SuppressionError,

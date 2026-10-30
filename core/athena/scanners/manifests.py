@@ -196,7 +196,7 @@ def _cargo(text: str) -> tuple[str, int]:
     except tomllib.TOMLDecodeError:
         return "cargo", 0
     return "cargo", len(doc.get("dependencies") or {}) + len(
-        (doc.get("dev-dependencies") or {})
+        doc.get("dev-dependencies") or {}
     )
 
 

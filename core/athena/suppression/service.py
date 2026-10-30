@@ -178,7 +178,9 @@ def create_suppression(
     existing = session.execute(
         select(Suppression).where(
             Suppression.vulnerability_id == finding.vulnerability_id,
-            Suppression.asset_id.is_(None) if asset_id is None else Suppression.asset_id == asset_id,
+            Suppression.asset_id.is_(None)
+            if asset_id is None
+            else Suppression.asset_id == asset_id,
             Suppression.component_id.is_(None)
             if component_id is None
             else Suppression.component_id == component_id,

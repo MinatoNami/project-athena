@@ -29,8 +29,8 @@ from athena.inventory.service import (
     start_scan,
 )
 from athena.queue import publish
-from athena.remediation import link_image_source
 from athena.queue.registry import handler
+from athena.remediation import link_image_source
 
 log = structlog.get_logger(__name__)
 
