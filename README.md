@@ -135,8 +135,8 @@ and the diff will be unreviewable. Adopting the formatter is a reasonable thing 
 decide — it is one command — but it is a decision to make deliberately, with the diff
 in front of you, not a side effect of editing one function.
 
-Ruff itself is pinned to an exact version in `core/pyproject.toml`, and CI installs
-from there, so the lint result you get locally is the one CI gets. A new ruff ships new
-rules under the selections this project enables, which is how an unchanged commit
-otherwise goes red on a later run. Upgrading means moving that pin and fixing what the
-new version finds, in the same change.
+Ruff and pytest are both pinned to exact versions in `core/pyproject.toml`, and CI
+installs from there, so the result you get locally is the one CI gets. Both have turned
+an unchanged commit red before — ruff by shipping new rules under the selections this
+project enables, pytest by changing which warnings are fatal — so upgrading either
+means moving the pin and fixing what the new version finds, in the same change.

@@ -18,14 +18,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Ruff is pinned exactly, and the others are not, because only ruff decides whether
-# CI is green. A new ruff ships new rules under the `E`/`F`/`I`/`UP`/`B`/`S`
-# selections below, so a floor like `>=0.8` lets an unchanged commit go red on a
-# later run for a reason nobody introduced. Upgrading is then done deliberately, by
-# moving this pin and fixing what the new version finds in the same change — and
-# because CI installs from here, the version a contributor runs is the version that
-# judges them.
-dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "ruff==0.17.3", "mypy>=1.13"]
+# The two tools CI's verdict depends on are pinned exactly; mypy is not, because
+# nothing runs it in CI. A floor lets an unchanged commit go red on a later run for
+# a reason nobody introduced, which is not hypothetical here: ruff ships new rules
+# under the `E`/`F`/`I`/`UP`/`B`/`S` selections below, and pytest 9.2.0 began
+# applying `filterwarnings` to warnings raised during `pytest_configure`, which
+# turned an unused plugin's deprecation notice into a collection-time crash three
+# days after this suite last passed. Upgrading either is now a deliberate change:
+# move the pin, fix what the new version finds, in the same commit. CI installs from
+# here, so the version that judges a contributor is the one they ran.
+#
+# pytest-asyncio was the plugin in question and is not a dependency any more: there
+# is no `async` anywhere in tests/, so it was loaded on every run, used by nothing.
+# Anything that needs it should add it back along with the async tests that justify it.
+dev = ["pytest==9.2.0", "ruff==0.17.3", "mypy>=1.13"]
 
 [project.scripts]
 athena = "athena.cli:main"
