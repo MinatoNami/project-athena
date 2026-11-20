@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NamedTuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -10,8 +10,6 @@ from sqlalchemy.orm import Session
 
 from athena.api.deps import Principal, current_principal, db
 from athena.audit import record
-from athena.inventory.classify import mark_operator
-from athena.remediation import link_built_images
 from athena.db.models import (
     Asset,
     AssetComponent,
@@ -19,12 +17,16 @@ from athena.db.models import (
     Component,
     Finding,
     MergeCandidate,
+    Node,
     ScanRun,
     Vulnerability,
 )
+from athena.inventory.classify import mark_operator
 from athena.inventory.identity import AssetKind, IdentityError, identity_for
 from athena.inventory.service import coverage, is_stale, register_asset
+from athena.nodes.dispatch import enqueue_collection
 from athena.queue import enqueue
+from athena.remediation import link_built_images
 
 router = APIRouter(tags=["inventory"])
 
@@ -401,6 +403,7 @@ def get_asset(
         "merge_candidates": [
             {"id": str(m.id), "reason": m.reason, "confidence": m.confidence} for m in merges
         ],
+        "scan": _scan_offer(session, asset).as_json(),
     }
 
 
@@ -444,6 +447,74 @@ def update_asset(
     return _serialise(asset)
 
 
+# ── scanning on demand ───────────────────────────────────────────────────────
+
+# The kinds that have a scan of their own, and the job that performs it.
+SCAN_JOBS = {
+    AssetKind.REPOSITORY: "scan.repository",
+    AssetKind.IMAGE: "scan.image",
+}
+
+# A host is not in that table because nothing here scans a host: its inventory is
+# whatever its node reports, so the manual equivalent is to bring the next sweep
+# forward rather than to queue a scan.
+COLLECT = "collect"
+
+# Why the remaining kinds have no scan to run. Each is a deliberate decision made
+# elsewhere in the system, and the page has to be able to state it — an asset that
+# is covered by another route and an asset nobody looks at read identically when
+# the only answer is silence.
+NOT_SCANNED_DIRECTLY = {
+    # `_inherited_inventory` already counts a container as covered by the image it
+    # was built from, so a scan here would claim a second, weaker observation of
+    # the same packages.
+    AssetKind.CONTAINER: (
+        "A container's packages come from the image it was built from — scan that image instead."
+    ),
+    AssetKind.SERVICE: "A service is observed by the node on its host, not scanned on its own.",
+    AssetKind.NETWORK_HOST: (
+        "A network host is only ever seen from the outside, so there is nothing here "
+        "to look inside."
+    ),
+}
+
+NO_NODE = "No node is enrolled for this host, so there is nothing to collect from."
+
+
+class ScanOffer(NamedTuple):
+    """What asking for a scan right now would do, and when it would do nothing, why.
+
+    One rule, read twice: the asset page consults it to decide whether to offer the
+    button, and the endpoint consults it again to decide what to run. Expressed
+    separately the two would drift, and the drift reads as a button that fails when
+    pressed — which is what it did on every asset that was not a repository.
+    """
+
+    action: str | None
+    reason: str | None = None
+    node: Node | None = None
+
+    def as_json(self) -> dict[str, Any]:
+        return {
+            "supported": self.action is not None,
+            "action": self.action,
+            "reason": self.reason,
+        }
+
+
+def _scan_offer(session: Session, asset: Asset) -> ScanOffer:
+    if asset.kind == AssetKind.HOST:
+        node = session.execute(
+            select(Node).where(Node.asset_id == asset.id, Node.revoked_at.is_(None))
+        ).scalars().first()
+        return ScanOffer(COLLECT, node=node) if node is not None else ScanOffer(None, NO_NODE)
+    if (job_kind := SCAN_JOBS.get(asset.kind)) is not None:
+        return ScanOffer(job_kind)
+    return ScanOffer(
+        None, NOT_SCANNED_DIRECTLY.get(asset.kind, f"A {asset.kind} asset is not scanned.")
+    )
+
+
 @router.post("/assets/{asset_id}/scan", status_code=status.HTTP_202_ACCEPTED)
 def rescan(
     asset_id: str,
@@ -453,15 +524,17 @@ def rescan(
     asset = session.get(Asset, asset_id)
     if asset is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such asset")
-    if asset.kind != AssetKind.REPOSITORY:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"Scanning {asset.kind} assets is not implemented yet",
-        )
+
+    offer = _scan_offer(session, asset)
+    if offer.action is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, offer.reason)
+
+    if offer.action == COLLECT:
+        return _collect_from_host(session, asset, offer.node, principal)
 
     job = enqueue(
         session,
-        kind="scan.repository",
+        kind=offer.action,
         key=f"{asset.id}:{datetime.now(UTC).isoformat(timespec='seconds')}",
         payload={"asset_id": str(asset.id)},
         priority=3,
@@ -471,9 +544,41 @@ def rescan(
         actor=principal.actor,
         action="SCAN_REQUESTED",
         subject=f"asset:{asset.id}",
-        detail={"job_id": job.id if job else None},
+        detail={"job_id": job.id if job else None, "kind": offer.action},
     )
-    return {"queued": job is not None, "job_id": job.id if job else None}
+    return {
+        "queued": job is not None,
+        "job_id": job.id if job else None,
+        # Deduplication is on pending jobs, so a second press in the same second
+        # finds the first still queued. Said plainly, because "queued" twice over
+        # would promise two scans where there is one.
+        "message": "Scan queued." if job else "A scan is already queued for this asset.",
+    }
+
+
+def _collect_from_host(
+    session: Session, asset: Asset, node: Node, principal: Principal
+) -> dict[str, Any]:
+    """Bring this host's next observe sweep forward."""
+    created = enqueue_collection(session, node)
+    record(
+        session,
+        actor=principal.actor,
+        action="SCAN_REQUESTED",
+        subject=f"asset:{asset.id}",
+        detail={"node_id": str(node.id), "tasks": created},
+    )
+    return {
+        "queued": created > 0,
+        "tasks": created,
+        # Nothing created means every capability already has a task the node has not
+        # answered: a sweep in flight, which is not the same as a refusal.
+        "message": (
+            f"Collection queued: {created} task(s) for {node.display_name}."
+            if created
+            else "A collection sweep is already in flight for this host."
+        ),
+    }
 
 
 @router.get("/coverage")

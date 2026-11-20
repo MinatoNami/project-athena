@@ -76,6 +76,21 @@ const FIX_KIND: Record<string, string> = {
   unknown: 'Not enough is recorded to say',
 }
 
+/**
+ * The scoring arithmetic as bars. Weights are small numbers whose *relative* size
+ * is the point — which is precisely what a column of two-decimal figures hides and
+ * a bar shows. The exact values stay one click away in the table view.
+ */
+const riskFactors = computed(() =>
+  Object.entries(risk.value?.factors ?? {})
+    .map(([name, v]) => ({
+      label: pretty(String(name)),
+      value: Math.round(Number(v) * 100) / 100,
+      exact: Number(v).toFixed(2),
+    }))
+    .sort((a, b) => b.value - a.value),
+)
+
 const fix = computed(() => data.value?.remediation ?? null)
 
 const copied = ref(false)
@@ -249,7 +264,35 @@ const tabs = [
                   inv.verdict === 'applicable' ? 'Applies to this asset'
                   : inv.verdict === 'not_applicable' ? 'Does not apply here'
                   : 'Could not be settled' }}</span>
-                <span class="conf">confidence {{ (inv.confidence * 100).toFixed(0) }}%</span>
+              </div>
+              <div class="vstats">
+                <StatTile
+                  label="Confidence"
+                  :value="`${(inv.confidence * 100).toFixed(0)}%`"
+                  :progress="inv.confidence"
+                  :status="inv.confidence < 0.5 ? 'warn' : 'good'"
+                  :target="inv.confidence < 0.5 ? 'inconclusive' : undefined"
+                />
+                <StatTile
+                  label="Signals settled"
+                  :value="settled.length"
+                  :of="`of ${allSignals.length} checked`"
+                  :progress="allSignals.length ? settled.length / allSignals.length : null"
+                />
+                <StatTile
+                  v-if="unsettled.length"
+                  label="Left open"
+                  :value="unsettled.length"
+                  of="could not be determined"
+                  status="warn"
+                />
+                <StatTile
+                  v-if="inv.corrections?.length"
+                  label="Self-corrections"
+                  :value="inv.corrections.length"
+                  of="model overruled by code"
+                  status="warn"
+                />
               </div>
               <p class="rationale"><UntrustedText :text="inv.rationale || ''" /></p>
             </div>
@@ -390,18 +433,16 @@ const tabs = [
           Nothing has been scored for this finding yet.
         </StateBlock>
         <template v-else>
-          <div class="card">
-            <div class="lbl">How {{ risk.score }} was reached</div>
-            <table class="sig">
-              <thead><tr><th>Factor</th><th>Weight</th></tr></thead>
-              <tbody>
-                <tr v-for="(v, k) in risk.factors" :key="k">
-                  <td class="sname">{{ pretty(String(k)) }}</td>
-                  <td class="mono tnum sval">{{ Number(v).toFixed(2) }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          <ChartFrame
+            :title="`How ${risk.score} was reached`"
+            note="weight each factor contributed"
+            :table="{
+              columns: ['Factor', 'Weight'],
+              rows: riskFactors.map(f => [f.label, f.exact]),
+            }"
+          >
+            <ChartBars :rows="riskFactors" summary="Risk score contribution by factor" />
+          </ChartFrame>
           <div v-if="risk.overrides?.length" class="card">
             <div class="lbl">Overrides applied, in order</div>
             <ol class="overrides">
@@ -530,6 +571,7 @@ const tabs = [
         padding: .85rem 1rem; }
 .card.overruled { border-left: 3px solid var(--warn); }
 .lbl.warn { color: var(--warn-ink); }
+.vstats { display: flex; flex-wrap: wrap; gap: 1.6rem; margin: .6rem 0 .2rem; }
 .verdicthead { display: flex; align-items: baseline; gap: .65rem; margin-bottom: .45rem; flex-wrap: wrap; }
 .verdict { font-size: .95rem; font-weight: 640; }
 .conf { font-size: .76rem; color: var(--ink-muted); }

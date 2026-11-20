@@ -19,6 +19,8 @@
   --sev-critical: #66201f;
   --sev-high: #8e2f2c;
   --sev-medium: #b54840;
+  --sev-low: #d1685f;
+  --sev-informational: #e5948c;
   --sev-on-dark: #fcfcfb;
   color-scheme: light;
 }
@@ -38,6 +40,8 @@
     --sev-critical: #f9bcb3;
     --sev-high: #eb9086;
     --sev-medium: #d4695f;
+    --sev-low: #ae4a43;
+    --sev-informational: #8a3733;
     --sev-on-dark: #1a1a19;
     color-scheme: dark;
   }
@@ -58,6 +62,8 @@
   --sev-critical: #f9bcb3;
   --sev-high: #eb9086;
   --sev-medium: #d4695f;
+  --sev-low: #ae4a43;
+  --sev-informational: #8a3733;
   --sev-on-dark: #1a1a19;
   color-scheme: dark;
 }

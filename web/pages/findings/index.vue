@@ -149,6 +149,28 @@ function clearAll() {
   debounced.value = ''
 }
 
+const { severity } = useChartTheme()
+
+/**
+ * The shape of what the current filters actually select.
+ *
+ * Read from `matching` rather than from the loaded rows: the list is paged, so
+ * counting what is on screen would draw the first fifty and call it the estate.
+ * Unassessed groups have no band at all and are stated in the caption instead of
+ * being folded into the mildest one.
+ */
+const bands = computed(() =>
+  (['critical', 'high', 'medium', 'low', 'informational'] as const)
+    .map(name => ({
+      label: name,
+      value: facetCount(`band:${name}`).matching,
+      color: severity.value[name],
+    }))
+    .filter(r => r.value > 0),
+)
+
+const unbanded = computed(() => facetCount('band:unassessed').matching)
+
 function ageLabel(seconds: number | null) {
   if (seconds === null) return 'never'
   if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`
@@ -190,13 +212,48 @@ function instanceLines(g: any) {
       </div>
     </div>
 
-    <!-- The two populations, stated once and compactly rather than as a wall of text. -->
-    <div v-if="data" class="mix">
-      <strong>{{ (data.assessed_count ?? 0).toLocaleString() }}</strong> of
-      <strong>{{ (data.instance_count ?? 0).toLocaleString() }}</strong> findings have been
-      investigated on the asset that carries them. The rest are version matches only —
-      nothing has checked whether they run, are reachable, or are exploitable here.
+    <!-- The two populations, as figures rather than a paragraph. The caveat stays:
+         an un-investigated finding is a version match, not a confirmed one. -->
+    <div v-if="data" class="summary">
+      <StatTile
+        label="Investigated"
+        :value="(data.assessed_count ?? 0).toLocaleString()"
+        :of="`of ${(data.instance_count ?? 0).toLocaleString()} findings`"
+        :progress="data.instance_count ? data.assessed_count / data.instance_count : null"
+        hint="the rest are version matches only"
+      />
+      <StatTile
+        label="Known-exploited"
+        :value="facetCount('kev').matching"
+        :of="`of ${facetCount('kev').total} in the estate`"
+        :status="facetCount('kev').matching ? 'bad' : null"
+      />
+      <StatTile
+        label="No fix published"
+        :value="facetCount('no_fix').matching"
+        of="clock has not started"
+      />
+      <p class="caveat">
+        A finding nobody has investigated is a version match — nothing has checked
+        whether it runs, is reachable, or is exploitable here.
+      </p>
     </div>
+
+    <ChartFrame
+      v-if="data"
+      title="Worst band reached"
+      :note="unbanded
+        ? `${unbanded.toLocaleString()} more match but have no band — nothing has assessed them`
+        : 'across everything the current filters select'"
+      :empty="!bands.length"
+      :empty-text="unbanded
+        ? `All ${unbanded.toLocaleString()} matching groups are unassessed, so none has a band yet.`
+        : 'Nothing matches the current filters.'"
+      :table="{ columns: ['Band', 'Groups'], rows: bands.map(b => [b.label, b.value]) }"
+      class="distribution"
+    >
+      <ChartBars :rows="bands" unit="groups" summary="Matching finding groups by worst band" />
+    </ChartFrame>
 
     <div v-if="intel && !intel.sources.length" class="mix warn">
       <strong>No intelligence has been fetched.</strong>
@@ -386,6 +443,14 @@ function instanceLines(g: any) {
 </template>
 
 <style scoped>
+.summary {
+  display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: flex-start;
+  border: 1px solid var(--rule); border-radius: 9px; background: var(--surface);
+  padding: .72rem .95rem; margin-bottom: .7rem;
+}
+.caveat { margin: 0 0 0 auto; max-width: 20rem; font-size: .71rem; line-height: 1.45;
+          color: var(--ink-muted); }
+.distribution { margin-bottom: .9rem; }
 .mix {
   border: 1px solid var(--rule); border-left: 3px solid var(--rule);
   border-radius: 7px; background: var(--surface); padding: .6rem .8rem;

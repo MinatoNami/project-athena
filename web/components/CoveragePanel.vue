@@ -1,6 +1,13 @@
 <script setup lang="ts">
-/** Coverage is reported as prominently as findings. A gap must never read as clean. */
-defineProps<{
+/**
+ * Coverage, reported as prominently as findings — a gap must never read as clean.
+ *
+ * Three states, three bars: read recently, read but past its window, and never read
+ * at all. The third is the one that matters, so it is drawn dashed in the colour the
+ * rest of the product uses for "nobody has looked" rather than shaded like a smaller
+ * version of the other two.
+ */
+const props = defineProps<{
   coverage: {
     assets_total: number
     assets_fresh: number
@@ -11,49 +18,75 @@ defineProps<{
     never_scanned: Array<{ id: string; kind: string; display_name: string }>
   }
 }>()
+
+const { theme } = useChartTheme()
+
+const rows = computed(() => {
+  const c = props.coverage
+  return [
+    { label: 'read recently', value: c.assets_fresh ?? 0, color: theme.value.good },
+    { label: 'past its window', value: c.assets_stale ?? 0, color: theme.value.warnInk },
+    {
+      label: 'never read',
+      value: c.assets_never_scanned ?? 0,
+      color: theme.value.crit,
+      dashed: true,
+      hint: 'contents unknown, not clean',
+    },
+  ].filter(r => r.value > 0)
+})
 </script>
 
 <template>
-  <div class="card">
-    <h2>Coverage</h2>
-    <p v-if="!coverage.assets_total" class="muted">
-      No assets registered yet. Nothing is being watched.
-    </p>
-    <template v-else>
-      <div class="bar" role="img"
-           :aria-label="`${coverage.assets_fresh} of ${coverage.assets_total} assets inventoried recently`">
-        <span class="seg ok" :style="{ flex: coverage.assets_fresh || 0 }" />
-        <span class="seg stale" :style="{ flex: coverage.assets_stale || 0 }" />
-        <span class="seg never" :style="{ flex: coverage.assets_never_scanned || 0 }" />
-      </div>
-      <p class="legend">
-        <strong>{{ coverage.assets_fresh }}</strong> of
-        <strong>{{ coverage.assets_total }}</strong> assets inventoried recently
-        <template v-if="coverage.assets_stale"> · <span class="stale-ink">{{ coverage.assets_stale }} stale</span></template>
-        <template v-if="coverage.assets_never_scanned"> · <span class="never-ink">{{ coverage.assets_never_scanned }} never scanned</span></template>
-      </p>
-      <p v-if="coverage.inconclusive_scans_24h" class="muted">
-        {{ coverage.inconclusive_scans_24h }} scan(s) failed or completed only partly in the
-        last 24h. Those assets are reported as unknown, not clean.
-      </p>
-      <ul v-if="coverage.never_scanned.length" class="gaps">
-        <li v-for="a in coverage.never_scanned.slice(0, 5)" :key="a.id">
-          <NuxtLink :to="`/assets/${a.id}`">{{ a.display_name }}</NuxtLink>
-          <span class="muted"> — {{ a.kind }}, contents unknown</span>
-        </li>
-      </ul>
-    </template>
+  <div v-if="!coverage.assets_total" class="card">
+    <span class="lbl">Coverage</span>
+    <p class="muted">No assets registered. Nothing is being watched.</p>
+  </div>
+
+  <div v-else class="wrapper">
+    <div class="tiles">
+      <StatTile
+        label="Assets read"
+        :value="coverage.assets_fresh"
+        :of="`of ${coverage.assets_total}`"
+        :progress="coverage.assets_total ? coverage.assets_fresh / coverage.assets_total : null"
+        :status="coverage.assets_never_scanned ? 'warn' : 'good'"
+      />
+      <StatTile
+        label="Never read"
+        :value="coverage.assets_never_scanned"
+        :of="coverage.assets_never_scanned ? 'contents unknown' : 'none'"
+        :status="coverage.assets_never_scanned ? 'bad' : null"
+      />
+      <StatTile
+        v-if="coverage.inconclusive_scans_24h"
+        label="Inconclusive scans"
+        :value="coverage.inconclusive_scans_24h"
+        of="in the last 24h — reported unknown"
+        status="warn"
+      />
+    </div>
+
+    <ChartFrame
+      title="Coverage"
+      note="dashed means nothing has read it"
+      :table="{ columns: ['State', 'Assets'], rows: rows.map(r => [r.label, r.value]) }"
+    >
+      <ChartBars :rows="rows" unit="assets" summary="Assets by how recently they were read" />
+    </ChartFrame>
+
+    <ul v-if="coverage.never_scanned.length" class="gaps">
+      <li v-for="a in coverage.never_scanned.slice(0, 5)" :key="a.id">
+        <NuxtLink :to="`/assets/${a.id}`">{{ a.display_name }}</NuxtLink>
+        <span class="muted"> — {{ a.kind }}, unread</span>
+      </li>
+    </ul>
   </div>
 </template>
 
 <style scoped>
-.bar { display: flex; height: .55rem; border-radius: 99px; overflow: hidden; background: var(--rule); gap: 2px; }
-.seg { display: block; }
-.seg.ok { background: var(--good); }
-.seg.stale { background: var(--warn); }
-.seg.never { background: var(--crit); }
-.legend { margin: .7rem 0 .25rem; font-size: .9rem; }
-.stale-ink { color: var(--warn-ink); }
-.never-ink { color: var(--crit); font-weight: 600; }
-.gaps { margin: .5rem 0 0; padding-left: 1.1rem; font-size: .88rem; }
+.wrapper { display: flex; flex-direction: column; gap: .7rem; margin-bottom: 1rem; }
+.tiles { display: flex; gap: 1.8rem; flex-wrap: wrap; border: 1px solid var(--rule);
+         border-radius: 9px; background: var(--surface); padding: .72rem .95rem; }
+.gaps { margin: 0; padding-left: 1.1rem; font-size: .8rem; color: var(--ink-2); }
 </style>

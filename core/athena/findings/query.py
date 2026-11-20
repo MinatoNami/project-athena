@@ -348,6 +348,17 @@ def _facet_counts(session: Session, query: FindingQuery, *, with_facets: bool) -
                 func.count().filter(sub.c[f"exposure_{value}"] > 0).label(f"exposure:{value}")
                 for value in ("internet", "internal", "isolated", "unknown")
             ],
+            # The worst band each group reached, counted across the estate. `-1` is
+            # its own bucket rather than folded into `informational`: a group nothing
+            # has assessed has no band, and charting it as the mildest one would be
+            # the "unknown rendered as clean" this product exists to refuse.
+            *[
+                func.count().filter(sub.c.worst_rank == rank).label(f"band:{name}")
+                for rank, name in (
+                    (4, "critical"), (3, "high"), (2, "medium"),
+                    (1, "low"), (0, "informational"), (-1, "unassessed"),
+                )
+            ],
             func.coalesce(func.sum(sub.c.instance_count), 0).label("instances"),
             func.coalesce(func.sum(sub.c.investigated_count), 0).label("assessed_instances"),
         ).select_from(sub)
@@ -419,6 +430,8 @@ def query_findings(session: Session, query: FindingQuery) -> Page:
             "assessed", "unassessed", "kev", "has_fix", "no_fix", "spread",
             "needs_attention", "exposure:internet", "exposure:internal",
             "exposure:isolated", "exposure:unknown",
+            "band:critical", "band:high", "band:medium", "band:low",
+            "band:informational", "band:unassessed",
         )
     }
 

@@ -173,6 +173,23 @@ def test_facets_report_both_what_exists_and_what_survives(session, estate):
     assert filtered.facets["assessed"]["matching"] <= filtered.facets["assessed"]["total"]
 
 
+def test_band_facets_keep_the_unassessed_in_their_own_bucket(session, estate):
+    """The distribution chart reads these directly.
+
+    A group nothing has assessed has no band at all. Folding it into
+    `informational` would draw the estate's unknown portion as its mildest, which is
+    the one thing rule 1 forbids — so it is counted separately and charted
+    separately.
+    """
+    facets = query_findings(session, FindingQuery(limit=100)).facets
+    bands = {name: facets[f"band:{name}"]["total"] for name in
+             ("critical", "high", "medium", "low", "informational", "unassessed")}
+    assert bands == {"critical": 1, "high": 0, "medium": 1, "low": 1,
+                     "informational": 0, "unassessed": 1}
+    # Every group lands in exactly one bucket, so the chart's total is the estate.
+    assert sum(bands.values()) == query_findings(session, FindingQuery(limit=100)).group_count
+
+
 def test_instances_obey_the_same_filters_as_the_groups(session, estate):
     """Filtering to internet-facing assets and then listing every asset in the group
     would answer a different question from the one asked."""
