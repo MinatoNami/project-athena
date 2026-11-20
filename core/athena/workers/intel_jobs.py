@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -10,7 +11,7 @@ from athena.audit import record
 from athena.correlation import correlate_advisory, correlate_asset
 from athena.correlation.engine import stale_findings
 from athena.db.base import session_scope
-from athena.db.models import Asset
+from athena.db.models import Asset, IntelSource, Vulnerability
 from athena.intel import feeds
 from athena.intel.ingest import (
     apply_epss,
@@ -117,7 +118,7 @@ def poll_kev(payload: dict[str, Any]) -> dict[str, Any]:
 @handler("intel.poll.epss")
 def poll_epss(payload: dict[str, Any]) -> dict[str, Any]:
     try:
-        scores = feeds.fetch_epss()
+        scores, meta = feeds.fetch_epss()
     except feeds.FeedError as exc:
         with session_scope() as session:
             record_source_result(session, name="epss", succeeded=False, error=str(exc))
@@ -129,10 +130,106 @@ def poll_epss(payload: dict[str, Any]) -> dict[str, Any]:
         with session_scope() as session:
             updated += apply_epss(session, dict(entries[start : start + 5000]))
 
+    model = meta.get("model_version")
     with session_scope() as session:
-        record_source_result(session, name="epss", succeeded=True, advisories=len(scores))
-    log.info("intel.epss", scored=len(scores), matched=updated)
-    return {"status": "ok", "scored": len(scores), "matched": updated}
+        record_source_result(
+            session, name="epss", succeeded=True, advisories=len(scores),
+            # The cursor carries the model, so the intel page can say which EPSS the
+            # scores on every finding came from.
+            cursor=f"{model}@{meta.get('score_date', '')}" if model else None,
+        )
+    log.info("intel.epss", scored=len(scores), matched=updated, model=model)
+    return {"status": "ok", "scored": len(scores), "matched": updated, "model": model}
+
+
+# How long CISA's answer is trusted before asking again. Vulnrichment updates about
+# twice a day, but an assessment, once written, rarely moves.
+VULNRICHMENT_RECHECK_DAYS = 7
+VULNRICHMENT_BATCH = 200
+
+
+@handler("intel.enrich.vulnrichment")
+def enrich_vulnrichment(payload: dict[str, Any]) -> dict[str, Any]:
+    """Fetch CISA's SSVC assessment for CVEs that have findings here.
+
+    Only those: the corpus holds hundreds of thousands of CVEs and CISA's file for
+    each is a separate request, while the ones that matter are the few hundred that
+    matched something in this estate. Unchecked ones go first.
+
+    A CISA "poc" or "active" sets `exploit_public` — the one risk input nothing else
+    in Athena could establish — and a rescore follows, because that input moves the
+    exploitation factor.
+    """
+    from sqlalchemy import text
+
+    batch = int(payload.get("limit") or VULNRICHMENT_BATCH)
+    with session_scope() as session:
+        ids = [
+            row[0] for row in session.execute(
+                text(
+                    """
+                    SELECT v.id FROM vulnerability v
+                     WHERE v.id LIKE 'CVE-%'
+                       AND (v.ssvc_checked_at IS NULL
+                            OR v.ssvc_checked_at < now() - make_interval(days => :days))
+                       AND EXISTS (SELECT 1 FROM finding f
+                                    WHERE f.vulnerability_id = v.id
+                                      AND f.state NOT IN ('resolved', 'false_positive'))
+                     ORDER BY v.ssvc_checked_at NULLS FIRST, v.kev DESC, v.id
+                     LIMIT :limit
+                    """
+                ),
+                {"days": VULNRICHMENT_RECHECK_DAYS, "limit": batch},
+            )
+        ]
+
+    found = absent = failed = moved = 0
+    errors: list[str] = []
+    with feeds.http_client(timeout=30.0) as client:
+        for cve in ids:
+            try:
+                record = feeds.fetch_vulnrichment(client, cve)
+            except feeds.FeedError as exc:
+                failed += 1
+                errors.append(str(exc))
+                continue
+            assessment = feeds.parse_vulnrichment(record) if record else None
+            with session_scope() as session:
+                vulnerability = session.get(Vulnerability, cve)
+                if vulnerability is None:
+                    continue
+                exploited = (assessment or {}).get("exploitation") in ("poc", "active")
+                if assessment is not None and vulnerability.exploit_public != exploited:
+                    vulnerability.exploit_public = exploited
+                    moved += 1
+                vulnerability.ssvc_cisa = assessment
+                vulnerability.ssvc_checked_at = datetime.now(UTC)
+            if assessment:
+                found += 1
+            else:
+                absent += 1
+
+    with session_scope() as session:
+        # A run that could not reach CISA at all is a failure; one where some
+        # lookups failed is recorded as a success with the error kept, because the
+        # rest of the batch is real data and its age must not read as stale.
+        succeeded = not ids or failed < len(ids)
+        record_source_result(
+            session, name="vulnrichment", succeeded=succeeded, advisories=found,
+            error="; ".join(errors[:3]) if errors else None,
+        )
+        if succeeded and errors:
+            source = session.get(IntelSource, "vulnrichment")
+            source.last_error = f"{failed} of {len(ids)} lookups failed: {errors[0]}"[:2000]
+        if moved:
+            enqueue(
+                session, kind="rescore.findings",
+                key=f"vulnrichment:{datetime.now(UTC):%Y%m%d%H}", payload={}, priority=6,
+            )
+    log.info("intel.vulnrichment", checked=len(ids), found=found, absent=absent,
+             failed=failed, exploit_signal_changed=moved)
+    return {"checked": len(ids), "found": found, "absent": absent, "failed": failed,
+            "exploit_signal_changed": moved}
 
 
 @handler("correlate.advisory")

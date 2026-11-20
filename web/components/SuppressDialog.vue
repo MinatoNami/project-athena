@@ -46,6 +46,35 @@ const expiryRequired = computed(() => reasonCode.value === 'accepted_risk')
 const hint = computed(() => REASONS.find(r => r.code === reasonCode.value)?.hint ?? '')
 const tooShort = computed(() => reason.value.trim().length < 8)
 
+// A modal moves focus into itself, keeps it there, and gives it back on close.
+// Without this a keyboard user opened the dialog and stayed on the page beneath it.
+const dialog = ref<HTMLElement | null>(null)
+let returnTo: HTMLElement | null = null
+function focusables(): HTMLElement[] {
+  return [...(dialog.value?.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), textarea, select, input, [tabindex]:not([tabindex="-1"])',
+  ) ?? [])]
+}
+function onKey(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    emit('close')
+    return
+  }
+  if (e.key !== 'Tab') return
+  const items = focusables()
+  if (!items.length) return
+  const first = items[0]!
+  const last = items[items.length - 1]!
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+}
+onMounted(() => {
+  returnTo = document.activeElement as HTMLElement | null
+  nextTick(() => dialog.value?.querySelector<HTMLElement>('.reason.on, .reason')?.focus())
+})
+onBeforeUnmount(() => returnTo?.focus?.())
+
 async function submit() {
   saving.value = true
   failed.value = null
@@ -71,23 +100,27 @@ async function submit() {
 
 <template>
   <div class="backdrop" @click.self="emit('close')">
-    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="suppress-title">
+    <div ref="dialog" class="dialog" role="dialog" aria-modal="true" aria-labelledby="suppress-title"
+         @keydown="onKey">
       <h2 id="suppress-title">Stop showing this finding</h2>
       <p class="lead">
         <code>{{ vulnerabilityId }}</code> on <strong>{{ asset }}</strong>. It is not
         deleted — it stays counted, and comes back if what you are relying on changes.
       </p>
 
-      <label class="field">
-        <span class="lbl">Why</span>
+      <!-- A group of buttons is a fieldset, not a label: a label wrapping five buttons
+           made a click on its text press the first reason. -->
+      <fieldset class="field">
+        <legend class="lbl">Why</legend>
         <div class="reasons">
           <button
             v-for="r in REASONS" :key="r.code" type="button" class="reason"
-            :class="{ on: reasonCode === r.code }" @click="reasonCode = r.code"
+            :class="{ on: reasonCode === r.code }" :aria-pressed="reasonCode === r.code"
+            @click="reasonCode = r.code"
           >{{ r.label }}</button>
         </div>
         <span class="hint">{{ hint }}</span>
-      </label>
+      </fieldset>
 
       <label class="field">
         <span class="lbl">In your words</span>
@@ -167,7 +200,9 @@ textarea, select, input[type="date"] {
 }
 .hint { font-size: .71rem; color: var(--ink-muted); line-height: 1.45; }
 .hint.warn { color: var(--warn-ink); }
-.optional { font-size: .62rem; opacity: .7; text-transform: none; letter-spacing: 0; }
+.optional { font-size: var(--fs-2xs); color: var(--ink-muted); text-transform: none; letter-spacing: 0; }
 .failed { margin: 0; font-size: .78rem; color: var(--crit); }
 .acts { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .2rem; }
+fieldset.field { border: 0; padding: 0; margin: 0; min-width: 0; }
+fieldset.field legend { padding: 0; }
 </style>

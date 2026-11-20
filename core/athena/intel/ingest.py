@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 import structlog
@@ -11,6 +11,7 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.orm import Session
 
 from athena.db.models import AffectedRange, IntelSource
+from athena.intel import cvss
 from athena.intel.model import NormalisedAdvisory, content_hash
 
 log = structlog.get_logger(__name__)
@@ -51,11 +52,11 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
             INSERT INTO vulnerability (
                 id, aliases, summary, details, cwe, cvss_vector, cvss_score, severity,
                 published_at, modified_at, withdrawn_at, "references",
-                revision, revised_at, content_hash
+                revision, revised_at, content_hash, malicious
             ) VALUES (
                 :id, :aliases, :summary, :details, :cwe, :vector, :score, :severity,
                 :published, :modified, :withdrawn, CAST(:refs AS jsonb),
-                1, NULL, :hash
+                1, NULL, :hash, :malicious
             )
             ON CONFLICT (id) DO UPDATE SET
                 aliases     = ARRAY(SELECT DISTINCT unnest(
@@ -75,6 +76,9 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
                                    WHEN jsonb_array_length(EXCLUDED."references") > 0
                                    THEN EXCLUDED."references"
                                    ELSE vulnerability."references" END,
+                -- Sticky: once any source calls the package malware, a later
+                -- record that does not say so is silence, not a retraction.
+                malicious   = vulnerability.malicious OR EXCLUDED.malicious,
                 revision    = vulnerability.revision + 1,
                 revised_at  = :now,
                 content_hash = EXCLUDED.content_hash
@@ -87,7 +91,15 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
             "details": advisory.details,
             "cwe": advisory.cwe,
             "vector": advisory.cvss_vector,
-            "score": advisory.cvss_score,
+            # Computed here rather than by the parser so the content hash is
+            # untouched (see `NormalisedAdvisory.scoring_vector`). A published number
+            # wins over a computed one; a v4-only record computes to None and the
+            # risk function falls back to the published label.
+            "score": (
+                advisory.cvss_score
+                if advisory.cvss_score is not None
+                else cvss.base_score(advisory.scoring_vector or advisory.cvss_vector)
+            ),
             "severity": advisory.severity,
             "published": advisory.published_at,
             "modified": advisory.modified_at,
@@ -95,6 +107,7 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
             "refs": json.dumps(advisory.references, default=str),
             "hash": digest,
             "now": now,
+            "malicious": is_malicious(advisory),
         },
     )
 
@@ -122,6 +135,16 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
     )
 
     return "new" if is_new_vulnerability else "revised"
+
+
+def is_malicious(advisory: NormalisedAdvisory) -> bool:
+    """Is this an OpenSSF malicious-packages record?
+
+    OSV publishes those as `MAL-YYYY-N`, sometimes aliased to a GHSA. The id is the
+    signal rather than any wording in the summary, which is attacker-adjacent text.
+    """
+    ids = [advisory.id, advisory.source_record, *advisory.aliases]
+    return any(isinstance(i, str) and i.upper().startswith("MAL-") for i in ids)
 
 
 def _dominant_source(advisory: NormalisedAdvisory) -> str:
@@ -178,19 +201,56 @@ def apply_kev(session: Session, entries: list[dict[str, Any]]) -> int:
         cve = entry.get("cveID")
         if not cve:
             continue
+        params = {
+            "cve": cve,
+            "ransom": (entry.get("knownRansomwareCampaignUse") or "").lower() == "known",
+            "added": _kev_date(entry.get("dateAdded")),
+            "due": _kev_date(entry.get("dueDate")),
+            # "Yes" / "No" since BOD 26-04; absent on older catalogue snapshots,
+            # which is None rather than a claimed "no".
+            "triage": {"yes": True, "no": False}.get(
+                str(entry.get("forensicTriage") or "").strip().lower()
+            ),
+        }
         result = session.execute(
             text(
                 "UPDATE vulnerability SET kev = true, kev_ransomware = :ransom, "
-                "kev_added_at = COALESCE(kev_added_at, now()) "
+                "kev_added_at = COALESCE(kev_added_at, now()), "
+                "kev_date_added = :added, kev_due_date = :due, "
+                "kev_forensic_triage = :triage "
                 " WHERE id = :cve AND kev IS DISTINCT FROM true"
             ),
-            {
-                "cve": cve,
-                "ransom": (entry.get("knownRansomwareCampaignUse") or "").lower() == "known",
-            },
+            params,
         )
         marked += result.rowcount or 0
+        # CISA's dates are refreshed on entries already marked, separately so the
+        # return value still counts only what is newly known-exploited. A catalogue
+        # entry's due date can be revised, and the one on the page must be CISA's
+        # current one rather than whichever Athena happened to see first.
+        session.execute(
+            text(
+                "UPDATE vulnerability SET kev_ransomware = :ransom, "
+                "kev_date_added = :added, kev_due_date = :due, "
+                "kev_forensic_triage = :triage "
+                " WHERE id = :cve AND kev IS true "
+                "   AND (kev_date_added IS DISTINCT FROM :added "
+                "        OR kev_due_date IS DISTINCT FROM :due "
+                "        OR kev_forensic_triage IS DISTINCT FROM :triage "
+                "        OR kev_ransomware IS DISTINCT FROM :ransom)"
+            ),
+            params,
+        )
     return marked
+
+
+def _kev_date(value: Any) -> date | None:
+    """A catalogue date (`2026-03-14`), or None when absent or malformed."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(value.strip()[:10])
+    except ValueError:
+        return None
 
 
 def apply_epss(session: Session, scores: dict[str, tuple[float, float]]) -> int:
@@ -244,17 +304,35 @@ def record_source_result(
         source.last_error = (error or "unknown error")[:2000]
 
 
+# How old each source may get before it is stale. Defined once, here: the shell, the
+# intelligence page and the API each used a different threshold, so the shell could
+# show a green "20h old" while the page marked KEV and OSV stale. Daily publishers get
+# two days; hourly ones six hours.
+STALE_AFTER = {"epss": 2 * 86400, "vulnrichment": 2 * 86400}
+STALE_AFTER_DEFAULT = 6 * 3600
+
+
+def stale_after(name: str) -> int:
+    return STALE_AFTER.get(name, STALE_AFTER_DEFAULT)
+
+
 def source_health(session: Session) -> list[dict[str, Any]]:
     now = datetime.now(UTC)
     rows = session.execute(select(IntelSource).order_by(IntelSource.name)).scalars().all()
     return [
         {
+            "stale_after_seconds": stale_after(s.name),
+            "stale": s.last_success_at is None
+            or (now - s.last_success_at).total_seconds() > stale_after(s.name),
             "name": s.name,
             "last_success_at": s.last_success_at,
             "last_attempt_at": s.last_attempt_at,
             "age_seconds": (now - s.last_success_at).total_seconds() if s.last_success_at else None,
             "advisories": s.advisories,
             "last_error": s.last_error,
+            # Source-specific position or version: for EPSS, the model the current
+            # scores came from (`v2026.06.15@<score date>`).
+            "cursor": s.cursor,
             # Never fetched successfully is not the same as fetched a while ago.
             "never_succeeded": s.last_success_at is None,
         }

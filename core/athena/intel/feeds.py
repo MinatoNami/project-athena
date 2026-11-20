@@ -11,6 +11,7 @@ import csv
 import gzip
 import io
 import json
+import re
 import tempfile
 import zipfile
 from collections.abc import Iterator
@@ -45,6 +46,11 @@ def _client(timeout: float | None = None) -> httpx.Client:
         headers={"User-Agent": USER_AGENT},
         follow_redirects=True,
     )
+
+
+def http_client(timeout: float | None = None) -> httpx.Client:
+    """A client with Athena's identity and timeouts, for callers that batch requests."""
+    return _client(timeout)
 
 
 def fetch_osv_ecosystem(
@@ -93,8 +99,11 @@ def fetch_kev() -> list[dict[str, Any]]:
         raise FeedError(f"KEV: {exc}") from exc
 
 
-def fetch_epss() -> dict[str, tuple[float, float]]:
-    """CVE → (probability, percentile). Refreshed daily upstream."""
+def fetch_epss() -> tuple[dict[str, tuple[float, float]], dict[str, str]]:
+    """CVE → (probability, percentile), and the file's model metadata.
+
+    Refreshed daily upstream.
+    """
     try:
         with _client() as client:
             response = client.get(EPSS_URL)
@@ -102,16 +111,115 @@ def fetch_epss() -> dict[str, tuple[float, float]]:
             raw = gzip.decompress(response.content).decode("utf-8", "replace")
     except (httpx.HTTPError, OSError) as exc:
         raise FeedError(f"EPSS: {exc}") from exc
+    return parse_epss_csv(raw)
 
+
+def parse_epss_csv(raw: str) -> tuple[dict[str, tuple[float, float]], dict[str, str]]:
+    """Scores, plus the `#model_version:…,score_date:…` header as a dict.
+
+    The model version is kept because scores jump at a version boundary — EPSS v5
+    replaced v4 on 2026-06-15 and moved Log4Shell from 0.94 to 0.99999 overnight —
+    and a score without its model is a number nobody can compare with last month's.
+    """
     scores: dict[str, tuple[float, float]] = {}
+    meta: dict[str, str] = {}
     for row in csv.reader(io.StringIO(raw)):
-        if not row or row[0].startswith("#") or row[0] == "cve":
+        if not row:
+            continue
+        if row[0].startswith("#"):
+            for cell in row:
+                key, sep, value = cell.lstrip("#").partition(":")
+                if sep and key.strip():
+                    meta[key.strip()] = value.strip()
+            continue
+        if row[0] == "cve":
             continue
         try:
             scores[row[0]] = (float(row[1]), float(row[2]))
         except (IndexError, ValueError):
             continue
-    return scores
+    return scores, meta
+
+
+# CISA's Vulnrichment repository: one CVE JSON 5.x record per file, carrying CISA's
+# ADP container with its SSVC assessment. Raw GitHub is used rather than the CVE
+# Services API because it is a static file host with no per-client rate limit
+# worth negotiating, and the repository is CISA's own publication of the data.
+VULNRICHMENT_URL = (
+    "https://raw.githubusercontent.com/cisagov/vulnrichment/develop/{year}/{bucket}xxx/{cve}.json"
+)
+_CVE = re.compile(r"^CVE-(\d{4})-(\d{4,19})$")
+
+
+def vulnrichment_url(cve: str) -> str | None:
+    """The file for one CVE, or None if the id is not a CVE this layout can hold."""
+    match = _CVE.match(cve or "")
+    if not match:
+        return None
+    year, number = match.group(1), int(match.group(2))
+    return VULNRICHMENT_URL.format(year=year, bucket=number // 1000, cve=cve)
+
+
+def fetch_vulnrichment(client: httpx.Client, cve: str) -> dict[str, Any] | None:
+    """CISA's record for one CVE, or None when CISA has published none (404)."""
+    url = vulnrichment_url(cve)
+    if url is None:
+        return None
+    try:
+        response = client.get(url)
+    except httpx.HTTPError as exc:
+        raise FeedError(f"Vulnrichment {cve}: {exc}") from exc
+    if response.status_code == 404:
+        return None
+    if response.status_code != 200:
+        raise FeedError(f"Vulnrichment {cve}: HTTP {response.status_code}")
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise FeedError(f"Vulnrichment {cve}: not JSON") from exc
+
+
+CISA_ADP = "CISA-ADP"
+_SSVC_KEYS = {
+    "exploitation": "exploitation",
+    "automatable": "automatable",
+    "technical impact": "technical_impact",
+    "technicalimpact": "technical_impact",
+}
+
+
+def parse_vulnrichment(record: dict[str, Any]) -> dict[str, Any] | None:
+    """CISA's SSVC decision points from a CVE JSON 5.x record, or None.
+
+    `options` is a list of one-key objects (`[{"Exploitation": "poc"}, …]`), so it is
+    flattened. Only the container CISA signs as `CISA-ADP` is read: the record holds
+    other providers' containers too, and their opinions are not CISA's.
+    """
+    containers = (record.get("containers") or {}).get("adp") or []
+    for container in containers:
+        provider = (container.get("providerMetadata") or {}).get("shortName")
+        if provider != CISA_ADP:
+            continue
+        for metric in container.get("metrics") or []:
+            other = metric.get("other") or {}
+            if (other.get("type") or "").lower() != "ssvc":
+                continue
+            content = other.get("content") or {}
+            out: dict[str, Any] = {}
+            for option in content.get("options") or []:
+                if not isinstance(option, dict):
+                    continue
+                for key, value in option.items():
+                    name = _SSVC_KEYS.get(str(key).strip().lower())
+                    if name and isinstance(value, str):
+                        out[name] = value.strip().lower()
+            if not out:
+                continue
+            out["timestamp"] = content.get("timestamp")
+            out["version"] = content.get("version")
+            out["role"] = content.get("role")
+            return out
+    return None
 
 
 def feed_age(last_success: datetime | None) -> float | None:

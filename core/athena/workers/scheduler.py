@@ -36,6 +36,10 @@ SCHEDULE: list[tuple[str, int, str, dict]] = [
     ],
     ("intel-kev", HOUR, "intel.poll.kev", {}),
     ("intel-epss", DAY, "intel.poll.epss", {}),
+    # CISA's per-CVE SSVC assessments, only for CVEs that matched something here.
+    # Hourly in small batches, so a new estate catches up within a day without one
+    # run making hundreds of requests at once.
+    ("intel-vulnrichment", HOUR, "intel.enrich.vulnrichment", {}),
     # Re-correlate findings whose advisory has been revised since they were
     # evaluated, including ones previously closed: a corrected range can make a
     # dismissed finding real again.
@@ -161,14 +165,15 @@ def _sweep_triage(session, last_run: dict[str, float], now: float) -> None:
         text(
             """
             SELECT f.id::text, f.triage_disposition, v.severity, v.cvss_score,
-                   v.epss_score, v.kev, a.tier, a.exposure
+                   v.epss_score, v.kev, v.malicious, a.tier, a.exposure
               FROM finding f
               JOIN vulnerability v ON v.id = f.vulnerability_id
               JOIN asset a ON a.id = f.asset_id
              WHERE f.state = 'discovered'
                AND f.investigation_id IS NULL
                AND (f.triage_disposition IS NULL OR f.triage_disposition = 'investigate')
-             ORDER BY v.kev DESC,
+             ORDER BY v.malicious DESC,
+                      v.kev DESC,
                       COALESCE(v.cvss_score, 0) DESC,
                       COALESCE(v.epss_score, 0) DESC,
                       f.first_seen
@@ -186,6 +191,7 @@ def _sweep_triage(session, last_run: dict[str, float], now: float) -> None:
             "advisory": {
                 "severity": row.severity, "cvss": row.cvss_score,
                 "epss": row.epss_score, "known_exploited": row.kev,
+                "malicious": row.malicious,
             },
             "asset": {"tier": row.tier, "exposure": row.exposure},
         }

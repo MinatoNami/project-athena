@@ -27,7 +27,18 @@ defineProps<{ severity: string; kev?: boolean }>()
 .critical { --sev-bg: var(--sev-critical); --sev-ink: var(--sev-on-dark); }
 .high     { --sev-bg: var(--sev-high);     --sev-ink: var(--sev-on-dark); }
 .medium   { --sev-bg: var(--sev-medium);   --sev-ink: var(--sev-on-dark); }
-.low      { --sev-bg: transparent; --sev-ink: var(--ink-2); border-color: var(--rule) !important; }
+/* The two quietest bands keep neutral text and carry the ramp in a swatch. As
+   filled chips their colours sit too close to the surface to hold readable text,
+   and INFORMATIONAL had no rule at all — it rendered as plain ink, which in dark
+   mode is pure white: the loudest chip in the list for the mildest band. */
+.low, .informational {
+  --sev-bg: transparent; border-color: var(--rule) !important;
+}
+.low { --sev-ink: var(--ink-2); --swatch: var(--sev-low); }
+.informational { --sev-ink: var(--ink-muted); --swatch: var(--sev-informational); }
+.low::before, .informational::before {
+  content: ""; width: .5rem; height: .5rem; border-radius: 2px; background: var(--swatch);
+}
 .unknown  { --sev-bg: transparent; --sev-ink: var(--ink-muted); border-color: var(--rule) !important; }
 .kev {
   background: var(--sev-on-dark); color: var(--sev-critical);

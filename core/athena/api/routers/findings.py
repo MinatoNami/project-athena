@@ -54,6 +54,7 @@ def list_findings(
     state: str | None = None,
     asset_id: str | None = None,
     kev_only: bool = False,
+    malicious: bool = False,
     include_no_fix: bool = False,
     include_suppressed: bool = False,
     include_baseline: bool = False,
@@ -63,7 +64,7 @@ def list_findings(
     tier: str | None = None,
     has_fix: bool | None = None,
     min_band: str | None = None,
-    needs_attention: bool = False,
+    needs_attention: bool | None = None,
     sort: str = "risk",
     cursor: str | None = None,
     limit: int = Query(default=DEFAULT_LIMIT, le=MAX_LIMIT),
@@ -97,6 +98,7 @@ def list_findings(
             # `kev_only` predates the facet set and is kept so existing callers and
             # bookmarks keep working.
             kev=kev_only,
+            malicious=malicious,
             exposure=exposure,
             tier=tier,
             has_fix=has_fix,
@@ -203,6 +205,8 @@ def get_finding(
             "epss_score": vulnerability.epss_score,
             "kev": vulnerability.kev,
             "kev_ransomware": vulnerability.kev_ransomware,
+            "malicious": vulnerability.malicious,
+            "withdrawn_at": vulnerability.withdrawn_at,
             "published_at": vulnerability.published_at,
             "references": vulnerability.references_,
             "revision": vulnerability.revision,
@@ -273,8 +277,86 @@ def get_finding(
             else None
         ),
         "investigation": _investigation_of(session, finding),
+        "prioritization": _prioritization(vulnerability, asset, finding),
         "risk_explained": _risk_explained(session, finding),
         "remediation": _remediation(session, finding, asset, component),
+    }
+
+
+def _prioritization(
+    vulnerability: Vulnerability, asset: Asset, finding: Finding
+) -> dict[str, Any]:
+    """The exploitability facts beside the score, each with where it came from.
+
+    Derived on read, like the remediation plan: every input is already stored, so a
+    stored copy could only ever disagree with them. Exists because a reader deciding
+    whether to trust "critical" asks the same three things every time — is it being
+    exploited, how likely is it to be, and what does the vector actually say — and
+    the answers were scattered or missing.
+    """
+    from athena.intel import cvss
+    from athena.risk import deadline, ssvc
+
+    vector = vulnerability.cvss_vector
+    computed = cvss.base_score(vector)
+    try:
+        version = cvss.parse(vector).version
+    except cvss.VectorError:
+        version = None
+    today = datetime.now(UTC).date()
+    due = vulnerability.kev_due_date
+    return {
+        "ssvc": ssvc.decide(
+            kev=vulnerability.kev,
+            exploit_public=vulnerability.exploit_public,
+            vector=vector,
+            tier=asset.tier,
+            criticality=asset.criticality,
+            malicious=vulnerability.malicious,
+            cisa=vulnerability.ssvc_cisa,
+        ).as_dict(),
+        "cisa_ssvc": {
+            "published": vulnerability.ssvc_cisa is not None,
+            "checked_at": vulnerability.ssvc_checked_at,
+        },
+        # Malware sits outside the directive's model: it is removed now, not on a
+        # timeline, and a "14 days" beside it would read as permission to wait.
+        "deadline": None if vulnerability.malicious else deadline.deadline(
+            exposure=asset.exposure,
+            kev=vulnerability.kev,
+            kev_date_added=vulnerability.kev_date_added,
+            vector=vector,
+            cisa_ssvc=vulnerability.ssvc_cisa,
+            first_seen=finding.first_seen.date(),
+        ).as_dict(today=today),
+        "epss": {
+            "score": vulnerability.epss_score,
+            "percentile": vulnerability.epss_percentile,
+            "updated_at": vulnerability.epss_updated_at,
+            # Absent and zero are different claims; the page must be able to say
+            # "not scored" rather than "0%".
+            "scored": vulnerability.epss_score is not None,
+        },
+        "kev": {
+            "listed": vulnerability.kev,
+            "date_added": vulnerability.kev_date_added,
+            "due_date": due,
+            "days_to_due": (due - today).days if due else None,
+            "ransomware": vulnerability.kev_ransomware,
+            "forensic_triage": vulnerability.kev_forensic_triage,
+        },
+        "cvss": {
+            "vector": vector,
+            "version": version,
+            "score": vulnerability.cvss_score,
+            # Whether the stored number is the one this vector computes to. A
+            # mismatch means the advisory published a score of its own, which is
+            # kept — but the page should not imply the vector produced it.
+            "computed_from_vector": computed is not None
+            and vulnerability.cvss_score == computed,
+            "scored": vulnerability.cvss_score is not None,
+        },
+        "malicious": vulnerability.malicious,
     }
 
 
@@ -298,6 +380,7 @@ def _deferred(finding: Finding, asset: Asset, vulnerability) -> dict[str, Any] |
                 "cvss": vulnerability.cvss_score,
                 "epss": vulnerability.epss_score,
                 "known_exploited": vulnerability.kev,
+                "malicious": vulnerability.malicious,
             },
             "asset": {"tier": asset.tier, "exposure": asset.exposure},
         },
@@ -334,6 +417,7 @@ def _remediation(session: Session, finding: Finding, asset: Asset, component: Co
         scope=scope,
         fix_channel=finding.fix_channel,
         source=source_for(session, asset),
+        malicious=bool(session.get(Vulnerability, finding.vulnerability_id).malicious),
     ).as_dict()
 
 
@@ -410,15 +494,37 @@ def intel_sources(
     kev = session.execute(
         select(func.count()).select_from(Vulnerability).where(Vulnerability.kev.is_(True))
     ).scalar_one()
+    malicious = session.execute(
+        select(func.count()).select_from(Vulnerability).where(
+            Vulnerability.malicious.is_(True), Vulnerability.withdrawn_at.is_(None)
+        )
+    ).scalar_one()
+    # CISA's own SSVC coverage, over the CVEs that matter here: those with findings.
+    relevant = select(Finding.vulnerability_id).distinct()
+    ssvc_checked, ssvc_published = session.execute(
+        select(
+            func.count().filter(Vulnerability.ssvc_checked_at.is_not(None)),
+            # Typed rather than IS NOT NULL, so a JSON `null` written by any older
+            # path is still read as "none published".
+            func.count().filter(func.jsonb_typeof(Vulnerability.ssvc_cisa) == "object"),
+        ).where(Vulnerability.id.in_(relevant), Vulnerability.id.like("CVE-%"))
+    ).one()
+    relevant_cves = session.execute(
+        select(func.count()).select_from(Vulnerability).where(
+            Vulnerability.id.in_(relevant), Vulnerability.id.like("CVE-%")
+        )
+    ).scalar_one()
     return {
         "sources": sources,
         "advisories": total,
         "kev_advisories": kev,
-        "any_source_stale": any(
-            s["never_succeeded"] or (s["age_seconds"] or 0) > 21600 for s in sources
-        )
-        if sources
-        else True,
+        "malicious_advisories": malicious,
+        "cisa_ssvc": {
+            "cves_with_findings": relevant_cves,
+            "checked": ssvc_checked,
+            "published": ssvc_published,
+        },
+        "any_source_stale": any(s["stale"] for s in sources) if sources else True,
     }
 
 
@@ -497,7 +603,7 @@ def refresh_intel(
             priority=4,
         ):
             queued += 1
-    for kind in ("intel.poll.kev", "intel.poll.epss"):
+    for kind in ("intel.poll.kev", "intel.poll.epss", "intel.enrich.vulnrichment"):
         if enqueue(session, kind=kind, key=stamp, payload={}, priority=3):
             queued += 1
 

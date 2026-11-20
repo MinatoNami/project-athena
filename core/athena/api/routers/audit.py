@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -22,12 +24,40 @@ def list_events(
     if before_seq is not None:
         stmt = stmt.where(AuditEvent.seq < before_seq)
     rows = session.execute(stmt).scalars().all()
+
+    # A person reads "alice@example.com", not "user:83f7e862-…". The id stays in
+    # `actor` — it is what the chain hashed — and the label is resolved on read.
+    user_ids = {e.actor.split(":", 1)[1] for e in rows if e.actor.startswith("user:")}
+    emails: dict[str, str] = {}
+    if user_ids:
+        from athena.db.models import User
+
+        valid = []
+        for uid in user_ids:
+            try:
+                valid.append(uuid.UUID(uid))
+            except ValueError:
+                continue
+        emails = {
+            str(u.id): u.email
+            for u in session.execute(select(User).where(User.id.in_(valid))).scalars()
+        }
+
+    def label(actor: str) -> str:
+        kind, _, ident = actor.partition(":")
+        if kind == "user":
+            return emails.get(ident, "a deleted user")
+        if kind == "system":
+            return f"Athena ({ident})" if ident else "Athena"
+        return actor
+
     return {
         "events": [
             {
                 "seq": e.seq,
                 "at": e.at,
                 "actor": e.actor,
+                "actor_label": label(e.actor),
                 "action": e.action,
                 "subject": e.subject,
                 "detail": e.detail,

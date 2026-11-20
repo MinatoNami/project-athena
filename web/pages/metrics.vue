@@ -2,32 +2,24 @@
 /**
  * The success metrics.
  *
- * Every card shows its denominator and its status. The page leads with how much of
- * itself it cannot answer, because a dashboard where four of ten cards are empty and
- * you have to notice one by one is a dashboard that reads as healthier than it is.
+ * Every number carries its denominator and, where one exists, its target as a bar
+ * rather than a sentence — "91%, target over 80%" is two numbers to compare in your
+ * head; a bar past a mark is not.
  *
  * Nothing renders a zero for something unbuilt. A zero and an absence look identical
- * in a chart and mean opposite things.
+ * in a chart and mean opposite things, so the unmeasurable are hatched and kept in
+ * their own group.
  */
 useHead({ title: 'Metrics' })
 
 const { data: me } = await useMe()
 if (!me.value) await navigateTo('/login')
 
-const { data, pending, error, refresh } = await useAsyncData('metrics', () =>
-  api<any>('metrics'),
-)
-
-const STATUS_LABEL: Record<string, string> = {
-  meeting: 'Meeting target',
-  missing: 'Short of target',
-  no_target: 'No target set',
-  unknown: 'Not enough data',
-  not_implemented: 'Not built yet',
-}
+const { data, pending, error, refresh } = await useAsyncData('metrics', () => api<any>('metrics'))
+const { severity } = useChartTheme()
 
 function formatted(m: any) {
-  if (m.value === null) return '—'
+  if (m.value === null) return null
   if (m.unit === 'tokens') return m.value.toLocaleString()
   if (m.unit === '%') return `${m.value}%`
   if (m.unit === 'hours') return `${m.value}h`
@@ -35,16 +27,45 @@ function formatted(m: any) {
   return String(m.value)
 }
 
-function targetText(m: any) {
-  if (m.target_mvp === null) return null
-  const arrow = m.lower_is_better ? 'under' : 'over'
-  const unit = m.unit === '%' ? '%' : m.unit === 'hours' ? 'h' : m.unit === 'days' ? 'd' : ''
-  return `${arrow} ${m.target_mvp}${unit} · mature ${m.target_mature}${unit}`
+function suffix(m: any) {
+  return m.unit === '%' ? '%' : m.unit === 'hours' ? 'h' : m.unit === 'days' ? 'd' : ''
+}
+
+/** How far along, against the target it is judged by — not a share of anything. */
+function progress(m: any) {
+  if (m.value === null || m.target_mvp === null || !m.target_mvp) return null
+  const share = m.lower_is_better ? m.target_mvp / m.value : m.value / m.target_mvp
+  return Math.max(0, Math.min(1, share))
+}
+
+const STATUS: Record<string, 'good' | 'bad' | 'warn' | null> = {
+  meeting: 'good', missing: 'bad', no_target: null, unknown: 'warn', not_implemented: null,
 }
 
 const measured = computed(() => data.value?.metrics?.filter((m: any) => m.value !== null) ?? [])
-const unanswered = computed(() =>
-  data.value?.metrics?.filter((m: any) => m.value === null) ?? [],
+const unanswered = computed(() => data.value?.metrics?.filter((m: any) => m.value === null) ?? [])
+
+/** Open findings per band, with what is overdue said beside each. */
+const slaRows = computed(() =>
+  (data.value?.sla?.bands ?? []).map((b: any) => ({
+    label: b.band,
+    value: b.open,
+    color: severity.value[b.band],
+    dashed: b.status === 'late',
+    hint: b.late ? `${b.late} past ${b.target_days}d` : `within ${b.target_days}d`,
+  })),
+)
+
+const slaTable = computed(() => ({
+  columns: ['Band', 'Target', 'Open', 'Overdue', 'Oldest'],
+  rows: (data.value?.sla?.bands ?? []).map((b: any) => [
+    b.band, `${b.target_days}d`, b.open, b.late,
+    b.oldest_days !== null ? `${b.oldest_days}d` : '—',
+  ]),
+}))
+
+const overdue = computed(() =>
+  (data.value?.sla?.bands ?? []).reduce((n: number, b: any) => n + (b.late ?? 0), 0),
 )
 </script>
 
@@ -53,10 +74,7 @@ const unanswered = computed(() =>
     <div class="page-head">
       <div class="page-title">
         <h1>Metrics</h1>
-        <p>
-          Every number here carries the denominator it was computed over. A rate
-          without one is an assertion.
-        </p>
+        <p>Each number carries the denominator it was computed over.</p>
       </div>
       <div class="actions"><button class="btn" @click="refresh()">Refresh</button></div>
     </div>
@@ -69,21 +87,27 @@ const unanswered = computed(() =>
     </StateBlock>
 
     <template v-else-if="data">
-      <!-- Led with, not discovered card by card. -->
       <div class="summary">
-        <span>
-          <strong>{{ data.summary.measured }} of {{ data.summary.total }}</strong>
-          can be measured today.
-        </span>
-        <span v-if="data.summary.not_implemented" class="gap">
-          {{ data.summary.not_implemented }} need features that do not exist yet
-        </span>
-        <span v-if="data.summary.not_enough_data" class="gap">
-          {{ data.summary.not_enough_data }} lack the data to say
-        </span>
-        <span v-if="data.summary.missing_target" class="bad">
-          {{ data.summary.missing_target }} short of target
-        </span>
+        <StatTile
+          label="Measurable today"
+          :value="`${data.summary.measured} of ${data.summary.total}`"
+          :progress="data.summary.total ? data.summary.measured / data.summary.total : null"
+        />
+        <StatTile
+          v-if="data.summary.missing_target"
+          label="Short of target" :value="data.summary.missing_target" status="bad"
+        />
+        <StatTile
+          v-if="data.summary.not_implemented"
+          label="Need unbuilt features" :value="data.summary.not_implemented" of="not measurable"
+        />
+        <StatTile
+          v-if="data.summary.not_enough_data"
+          label="Too little data" :value="data.summary.not_enough_data" of="not measurable"
+        />
+        <StatTile
+          v-if="overdue" label="Overdue findings" :value="overdue" of="past band target" status="bad"
+        />
       </div>
 
       <div class="grid">
@@ -91,101 +115,63 @@ const unanswered = computed(() =>
           v-for="m in measured" :key="m.id" class="card"
           :class="{ missing: m.status === 'missing', meeting: m.status === 'meeting' }"
         >
-          <div class="lbl">{{ m.label }}</div>
-          <div class="figure">
-            <span class="mono tnum val">{{ formatted(m) }}</span>
-            <span class="status" :class="m.status">{{ STATUS_LABEL[m.status] }}</span>
-          </div>
+          <StatTile
+            :label="m.label"
+            :value="formatted(m)"
+            :of="`over ${m.denominator.toLocaleString()} ${m.denominator_label}`"
+            :progress="progress(m)"
+            :status="STATUS[m.status]"
+            goal
+            :target="m.target_mvp === null
+              ? undefined
+              : `target ${m.lower_is_better ? 'under' : 'over'} ${m.target_mvp}${suffix(m)}`"
+          />
           <p class="desc">{{ m.description }}</p>
-          <div class="foot">
-            <span class="denom">
-              over <span class="mono tnum">{{ m.denominator.toLocaleString() }}</span>
-              {{ m.denominator_label }}
-            </span>
-            <span v-if="targetText(m)" class="target">Target {{ targetText(m) }}</span>
-          </div>
           <p v-if="m.note" class="note">{{ m.note }}</p>
         </div>
       </div>
 
-      <!-- The gaps get the same treatment as the numbers, not a footnote. -->
       <h2 class="section">What cannot be answered yet</h2>
       <div class="grid">
         <div v-for="m in unanswered" :key="m.id" class="card gapcard">
-          <div class="lbl">{{ m.label }}</div>
-          <div class="figure">
-            <span class="hatchbox hatch" />
-            <span class="status" :class="m.status">{{ STATUS_LABEL[m.status] }}</span>
-          </div>
+          <StatTile
+            :label="m.label"
+            :value="null"
+            :hint="m.status === 'not_implemented' ? 'needs a feature that does not exist yet'
+              : 'not enough data to say'"
+          />
           <p class="desc">{{ m.description }}</p>
-          <div class="foot">
-            <span class="denom">would be measured over {{ m.denominator_label }}</span>
-            <span v-if="targetText(m)" class="target">Target {{ targetText(m) }}</span>
-          </div>
-          <p v-if="m.note" class="note">{{ m.note }}</p>
         </div>
       </div>
 
       <h2 class="section">How long findings have been open</h2>
-      <div class="card sla">
-        <table>
-          <thead>
-            <tr><th>Band</th><th>Target</th><th>Open</th><th>Late</th><th>Oldest</th><th /></tr>
-          </thead>
-          <tbody>
-            <tr v-for="b in data.sla.bands" :key="b.band">
-              <td><SeverityChip :severity="b.band" /></td>
-              <td class="mono tnum">{{ b.target_days }}d</td>
-              <td class="mono tnum">{{ b.open }}</td>
-              <td class="mono tnum" :class="{ bad: b.late }">{{ b.late }}</td>
-              <td class="mono tnum muted">{{ b.oldest_days !== null ? `${b.oldest_days}d` : '—' }}</td>
-              <td>
-                <!-- An empty band is not a band meeting its target. -->
-                <span class="status" :class="b.status">
-                  {{ b.status === 'none_open' ? 'Nothing open'
-                    : b.status === 'late' ? 'Overdue' : 'Within target' }}
-                </span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <p class="note">{{ data.sla.note }}</p>
-      </div>
+      <ChartFrame
+        title="Open by band"
+        :note="overdue ? `${overdue} past target — drawn dashed` : 'all within target'"
+        :empty="!slaRows.length"
+        empty-text="Nothing open."
+        :table="slaTable"
+      >
+        <ChartBars :rows="slaRows" unit="findings" summary="Open findings by severity band" />
+      </ChartFrame>
+      <p class="note">{{ data.sla.note }}</p>
     </template>
   </div>
 </template>
 
 <style scoped>
 .summary {
-  display: flex; gap: 1.2rem; flex-wrap: wrap; align-items: baseline;
+  display: flex; gap: 1.8rem; flex-wrap: wrap;
   border: 1px solid var(--rule); border-radius: 9px; background: var(--surface);
-  padding: .65rem .9rem; font-size: .82rem; color: var(--ink-2); margin-bottom: 1rem;
+  padding: .72rem .95rem; margin-bottom: 1rem;
 }
-.summary strong { color: var(--ink); font-weight: 600; }
-.summary .gap { color: var(--ink-muted); }
-.summary .bad { color: var(--crit); font-weight: 600; }
-
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr)); gap: .7rem; }
 .section { font-size: .7rem; margin: 1.5rem 0 .7rem; }
-.card { border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); padding: .85rem 1rem; }
+.card { border: 1px solid var(--rule); border-radius: 10px; background: var(--surface);
+        padding: .8rem .95rem; margin: 0; }
 .card.missing { border-left: 3px solid var(--crit); }
 .card.meeting { border-left: 3px solid var(--good); }
 .card.gapcard { border-left: 3px dashed var(--rule); }
-.figure { display: flex; align-items: baseline; gap: .6rem; margin: .35rem 0 .4rem; flex-wrap: wrap; }
-.val { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.02em; }
-.hatchbox { display: inline-block; width: 40px; height: 22px; border-radius: 5px;
-            border: 1px dashed var(--rule); }
-.status { font-size: .64rem; text-transform: uppercase; letter-spacing: .05em; font-weight: 600;
-          border: 1px solid var(--rule); border-radius: 4px; padding: .1rem .35rem;
-          color: var(--ink-muted); white-space: nowrap; }
-.status.meeting, .status.within_target { color: var(--good); border-color: var(--good); }
-.status.missing, .status.late { color: var(--crit); border-color: var(--crit); }
-.status.not_implemented, .status.unknown, .status.none_open { border-style: dashed; }
-.desc { margin: 0; font-size: .78rem; line-height: 1.5; color: var(--ink-2); }
-.foot { display: flex; flex-direction: column; gap: .15rem; margin-top: .5rem;
-        font-size: .7rem; color: var(--ink-muted); }
+.desc { margin: .45rem 0 0; font-size: .76rem; line-height: 1.5; color: var(--ink-2); }
 .note { margin: .5rem 0 0; font-size: .71rem; line-height: 1.5; color: var(--ink-muted); }
-.sla table { width: 100%; }
-.sla td { vertical-align: middle; }
-.bad { color: var(--crit); font-weight: 600; }
 </style>

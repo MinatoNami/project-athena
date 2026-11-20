@@ -137,6 +137,9 @@ class Signals:
     verdict: str = "uncertain"          # applicable | not_applicable | uncertain
     fix_available: bool = True
     fix_requires_entitlement: bool = False
+    # The advisory is an OpenSSF malicious-packages record: the package *is* the
+    # attack. See `_malware()`.
+    malicious: bool = False
 
 
 @dataclass
@@ -227,12 +230,70 @@ def _at_most(band: Band, ceiling: Band) -> Band:
     return band if BAND_ORDER.index(band) <= BAND_ORDER.index(ceiling) else ceiling
 
 
+def _malware(signals: Signals) -> Score:
+    """Risk for a package that is itself malicious.
+
+    Every factor below that discounts a vulnerability presumes there is a flaw an
+    attacker has to reach. Malware needs no reaching: its install hook has already
+    run with whatever the installing user could read, and it acts outbound, so
+    inbound exposure does not contain it. Severity, exploitation, exposure and
+    reachability are therefore pinned at their maximum and *shown* pinned, rather
+    than being silently left out of the arithmetic.
+
+    Importance still applies — it is the one factor about the asset rather than the
+    flaw — and the floor below makes sure it can only order malware findings among
+    themselves, never push one under a vulnerability.
+
+    Two things still get a say. A match that may be the wrong package caps the band,
+    exactly as for any other finding: "a package named like this one is malware" is
+    not "this package is malware". And a `not_applicable` verdict is recorded but
+    not obeyed: the model does not hold the authority to close a malware alert, so a
+    person has to.
+    """
+    importance = TIER_WEIGHT.get(signals.tier, TIER_WEIGHT["unknown"]) * CRITICALITY_WEIGHT.get(
+        signals.criticality, 0.75
+    )
+    raw = importance
+    confidence = max(0.0, min(signals.match_confidence * signals.verdict_confidence, 1.0))
+    factors = {
+        "base": 1.0,
+        "exploitation": 1.0,
+        "exposure": 1.0,
+        "running": 1.0,
+        "importance": importance,
+        "reachability": 1.0,
+        "raw": raw,
+    }
+    overrides = [
+        "malicious package: severity, exploitation, exposure and reachability do not "
+        "discount malware, so they are pinned at 1.0",
+        "malicious package present: floored at critical",
+    ]
+    band = Band.CRITICAL
+    if signals.verdict == "not_applicable":
+        overrides.append(
+            "the investigation concluded not_applicable, which does not close a malware "
+            "finding: a person has to"
+        )
+    if signals.match_confidence < MATCH_FLOOR:
+        band = Band.MEDIUM
+        overrides.append(
+            f"match confidence {signals.match_confidence:.2f} is low: this may be a "
+            "different package with a similar name, so capped at medium"
+        )
+    return Score(value=round(100 * raw), band=band, confidence=confidence,
+                 factors=factors, overrides=overrides)
+
+
 def score(signals: Signals) -> Score:
     """Risk for one finding on one asset.
 
     Scored per instance, never per vulnerability: the same CVE is critical on an
     internet-facing production host and informational on an isolated laptop.
     """
+    if signals.malicious:
+        return _malware(signals)
+
     base = _base(signals)
     exploitation = _exploitation(signals)
     exposure = EXPOSURE_WEIGHT.get(signals.exposure, EXPOSURE_WEIGHT["unknown"])
