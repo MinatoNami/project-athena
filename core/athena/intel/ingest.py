@@ -304,11 +304,26 @@ def record_source_result(
         source.last_error = (error or "unknown error")[:2000]
 
 
+# How old each source may get before it is stale. Defined once, here: the shell, the
+# intelligence page and the API each used a different threshold, so the shell could
+# show a green "20h old" while the page marked KEV and OSV stale. Daily publishers get
+# two days; hourly ones six hours.
+STALE_AFTER = {"epss": 2 * 86400, "vulnrichment": 2 * 86400}
+STALE_AFTER_DEFAULT = 6 * 3600
+
+
+def stale_after(name: str) -> int:
+    return STALE_AFTER.get(name, STALE_AFTER_DEFAULT)
+
+
 def source_health(session: Session) -> list[dict[str, Any]]:
     now = datetime.now(UTC)
     rows = session.execute(select(IntelSource).order_by(IntelSource.name)).scalars().all()
     return [
         {
+            "stale_after_seconds": stale_after(s.name),
+            "stale": s.last_success_at is None
+            or (now - s.last_success_at).total_seconds() > stale_after(s.name),
             "name": s.name,
             "last_success_at": s.last_success_at,
             "last_attempt_at": s.last_attempt_at,

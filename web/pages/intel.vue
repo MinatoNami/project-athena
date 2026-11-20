@@ -47,16 +47,9 @@ function role(name: string) {
   return ROLE[name] ?? ''
 }
 
-function age(seconds: number | null) {
-  if (seconds == null) return null
-  if (seconds < 5400) return `${Math.max(1, Math.round(seconds / 60))} min`
-  if (seconds < 172800) return `${Math.round(seconds / 3600)} h`
-  return `${Math.round(seconds / 86400)} d`
-}
+/** The API's verdict, per source — the same one the shell's status line reads. */
 function stale(s: any) {
-  if (s.never_succeeded) return true
-  const limit = s.name === 'epss' ? 2 * 86400 : s.name === 'vulnrichment' ? 2 * 86400 : 6 * 3600
-  return (s.age_seconds ?? Infinity) > limit
+  return s.stale ?? s.never_succeeded
 }
 
 const epssModel = computed(() => {
@@ -96,15 +89,16 @@ const ssvc = computed(() => data.value?.cisa_ssvc)
 
     <template v-else-if="data">
       <div class="tiles card">
-        <StatTile label="Advisories" :value="data.advisories?.toLocaleString()" of="in the corpus" />
+        <StatTile label="Advisories" :value="data.advisories?.toLocaleString()" of="stored" />
         <StatTile label="Known exploited" :value="data.kev_advisories?.toLocaleString()" of="CISA KEV" />
         <StatTile label="Malicious packages" :value="data.malicious_advisories?.toLocaleString()"
                   of="OpenSSF MAL- records, not withdrawn" />
         <StatTile
           label="CISA SSVC"
           :value="ssvc ? ssvc.published : null"
-          :of="ssvc ? `of ${ssvc.cves_with_findings} CVEs with findings (${ssvc.checked} checked)` : undefined"
-          :progress="ssvc?.cves_with_findings ? ssvc.checked / ssvc.cves_with_findings : null"
+          :of="ssvc ? `of ${plural(ssvc.cves_with_findings, 'CVE')} with findings` : undefined"
+          :progress="ssvc?.cves_with_findings ? ssvc.published / ssvc.cves_with_findings : null"
+          :target="ssvc ? `${ssvc.checked} checked with CISA` : undefined"
           hint="not yet checked"
         />
         <StatTile
@@ -117,22 +111,31 @@ const ssvc = computed(() => data.value?.cisa_ssvc)
 
       <div class="card">
         <span class="lbl">Sources</span>
+        <div class="scroll">
         <table class="sources">
           <thead>
-            <tr><th>Source</th><th>Contributes</th><th>Age</th><th>Records</th><th>Last error</th></tr>
+            <tr>
+              <th>Source</th><th class="role">Contributes</th><th>Fetched</th>
+              <th title="A running total across every fetch, not the number stored">Processed (all fetches)</th>
+              <th>Last error</th>
+            </tr>
           </thead>
           <tbody>
             <tr v-for="s in data.sources" :key="s.name" :class="{ stale: stale(s) }">
               <td class="name">
-                <span class="dot" :class="stale(s) ? 'down' : 'live'" />
+                <span class="dot" :class="stale(s) ? 'down' : 'live'" aria-hidden="true" />
                 <code>{{ s.name }}</code>
+                <span v-if="stale(s) && !s.never_succeeded" class="tag warn">stale</span>
               </td>
               <td class="role">{{ role(s.name) }}</td>
-              <td class="mono tnum">
-                <span v-if="s.never_succeeded" class="never hatch">never fetched</span>
-                <template v-else>{{ age(s.age_seconds) }}</template>
+              <td>
+                <span v-if="s.never_succeeded" class="tag unknown hatch">never fetched</span>
+                <FreshnessIndicator v-else :at="s.last_success_at" :stale="stale(s)" />
               </td>
-              <td class="mono tnum">{{ (s.advisories ?? 0).toLocaleString() }}</td>
+              <td class="mono tnum">
+                <span v-if="s.never_succeeded" class="tag unknown hatch">—</span>
+                <template v-else>{{ (s.advisories ?? 0).toLocaleString() }}</template>
+              </td>
               <td class="errcell">
                 <UntrustedText v-if="s.last_error" :text="s.last_error" />
                 <span v-else class="muted">—</span>
@@ -145,6 +148,7 @@ const ssvc = computed(() => data.value?.cisa_ssvc)
             </tr>
           </tbody>
         </table>
+        </div>
       </div>
 
       <div class="card notes">
@@ -179,11 +183,10 @@ const ssvc = computed(() => data.value?.cisa_ssvc)
 .sources { margin-top: .5rem; }
 .sources td { vertical-align: top; }
 .name { white-space: nowrap; }
-.role { font-size: .78rem; color: var(--ink-2); max-width: 34rem; }
+.scroll { overflow-x: auto; }
+td.role { font-size: .78rem; color: var(--ink-2); max-width: 34rem; }
 .errcell { font-size: .74rem; color: var(--crit); max-width: 18rem; word-break: break-word; }
 tr.stale .name code { color: var(--warn-ink); }
-.never { font-size: .7rem; padding: .05rem .3rem; border: 1px dashed var(--rule); border-radius: 3px;
-         font-family: system-ui, sans-serif; }
 .notes ul { margin: .5rem 0 0; padding-left: 1.1rem; font-size: .82rem; color: var(--ink-2); line-height: 1.55; }
 .note { font-size: .82rem; color: var(--ink-2); }
 @media (max-width: 860px) { .role { display: none; } }

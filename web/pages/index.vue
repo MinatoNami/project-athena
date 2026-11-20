@@ -17,8 +17,9 @@ const open = ref<string | null>(null)
 
 const QUERIES = {
   needs: 'needs_attention=true&sort=risk&limit=50',
-  waiting: 'assessed=false&sort=risk&limit=50',
-  cleared: 'assessed=true&sort=risk&limit=50',
+  // Outside the queue only, so the three tabs never list the same thing twice.
+  waiting: 'assessed=false&needs_attention=false&sort=risk&limit=50',
+  cleared: 'assessed=true&needs_attention=false&sort=risk&limit=50',
 }
 
 const { data, pending, error, refresh } = await useAsyncData(
@@ -80,8 +81,8 @@ const facet = (name: string) => estate.value?.facets?.[name]?.total ?? 0
 
 const tabs = computed(() => [
   { id: 'needs', label: 'Needs you', count: facet('needs_attention') },
-  { id: 'waiting', label: 'Waiting on Athena', count: facet('unassessed') },
-  { id: 'cleared', label: 'Cleared', count: facet('assessed') },
+  { id: 'waiting', label: 'Waiting on Athena', count: facet('waiting') },
+  { id: 'cleared', label: 'Cleared', count: facet('cleared') },
 ])
 
 /**
@@ -121,9 +122,6 @@ const truncated = computed(() =>
 /** Why this sits where it does — the same facts as before, as chips. */
 function signals(i: any) {
   const out: { text: string; tone?: 'bad' | 'warn' }[] = []
-  if (i.group.malicious) out.push({ text: 'malicious package', tone: 'bad' })
-  if (i.ssvc === 'act') out.push({ text: 'SSVC: act', tone: 'bad' })
-  else if (i.ssvc === 'attend') out.push({ text: 'SSVC: attend', tone: 'warn' })
   if (i.group.kev) out.push({ text: 'actively exploited', tone: 'bad' })
   if (i.exposure === 'internet') out.push({ text: 'internet-facing', tone: 'bad' })
   if (!i.investigated) out.push({ text: 'not investigated', tone: 'warn' })
@@ -135,9 +133,7 @@ function signals(i: any) {
   }
   if (i.due && !i.group.malicious) {
     const days = daysUntil(i.due)
-    if (days < 0) out.push({ text: `${-days}d past BOD 26-04 date`, tone: 'bad' })
-    else if (days === 0) out.push({ text: 'BOD 26-04: due today', tone: 'bad' })
-    else if (days <= 14) out.push({ text: `BOD 26-04: ${days}d left`, tone: 'warn' })
+    if (days <= 14) out.push({ text: `${dueText(i.due)} · BOD 26-04`, tone: days <= 0 ? 'bad' : 'warn' })
   }
   if (i.forensic_triage && i.group.kev) out.push({ text: 'forensic triage', tone: 'bad' })
   if (!i.fixed_version && !i.group.malicious) out.push({ text: 'no fix yet' })
@@ -220,9 +216,10 @@ const heldBack = computed(() => {
       </ChartFrame>
     </div>
 
-    <div class="tabs">
+    <div class="tabs" role="tablist" aria-label="Queue">
       <button
         v-for="t in tabs" :key="t.id" class="tab" :class="{ on: tab === t.id }"
+        role="tab" :aria-selected="tab === t.id"
         @click="tab = t.id as any; open = null"
       >
         {{ t.label }} <span class="mono tnum count">{{ t.count }}</span>
@@ -268,11 +265,19 @@ const heldBack = computed(() => {
           A statement about this tab, not about your estate.
         </StateBlock>
 
-        <div
-          v-for="i in rows" :key="i.finding_id" class="row"
-          @click="open = open === i.finding_id ? null : i.finding_id"
-        >
-          <div class="rowhead">
+        <!-- Rows belong to the same state chain as the skeleton and the empty states:
+             outside it, a tab switch drew the skeleton above the previous tab's rows. -->
+        <template v-else>
+        <div v-for="i in rows" :key="i.finding_id" class="row" :class="{ isopen: open === i.finding_id }">
+          <!-- The head alone toggles, so the actions inside the open body need no
+               stopPropagation, and the whole row is reachable from the keyboard. -->
+          <div
+            class="rowhead" role="button" tabindex="0"
+            :aria-expanded="open === i.finding_id"
+            @click="open = open === i.finding_id ? null : i.finding_id"
+            @keydown.enter.prevent="open = open === i.finding_id ? null : i.finding_id"
+            @keydown.space.prevent="open = open === i.finding_id ? null : i.finding_id"
+          >
             <SeverityChip v-if="i.investigated" :severity="i.risk_band" :kev="i.group.kev" />
             <span v-else class="unassessed" title="Version match only — not investigated">
               unassessed
@@ -289,25 +294,33 @@ const heldBack = computed(() => {
                 </span>
               </div>
               <div class="chips">
+                <span v-if="i.group.malicious" class="tag bad strong caps">malware</span>
+                <!-- SSVC models flaws; on malware it would only restate "remove it". -->
+                <SsvcChip
+                  v-if="!i.group.malicious && (i.ssvc === 'act' || i.ssvc === 'attend')"
+                  :outcome="i.ssvc"
+                />
                 <span
                   v-for="s in signals(i)" :key="s.text"
-                  class="chip" :class="s.tone"
+                  class="tag" :class="s.tone"
                 >{{ s.text }}</span>
               </div>
             </div>
 
             <div class="score">
-              <span class="mono tnum n">{{ i.investigated ? i.risk_score : '—' }}</span>
+              <span v-if="i.investigated" class="mono tnum n">{{ i.risk_score }}</span>
+              <span v-else class="hatchbox hatch" aria-hidden="true" />
               <span class="conf">
-                {{ i.investigated && i.confidence != null
-                  ? `${(i.confidence * 100).toFixed(0)}% sure`
-                  : 'unassessed' }}
+                {{ !i.investigated ? 'not scored'
+                  : i.confidence != null ? `${(i.confidence * 100).toFixed(0)}% sure`
+                  : 'confidence not recorded' }}
               </span>
+              <FreshnessIndicator :at="i.observed_at" :never-inventoried="!i.observed_at" />
             </div>
           </div>
 
-          <div v-if="open === i.finding_id" class="rowbody" @click.stop>
-            <p class="summary">{{ i.group.summary || 'No summary published.' }}</p>
+          <div v-if="open === i.finding_id" class="rowbody">
+            <p class="summary"><UntrustedText :text="i.group.summary || 'No summary published.'" /></p>
             <div class="facts">
               <span v-if="i.group.cvss_score">CVSS {{ i.group.cvss_score }}</span>
               <span v-if="i.group.epss_score != null">
@@ -332,6 +345,7 @@ const heldBack = computed(() => {
           {{ (data?.matching_group_count ?? 0).toLocaleString() }}.
           <NuxtLink to="/findings">See all →</NuxtLink>
         </p>
+        </template>
       </div>
 
       <aside class="rail">
@@ -342,13 +356,15 @@ const heldBack = computed(() => {
         <div v-if="unclassified?.asset_count" class="card lever">
           <div class="lbl">Biggest lever</div>
           <p>
-            <strong>{{ unclassified.asset_count.toLocaleString() }} assets have no tier or
+            <strong>{{ unclassified.asset_count.toLocaleString() }}
+            {{ unclassified.asset_count === 1 ? 'asset has' : 'assets have' }} no tier or
             exposure.</strong>
             Athena scores them as middling, so nothing is hidden — but importance is a
             placeholder in every score until you say what they are.
           </p>
           <NuxtLink to="/assets/classify" class="btn primary block">
-            Classify {{ unclassified.group_count }} groups
+            Classify {{ unclassified.group_count }}
+            {{ unclassified.group_count === 1 ? 'group' : 'groups' }}
           </NuxtLink>
         </div>
 
@@ -386,14 +402,16 @@ const heldBack = computed(() => {
 }
 .tab:hover { color: var(--ink); }
 .tab.on { background: var(--surface); border-color: var(--rule); color: var(--ink); font-weight: 600; }
-.count { opacity: .65; }
+.count { color: var(--ink-muted); }
 .hint { margin-left: auto; font-size: .74rem; color: var(--ink-muted); }
 
 .cols { display: flex; gap: 1.1rem; align-items: flex-start; }
 .queue { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: .5rem; }
 .rail { width: 268px; flex-shrink: 0; display: flex; flex-direction: column; gap: .65rem; }
 
-.row { border: 1px solid var(--rule); border-radius: 9px; background: var(--surface); cursor: pointer; }
+.row { border: 1px solid var(--rule); border-radius: 9px; background: var(--surface); }
+.rowhead { cursor: pointer; border-radius: 8px; }
+.row.isopen { border-color: var(--line-strong); }
 .row:hover { border-color: var(--ink-muted); }
 .rowhead { padding: .7rem .85rem; display: flex; align-items: flex-start; gap: .7rem; }
 .meat { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: .32rem; }
@@ -403,14 +421,9 @@ const heldBack = computed(() => {
 .on { font-size: .76rem; color: var(--ink-muted); }
 .siblings { border: 1px dashed var(--rule); border-radius: 3px; padding: 0 .22rem; }
 
-/* The reason, compressed. Tone is carried by a word, never by colour alone. */
-.chips { display: flex; flex-wrap: wrap; gap: .3rem; }
-.chip {
-  font-size: .68rem; padding: .08rem .36rem; border-radius: 4px;
-  border: 1px solid var(--rule); color: var(--ink-2); background: var(--plane);
-}
-.chip.warn { border-color: var(--warn-ink); color: var(--warn-ink); }
-.chip.bad { border-color: var(--crit); color: var(--crit); font-weight: 600; }
+/* The reason, compressed. Tone is carried by a word, never by colour alone; the
+   tags themselves are the shared primitive in main.css. */
+.chips { display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; }
 
 .score { display: flex; flex-direction: column; align-items: flex-end; gap: .1rem; flex-shrink: 0; }
 .score .n { font-size: .95rem; font-weight: 600; }
@@ -435,10 +448,14 @@ const heldBack = computed(() => {
   font-size: .66rem; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-muted);
   border: 1px dashed var(--rule); border-radius: 4px; padding: .15rem .38rem; white-space: nowrap;
 }
+/* Outlined in the status colour, not filled with the CRITICAL ramp: beside
+   "unassessed" a filled block read as a band nothing had assigned. */
 .kevflag {
-  background: var(--sev-critical); color: var(--sev-on-dark);
+  border: 1px solid var(--bad); color: var(--ink); font-weight: 600;
   padding: 0 .22rem; border-radius: 3px; margin-left: .22rem;
 }
+.hatchbox { display: inline-block; width: 1.6rem; height: .9rem; border-radius: 3px;
+            border: 1px dashed var(--line-strong); }
 
 @media (max-width: 1080px) {
   .charts { grid-template-columns: 1fr; }

@@ -44,10 +44,10 @@ function csv() {
       <span v-if="note" class="note">{{ note }}</span>
       <span class="sp" />
       <div class="seg">
-        <button :class="{ on: showing === 'chart' }" @click="showing = 'chart'">Chart</button>
-        <button :class="{ on: showing === 'table' }" @click="showing = 'table'">Table</button>
+        <button :class="{ on: showing === 'chart' }" :aria-pressed="showing === 'chart'" @click="showing = 'chart'">Chart</button>
+        <button :class="{ on: showing === 'table' }" :aria-pressed="showing === 'table'" @click="showing = 'table'">Table</button>
       </div>
-      <button class="btn tiny" title="Download as CSV" @click="csv">CSV</button>
+      <button class="btn tiny" :aria-label="`Download ${title} as CSV`" @click="csv">CSV</button>
     </figcaption>
 
     <div v-if="pending" class="skeleton block" />
@@ -72,8 +72,9 @@ function csv() {
 <style scoped>
 .frame { margin: 0; border: 1px solid var(--rule); border-radius: 9px;
          background: var(--surface); padding: .7rem .85rem .75rem; }
-figcaption { display: flex; align-items: center; gap: .5rem; margin-bottom: .6rem; }
-.note { font-size: .72rem; color: var(--ink-muted); }
+figcaption { display: flex; align-items: center; gap: .5rem; margin-bottom: .6rem; flex-wrap: wrap; }
+/* The note wraps rather than pushing the controls onto a line of their own. */
+.note { font-size: .72rem; color: var(--ink-muted); flex: 1 1 10rem; min-width: 0; }
 .sp { flex-grow: 1; }
 .seg button { font-size: .68rem; padding: .18rem .45rem; }
 .btn.tiny { font-size: .68rem; padding: .18rem .45rem; }

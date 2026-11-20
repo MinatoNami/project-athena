@@ -249,6 +249,7 @@ async function apply() {
           <div v-else class="seg">
             <button
               v-for="t in TIERS" :key="t" :class="{ on: picks[g.key]?.tier === t }"
+              :aria-pressed="picks[g.key]?.tier === t"
               @click="set(g.key, 'tier', t)"
             >{{ t }}</button>
           </div>
@@ -263,6 +264,7 @@ async function apply() {
           <div v-else class="seg">
             <button
               v-for="e in EXPOSURES" :key="e" :class="{ on: picks[g.key]?.exposure === e }"
+              :aria-pressed="picks[g.key]?.exposure === e"
               @click="set(g.key, 'exposure', e)"
             >{{ e }}</button>
           </div>

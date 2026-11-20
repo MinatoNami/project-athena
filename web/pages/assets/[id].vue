@@ -77,16 +77,24 @@ const lastRun = computed(
 )
 
 const exporting = ref<string | null>(null)
+const unclassified = computed(() =>
+  asset.value && (asset.value.tier === 'unknown' || asset.value.exposure === 'unknown'
+    || asset.value.criticality == null),
+)
 async function exportDoc(kind: 'sbom' | 'vex') {
   exporting.value = kind
   scanNote.value = null
   const safe = String(asset.value?.display_name ?? 'asset').replace(/[^A-Za-z0-9._-]+/g, '-')
   try {
+    const file = kind === 'sbom' ? `${safe}.cdx.json` : `${safe}.openvex.json`
     if (kind === 'sbom') {
-      await downloadJson(`assets/${route.params.id}/sbom`, `${safe}.cdx.json`)
+      await downloadJson(`assets/${route.params.id}/sbom`, file)
     } else {
-      await downloadJson(`export/openvex?asset_id=${route.params.id}`, `${safe}.openvex.json`)
+      await downloadJson(`export/openvex?asset_id=${route.params.id}`, file)
     }
+    // Said, not silent: an export leaves the system and is audited, so the page
+    // confirms both.
+    scanNote.value = { text: `Downloaded ${file}. The export is recorded in Activity.`, failed: false }
   } catch (e: any) {
     scanNote.value = { text: e?.data?.detail || 'The export could not be produced.', failed: true }
   } finally {
@@ -105,19 +113,21 @@ async function exportDoc(kind: 'sbom' | 'vex') {
 
     <div class="page-head">
       <div class="page-title">
-        <h1>{{ asset.display_name }}</h1>
+        <h1><UntrustedText :text="asset.display_name" /></h1>
         <p>{{ asset.kind }} · <code>{{ asset.identity_key }}</code></p>
       </div>
       <div class="actions">
         <button class="btn" :disabled="!!exporting" title="CycloneDX 1.6 SBOM of what was last observed"
                 @click="exportDoc('sbom')">
-          {{ exporting === 'sbom' ? 'Exporting…' : 'SBOM' }}
+          {{ exporting === 'sbom' ? 'Exporting…' : 'Export SBOM' }}
         </button>
         <button class="btn" :disabled="!!exporting"
                 title="OpenVEX: not_affected only where a person decided it" @click="exportDoc('vex')">
-          {{ exporting === 'vex' ? 'Exporting…' : 'VEX' }}
+          {{ exporting === 'vex' ? 'Exporting…' : 'Export VEX' }}
         </button>
-        <button v-if="asset.scan?.supported" class="btn" :disabled="scanning" @click="rescan">
+        <span class="actsep" aria-hidden="true" />
+        <NuxtLink v-if="unclassified" to="/assets/classify" class="btn">Classify</NuxtLink>
+        <button v-if="asset.scan?.supported" class="btn primary" :disabled="scanning" @click="rescan">
           {{ scanning ? 'Queued…' : scanLabel }}
         </button>
       </div>
@@ -147,7 +157,13 @@ async function exportDoc(kind: 'sbom' | 'vex') {
         :of="asset.criticality === null ? 'unset — scored as middling' : 'of 5'"
         :status="asset.criticality === null ? 'warn' : null"
       />
-      <StatTile label="Placement" :value="asset.tier" :of="`${asset.exposure}-facing`" />
+      <!-- "unknown" in bold and "unknown-facing" read as answers; they are gaps. -->
+      <StatTile
+        label="Placement"
+        :value="asset.tier === 'unknown' ? null : asset.tier"
+        :of="asset.exposure === 'unknown' ? 'exposure not set' : `${asset.exposure}-facing`"
+        hint="not classified — scored as middling"
+      />
     </div>
 
     <div class="cols">
@@ -186,7 +202,9 @@ async function exportDoc(kind: 'sbom' | 'vex') {
           <div class="runbody">
             <div class="runline">
               <span>{{ r.outcome.headline }}</span>
-              <span class="when">{{ new Date(r.started_at).toLocaleDateString() }}</span>
+              <span class="when" :title="new Date(r.started_at).toLocaleString()">
+                {{ new Date(r.started_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) }}
+              </span>
             </div>
             <button
               v-if="r.outcome.detail"
@@ -195,7 +213,7 @@ async function exportDoc(kind: 'sbom' | 'vex') {
             >
               {{ openRun === r.id ? 'Hide' : 'Scanner output' }} · {{ r.tool }}
             </button>
-            <pre v-if="openRun === r.id" class="raw">{{ r.outcome.detail }}</pre>
+            <pre v-if="openRun === r.id" class="raw"><UntrustedText :text="r.outcome.detail" /></pre>
           </div>
         </div>
       </div>
@@ -265,7 +283,7 @@ async function exportDoc(kind: 'sbom' | 'vex') {
            color: var(--ink-2); }
 .when { color: var(--ink-muted); font-size: .72rem; white-space: nowrap; }
 .mark { flex-shrink: 0; width: 1rem; text-align: center; font-size: .82rem; }
-.covered { color: var(--good); }
+.covered { color: var(--good-ink); }
 .partial { color: var(--warn-ink); }
 .unknown { color: var(--crit); }
 
@@ -278,6 +296,7 @@ async function exportDoc(kind: 'sbom' | 'vex') {
        white-space: pre-wrap; word-break: break-word; color: var(--ink-2); max-height: 11rem;
        overflow: auto; }
 .codecard { margin-bottom: 1rem; }
+.actsep { width: 1px; align-self: stretch; background: var(--rule); margin: 0 .2rem; }
 .codelbl { margin-bottom: .6rem; }
 .merges { margin: .4rem 0 0; padding-left: 1.1rem; font-size: .8rem; color: var(--ink-2); }
 

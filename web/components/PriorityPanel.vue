@@ -35,21 +35,19 @@ const dlText = computed(() => {
   const d = dl.value
   if (!d) return null
   if (d.on_upgrade) return 'Fix in the next system upgrade'
-  const left = d.days_left
-  const when = left < 0 ? `${-left} day${left === -1 ? '' : 's'} overdue`
-    : left === 0 ? 'due today' : `${left} day${left === 1 ? '' : 's'} left`
-  return `${d.days}-day deadline · due ${d.due} · ${when}`
+  return `${dueText(d.due)} · ${d.days}-day deadline, ${d.due}`
 })
 const epss = computed(() => props.p?.epss)
+
+/** Decision-point values as people write them: "poc" is PoC, not "Poc". */
+function pointValue(v: string | undefined) {
+  if (!v) return ''
+  return v === 'poc' ? 'PoC' : v.charAt(0).toUpperCase() + v.slice(1)
+}
 const cvss = computed(() => props.p?.cvss)
 
-const dueText = computed(() => {
-  const d = kev.value?.days_to_due
-  if (d == null) return null
-  if (d < 0) return `${-d} day${d === -1 ? '' : 's'} overdue`
-  if (d === 0) return 'due today'
-  return `${d} day${d === 1 ? '' : 's'} left`
-})
+// The KEV catalogue's own (federal) date, in the shared wording.
+const kevDue = computed(() => dueText(kev.value?.due_date))
 
 /** CVSS metrics in words, so the vector is readable without the spec open. */
 const METRICS: Record<string, [string, Record<string, string>]> = {
@@ -99,7 +97,9 @@ function pct(v: number | null | undefined, digits = 1) {
     </div>
 
     <!-- ══ SSVC ══ -->
-    <div v-if="ssvc" class="card">
+    <!-- SSVC and the score cards model flaws. For malware they would only restate
+         "remove it" in borrowed vocabulary, so the malware card stands alone. -->
+    <div v-if="ssvc && !p?.malicious" class="card">
       <div class="ssvchead">
         <div>
           <div class="lbl">SSVC decision</div>
@@ -117,9 +117,8 @@ function pct(v: number | null | undefined, digits = 1) {
           :class="{ assumed: ssvc.points[s.key]?.assumed }"
         >
           <span class="lbl">{{ s.label }}</span>
-          <span class="val" :class="{ hatch: ssvc.points[s.key]?.assumed }">
-            {{ ssvc.points[s.key]?.value }}
-          </span>
+          <span class="val">{{ pointValue(ssvc.points[s.key]?.value) }}</span>
+          <span v-if="ssvc.points[s.key]?.assumed" class="tag unknown caps assumedtag">assumed</span>
           <span class="basis">{{ ssvc.points[s.key]?.basis }}</span>
         </li>
       </ol>
@@ -135,8 +134,11 @@ function pct(v: number | null | undefined, digits = 1) {
           CISA has published no assessment for this identifier, so automatable and
           technical impact are mapped from the CVSS vector.
         </template>
-        Mission &amp; well-being is what you have said about the asset; classify it to
-        firm this up.
+        <template v-if="ssvc.points.mission_wellbeing?.assumed">
+          Mission &amp; well-being is assumed because the asset has no tier or
+          criticality — classify it to firm this up.
+        </template>
+        <template v-else>Mission &amp; well-being is what you have said about the asset.</template>
       </p>
     </div>
 
@@ -149,25 +151,32 @@ function pct(v: number | null | undefined, digits = 1) {
         </div>
         <span class="fine framework">{{ dl.framework }}</span>
       </div>
-      <div class="dlinputs">
-        <span
-          v-for="i in DL_INPUTS" :key="i.key" class="dlin"
-          :class="{ assumed: dl.inputs[i.key]?.assumed }" :title="dl.inputs[i.key]?.basis"
+      <dl class="dlinputs">
+        <div
+          v-for="i in DL_INPUTS" :key="i.key" class="dlrow"
+          :class="{ assumed: dl.inputs[i.key]?.assumed }"
         >
-          {{ i.label }} <strong :class="{ hatch: dl.inputs[i.key]?.assumed }">{{ dl.inputs[i.key]?.value ? 'yes' : 'no' }}</strong>
-        </span>
-      </div>
+          <dt>{{ i.label }}</dt>
+          <dd>
+            <strong :class="{ hatch: dl.inputs[i.key]?.assumed }">
+              {{ dl.inputs[i.key]?.value ? 'yes' : 'no' }}
+            </strong>
+            <span v-if="dl.inputs[i.key]?.assumed" class="tag unknown caps assumedtag">assumed</span>
+            <span class="basis">{{ dl.inputs[i.key]?.basis }}</span>
+          </dd>
+        </div>
+      </dl>
       <ul v-if="dl.notes?.length" class="notes">
         <li v-for="(n, i) in dl.notes" :key="i">{{ n }}</li>
       </ul>
       <p class="fine">
         The clock started {{ dl.clock_start }} — the earlier of Athena first seeing this
         here and its addition to KEV. Binding on US federal agencies; a benchmark for
-        everyone else. Hover an input for where it came from.
+        everyone else. A dashed input was not established and was taken as shown.
       </p>
     </div>
 
-    <div class="grid">
+    <div v-if="!p?.malicious" class="grid">
       <!-- ══ Known exploitation ══ -->
       <div class="card">
         <div class="lbl">Known exploitation</div>
@@ -175,16 +184,16 @@ function pct(v: number | null | undefined, digits = 1) {
           <p class="big crit">In CISA KEV</p>
           <div class="kv"><span>Added by CISA</span>
             <span class="muted">{{ kev.date_added || 'date not published' }}</span></div>
-          <div class="kv"><span>CISA due date</span>
+          <div class="kv"><span>KEV due (federal)</span>
             <span :class="{ overdue: kev.days_to_due != null && kev.days_to_due < 0 }">
               {{ kev.due_date || '—' }}
-              <span v-if="dueText" class="muted"> · {{ dueText }}</span>
+              <span v-if="kevDue" class="muted"> · {{ kevDue }}</span>
             </span></div>
           <div class="kv"><span>Ransomware use</span>
             <span class="muted">{{ kev.ransomware ? 'known' : 'not known' }}</span></div>
           <p class="fine">
-            The due date is the deadline CISA sets for federal agencies — a strong
-            external benchmark, not a rule Athena enforces.
+            CISA's catalogue date for federal agencies. The deadline Athena shows for
+            this asset is BOD 26-04's, above.
           </p>
         </template>
         <template v-else>
@@ -200,7 +209,7 @@ function pct(v: number | null | undefined, digits = 1) {
       <div class="card">
         <div class="lbl">Exploit likelihood (EPSS)</div>
         <template v-if="epss?.scored">
-          <p class="big mono tnum">{{ pct(epss.score) }}</p>
+          <p class="big mono tnum">{{ epss.score >= 0.995 ? '>99%' : pct(epss.score) }}</p>
           <div class="track"><span class="fill" :style="{ width: `${Math.max(2, (epss.percentile ?? 0) * 100)}%` }" /></div>
           <p class="fine">
             Probability of exploitation activity in the next 30 days.
@@ -230,7 +239,7 @@ function pct(v: number | null | undefined, digits = 1) {
             <span v-if="cvss.score == null" class="fine"> v4 is recorded, not scored</span>
           </p>
           <div class="metrics">
-            <span v-for="m in metrics" :key="m.key" class="metric" :class="{ worst: m.worst }">
+            <span v-for="m in metrics" :key="m.key" class="tag quiet metric" :class="{ worst: m.worst }">
               {{ m.label }} <strong>{{ m.value }}</strong>
             </span>
           </div>
@@ -253,9 +262,11 @@ function pct(v: number | null | undefined, digits = 1) {
 <style scoped>
 .prio { display: flex; flex-direction: column; gap: .8rem; }
 .card { border: 1px solid var(--rule); border-radius: 9px; background: var(--surface); padding: .9rem 1rem; }
-.malware { border: 1.5px solid var(--crit); }
+.malware { border: 1px solid var(--bad); border-left-width: 4px; }
 .malware p { margin: .4rem 0 0; font-size: .85rem; line-height: 1.55; color: var(--ink-2); }
-.lbl.crit, .crit { color: var(--crit); }
+.lbl.crit { color: var(--ink); }
+.crit { color: var(--ink); text-decoration: underline; text-decoration-color: var(--bad);
+        text-decoration-thickness: 2px; text-underline-offset: 4px; }
 .ssvchead { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; }
 .outcome { display: flex; align-items: center; gap: .6rem; margin-top: .35rem; flex-wrap: wrap; }
 .meaning { font-size: .84rem; color: var(--ink-2); }
@@ -269,36 +280,48 @@ function pct(v: number | null | undefined, digits = 1) {
   content: '›'; position: absolute; right: -.48rem; top: 50%; transform: translateY(-50%);
   color: var(--ink-muted); font-size: .9rem; background: var(--surface); line-height: 1;
 }
-.step.assumed { border-style: dashed; }
-.val { font-weight: 640; font-size: .92rem; text-transform: capitalize; padding: 0 .15rem;
+/* Assumed must not look established: a dashed strong border, the hatch across the
+   whole step, and the word itself. */
+.step.assumed {
+  border: 1px dashed var(--line-strong);
+  background: repeating-linear-gradient(45deg, var(--plane), var(--plane) 6px,
+              var(--never-hatch) 6px, var(--never-hatch) 7px);
+}
+.assumedtag { align-self: flex-start; background: var(--surface); }
+.val { font-weight: 640; font-size: .92rem; padding: 0 .15rem;
        align-self: flex-start; border-radius: 3px; }
 .basis { font-size: .72rem; color: var(--ink-muted); line-height: 1.4; }
 .dltext { margin: .3rem 0 0; font-size: .92rem; font-weight: 600; }
-.dlinputs { display: flex; flex-wrap: wrap; gap: .4rem; margin: .7rem 0 .2rem; }
-.dlin { font-size: .74rem; padding: .18rem .45rem; border: 1px solid var(--rule); border-radius: 5px;
-        color: var(--ink-muted); background: var(--plane); cursor: help; }
-.dlin strong { color: var(--ink); font-weight: 600; padding: 0 .1rem; border-radius: 3px; }
-.dlin.assumed { border-style: dashed; }
+.dlinputs { display: grid; grid-template-columns: repeat(4, 1fr); gap: .5rem; margin: .75rem 0 .2rem; }
+.dlrow { border: 1px solid var(--rule); border-radius: var(--r-md); padding: .45rem .6rem;
+         background: var(--plane); display: flex; flex-direction: column; gap: .15rem; margin: 0; }
+.dlrow.assumed { border-style: dashed; border-color: var(--line-strong); }
+.dlrow dt { font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: .06em;
+            color: var(--ink-muted); font-weight: 600; }
+.dlrow dd { margin: 0; display: flex; flex-direction: column; gap: .1rem; }
+.dlrow strong { font-size: var(--fs-md); font-weight: 640; text-transform: capitalize;
+                align-self: flex-start; padding: 0 .15rem; border-radius: var(--r-xs); }
+.dlrow .basis { font-size: var(--fs-xs); color: var(--ink-muted); line-height: 1.4; }
 .notes { margin: .5rem 0 0; padding-left: 1.1rem; font-size: .78rem; color: var(--warn-ink); }
 
 .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .8rem; }
 .big { font-size: 1.15rem; font-weight: 640; margin: .35rem 0 .45rem; display: flex; align-items: center; gap: .4rem; }
 .kv { display: flex; justify-content: space-between; gap: .6rem; font-size: .8rem; padding: .22rem 0;
       border-top: 1px solid var(--rule); }
-.overdue { color: var(--crit); font-weight: 600; }
+.overdue { color: var(--ink); font-weight: 600; text-decoration: underline;
+            text-decoration-color: var(--bad); text-decoration-thickness: 2px; text-underline-offset: 3px; }
 .fine { font-size: .72rem; color: var(--ink-muted); margin: .5rem 0 0; line-height: 1.45; }
 .track { height: 4px; border-radius: 2px; background: var(--rule); overflow: hidden; }
 .fill { display: block; height: 100%; background: var(--ink-2); }
 .metrics { display: flex; flex-wrap: wrap; gap: .3rem; }
-.metric { font-size: .68rem; padding: .08rem .35rem; border: 1px solid var(--rule); border-radius: 4px;
-          color: var(--ink-muted); background: var(--plane); }
+.metric { color: var(--ink-muted); }
 .metric strong { color: var(--ink-2); font-weight: 600; }
-.metric.worst { border-color: var(--ink-muted); }
+.metric.worst { border-color: var(--line-strong); }
 .metric.worst strong { color: var(--ink); }
 .hatchbox { display: inline-block; width: 1.6rem; height: .85rem; border-radius: 3px; border: 1px dashed var(--rule); }
 
 @media (max-width: 1080px) {
-  .path { grid-template-columns: 1fr 1fr; }
+  .path, .dlinputs { grid-template-columns: 1fr 1fr; }
   .step::after { display: none; }
   .grid { grid-template-columns: 1fr; }
 }

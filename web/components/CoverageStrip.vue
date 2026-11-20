@@ -45,7 +45,9 @@ const read = computed(() => {
     />
     <p class="legend">
       <span class="swatch hatch" aria-hidden="true" />
-      Hatched or dashed means <strong>not looked at</strong> — never <em>clean</em>.
+      <!-- One text node for the flex container: bare text and inline elements were
+           each made a flex item and the sentence split into four columns. -->
+      <span>Hatched or dashed means <strong>not looked at</strong> — never <em>clean</em>.</span>
     </p>
   </div>
 </template>

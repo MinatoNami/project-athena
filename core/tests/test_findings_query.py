@@ -291,3 +291,22 @@ def test_a_withdrawn_advisory_stops_ranking(session, estate):
     page = query_findings(session, FindingQuery(limit=200))
     assert retracted.id not in {g["vulnerability_id"] for g in page.groups}
     assert query_findings(session, FindingQuery(malicious=True, limit=10)).groups == []
+
+
+def test_the_three_today_tabs_partition_the_estate(session, estate):
+    """Needs-you, waiting and cleared must not overlap: a known-exploited critical
+    listed under "cleared" tells a reader the opposite of the truth."""
+    def ids(**kw):
+        return {g["vulnerability_id"] for g in query_findings(
+            session, FindingQuery(limit=200, **kw)).groups}
+
+    needs = ids(needs_attention=True)
+    cleared = ids(assessed=True, needs_attention=False)
+    waiting = ids(assessed=False, needs_attention=False)
+    assert not (needs & cleared) and not (needs & waiting) and not (cleared & waiting)
+    assert needs | cleared | waiting == ids()
+
+    facets = query_findings(session, FindingQuery(limit=1)).facets
+    assert facets["needs_attention"]["total"] == len(needs)
+    assert facets["cleared"]["total"] == len(cleared)
+    assert facets["waiting"]["total"] == len(waiting)

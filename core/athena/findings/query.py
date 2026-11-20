@@ -104,7 +104,10 @@ class FindingQuery:
     # assessment. The second half matters — a known-exploited flaw nobody has looked
     # at is the strongest reason to look at something, and a queue defined purely on
     # measured band would rank it nowhere.
-    needs_attention: bool = False
+    # True: the triage queue. False: everything outside it — which is what "cleared"
+    # and "waiting" mean on Today, so the three tabs partition the estate instead of
+    # overlapping (a known-exploited critical was in both "needs you" and "cleared").
+    needs_attention: bool | None = None
 
     sort: str = "risk"
     cursor: str | None = None
@@ -121,7 +124,7 @@ class FindingQuery:
                 self.tier,
                 self.has_fix is not None,
                 self.min_band,
-                self.needs_attention,
+                self.needs_attention is not None,
             )
         )
 
@@ -285,8 +288,10 @@ def _grouped(query: FindingQuery, *, with_facets: bool) -> Select:
             grouped = grouped.having(func.count(Finding.fixed_version) > 0)
         elif query.has_fix is False:
             grouped = grouped.having(func.count(Finding.fixed_version) == 0)
-        if query.needs_attention:
+        if query.needs_attention is True:
             grouped = grouped.having(_needs_attention_having())
+        elif query.needs_attention is False:
+            grouped = grouped.having(~_needs_attention_having())
     return grouped
 
 
@@ -365,6 +370,19 @@ def _facet_counts(session: Session, query: FindingQuery, *, with_facets: bool) -
             func.count()
             .filter((sub.c.worst_rank >= 2) | (sub.c.kev > 0) | (sub.c.malicious > 0))
             .label("needs_attention"),
+            # The other two Today tabs, disjoint from the queue and from each other.
+            func.count()
+            .filter(
+                (sub.c.investigated_count > 0)
+                & ~((sub.c.worst_rank >= 2) | (sub.c.kev > 0) | (sub.c.malicious > 0))
+            )
+            .label("cleared"),
+            func.count()
+            .filter(
+                (sub.c.investigated_count == 0)
+                & ~((sub.c.worst_rank >= 2) | (sub.c.kev > 0) | (sub.c.malicious > 0))
+            )
+            .label("waiting"),
             *[
                 func.count().filter(sub.c[f"exposure_{value}"] > 0).label(f"exposure:{value}")
                 for value in ("internet", "internal", "isolated", "unknown")
@@ -449,7 +467,8 @@ def query_findings(session: Session, query: FindingQuery) -> Page:
         name: {"total": totals.get(name, 0), "matching": matching.get(name, 0)}
         for name in (
             "assessed", "unassessed", "kev", "malicious", "has_fix", "no_fix", "spread",
-            "needs_attention", "exposure:internet", "exposure:internal",
+            "needs_attention", "cleared", "waiting",
+            "exposure:internet", "exposure:internal",
             "exposure:isolated", "exposure:unknown",
             "band:critical", "band:high", "band:medium", "band:low",
             "band:informational", "band:unassessed",
@@ -536,6 +555,9 @@ def _hydrate(
                 "state": finding.state,
                 "match_method": finding.match_method,
                 "match_confidence": finding.match_confidence,
+                # When the facts this rests on were last read (rule 2: freshness is
+                # always visible). Inherited image scans count, as in coverage.
+                "observed_at": asset.last_inventoried_at,
                 # Computed per instance, like the score: the same flaw is "Act" on a
                 # critical production host and "Track" on a laptop.
                 "ssvc": ssvc.decide(

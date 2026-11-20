@@ -25,6 +25,8 @@ interface Item {
   label: string
   hint?: string
   tone?: 'bad'
+  /** Set on anything that changes state: the first Enter arms it, the second runs it. */
+  confirm?: string
   run: () => Promise<void> | void
 }
 
@@ -47,14 +49,14 @@ const PAGES: Item[] = [
 const ACTIONS: Item[] = [
   {
     id: 'a-refresh', group: 'Actions', label: 'Refresh all intelligence sources',
-    hint: 'queues fetches', run: async () => {
+    hint: 'queues fetches', confirm: 'queue a fetch from every source', run: async () => {
       const res = await api<{ queued: number }>('intel/refresh', { method: 'POST' })
       note.value = `${res.queued} fetch${res.queued === 1 ? '' : 'es'} queued.`
     },
   },
   {
     id: 'a-vex', group: 'Actions', label: 'Export OpenVEX for the estate',
-    hint: 'downloads JSON', run: async () => {
+    hint: 'downloads JSON', confirm: 'download an audited VEX export', run: async () => {
       await downloadJson('export/openvex', 'athena.openvex.json')
       note.value = 'VEX document downloaded. The export is recorded in the audit log.'
     },
@@ -80,8 +82,12 @@ watch(open, async (value) => {
   }
 })
 
+const searching = ref(false)
+const armed = ref<string | null>(null)
+
 watch(text, (value) => {
   active.value = 0
+  armed.value = null
   clearTimeout(searchTimer)
   const q = value.trim()
   if (q.length < 2) {
@@ -89,6 +95,7 @@ watch(text, (value) => {
     return
   }
   const seq = ++searchSeq
+  searching.value = true
   searchTimer = setTimeout(async () => {
     try {
       const res = await api<any>(
@@ -97,6 +104,8 @@ watch(text, (value) => {
       if (seq === searchSeq) findingHits.value = res.groups ?? []
     } catch {
       if (seq === searchSeq) findingHits.value = []
+    } finally {
+      if (seq === searchSeq) searching.value = false
     }
   }, 180)
 })
@@ -143,9 +152,24 @@ function close() {
   nextTick(() => returnFocus?.focus?.())
 }
 
+// The highlight follows the item, not the position: finding results arrive after
+// the static entries, and Enter must open what the reader is looking at.
+watch(items, (list, old) => {
+  const id = old?.[active.value]?.id
+  const at = id ? list.findIndex(i => i.id === id) : -1
+  active.value = at >= 0 ? at : 0
+})
+watch(active, () => { armed.value = null })
+
 async function choose(index: number) {
   const item = items.value[index]
   if (!item || busy.value) return
+  if (item.confirm && armed.value !== item.id) {
+    armed.value = item.id
+    note.value = `Press ↵ again to ${item.confirm}.`
+    return
+  }
+  armed.value = null
   busy.value = true
   note.value = null
   try {
@@ -204,7 +228,10 @@ watch(active, async (i) => {
               <span v-if="item.hint" class="hint">{{ item.hint }}</span>
             </li>
           </template>
-          <li v-if="!items.length" class="empty" role="presentation">
+          <li v-if="!items.length && searching" class="empty" role="presentation">
+            Searching findings…
+          </li>
+          <li v-else-if="!items.length" class="empty" role="presentation">
             Nothing matches “{{ text }}”. Findings are searched by advisory id and summary.
           </li>
         </ul>
@@ -236,7 +263,9 @@ kbd { font: 600 .64rem ui-monospace, SFMono-Regular, Menlo, monospace; color: va
               color: var(--ink-muted); padding: .55rem .55rem .25rem; }
 .opt { display: flex; align-items: center; justify-content: space-between; gap: .8rem;
        padding: .45rem .55rem; border-radius: 7px; cursor: pointer; font-size: .86rem; }
-.opt.on { background: var(--plane); outline: 1px solid var(--rule); }
+/* The active option has to be findable at a glance: a plane background and a hairline
+   measured 1.0–1.3:1. An ink bar on the leading edge is unmistakable in both themes. */
+.opt.on { background: var(--plane); box-shadow: inset 3px 0 0 var(--ink); }
 .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .label.bad { color: var(--crit); }
 .hint { font-size: .72rem; color: var(--ink-muted); white-space: nowrap; flex-shrink: 0; }

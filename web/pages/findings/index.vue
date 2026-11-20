@@ -106,9 +106,26 @@ async function exportVex() {
 /** The benchmark date, in words relative to today. */
 function dueLabel(i: any) {
   if (i.due_on_upgrade) return 'next upgrade'
-  if (!i.due) return null
-  const days = daysUntil(i.due)
-  return days < 0 ? `${-days}d overdue` : days === 0 ? 'due today' : `${days}d left`
+  return dueText(i.due)
+}
+
+/** The group's most urgent SSVC outcome and soonest deadline, for the collapsed row:
+    a reader scanning the list should not have to open every row to find the
+    overdue one. Malware is left out of both — it is removed now, not scheduled. */
+const SSVC_RANK: Record<string, number> = { track: 0, 'track*': 1, attend: 2, act: 3 }
+function worstSsvc(g: any): string | null {
+  if (g.malicious) return null
+  let best: string | null = null
+  for (const i of g.instances ?? []) {
+    if (i.ssvc && (best === null || (SSVC_RANK[i.ssvc] ?? -1) > (SSVC_RANK[best] ?? -1))) best = i.ssvc
+  }
+  return best
+}
+function earliestDue(g: any): any | null {
+  if (g.malicious) return null
+  const dated = (g.instances ?? []).filter((i: any) => i.due)
+  if (dated.length) return dated.reduce((a: any, b: any) => (a.due <= b.due ? a : b))
+  return (g.instances ?? []).find((i: any) => i.due_on_upgrade) ?? null
 }
 
 async function refreshIntel() {
@@ -364,9 +381,9 @@ function instanceLines(g: any) {
               : `of ${(data?.group_count ?? 0).toLocaleString()}` }}
           </span>
           <div class="seg">
-            <button :class="{ on: sort === 'risk' }" @click="sort = 'risk'">Risk</button>
-            <button :class="{ on: sort === 'spread' }" @click="sort = 'spread'">Spread</button>
-            <button :class="{ on: sort === 'recent' }" @click="sort = 'recent'">Newest</button>
+            <button :class="{ on: sort === 'risk' }" :aria-pressed="sort === 'risk'" @click="sort = 'risk'">Risk</button>
+            <button :class="{ on: sort === 'spread' }" :aria-pressed="sort === 'spread'" @click="sort = 'spread'">Spread</button>
+            <button :class="{ on: sort === 'recent' }" :aria-pressed="sort === 'recent'" @click="sort = 'recent'">Newest</button>
           </div>
         </div>
 
@@ -398,8 +415,10 @@ function instanceLines(g: any) {
         >
           <div
             class="grow" role="button" tabindex="0"
+            :aria-expanded="expanded === g.group_key"
             @click="expanded = expanded === g.group_key ? null : g.group_key"
-            @keydown.enter="expanded = expanded === g.group_key ? null : g.group_key"
+            @keydown.enter.prevent="expanded = expanded === g.group_key ? null : g.group_key"
+            @keydown.space.prevent="expanded = expanded === g.group_key ? null : g.group_key"
           >
             <SeverityChip v-if="g.worst_band" :severity="g.worst_band" :kev="g.kev" />
             <span v-else class="unassessed" title="Version match only — not investigated">
@@ -410,9 +429,13 @@ function instanceLines(g: any) {
                  would push every later cell one column over. -->
             <span class="idcell">
               <code class="cve">{{ g.vulnerability_id }}</code>
-              <span v-if="g.malicious" class="malflag" title="OpenSSF malicious-packages record">malware</span>
+              <span v-if="g.malicious" class="tag bad strong caps">malware</span>
             </span>
-            <span class="summary">{{ g.summary || '—' }}</span>
+            <span class="summary"><UntrustedText :text="g.summary || '—'" /></span>
+            <span class="gssvc"><SsvcChip :outcome="worstSsvc(g)" compact /></span>
+            <span
+              class="gdue" :class="{ overdue: (dueLabel(earliestDue(g) ?? {}) ?? '').startsWith('overdue') }"
+            >{{ earliestDue(g) ? dueLabel(earliestDue(g)) : '' }}</span>
             <span class="spread">
               {{ g.instance_count }} {{ g.instance_count === 1 ? 'asset' : 'assets' }}
               <template v-if="g.investigated_count">· {{ g.investigated_count }} assessed</template>
@@ -472,11 +495,11 @@ function instanceLines(g: any) {
                       <span class="muted">not investigated</span>
                     </template>
                   </td>
-                  <td><SsvcChip :outcome="line.first.ssvc" compact /></td>
-                  <td class="due" :class="{ overdue: dueLabel(line.first)?.includes('overdue') }">
+                  <td><SsvcChip v-if="!g.malicious" :outcome="line.first.ssvc" compact /></td>
+                  <td class="due" :class="{ overdue: dueLabel(line.first)?.startsWith('overdue') }">
                     {{ dueLabel(line.first) ?? '—' }}
-                    <span v-if="line.first.forensic_triage" class="ft"
-                          title="Forensic triage: check for prior compromise, not only the patch">FT</span>
+                    <span v-if="line.first.forensic_triage" class="tag bad caps"
+                          title="Check for prior compromise, not only the patch">+ triage</span>
                   </td>
                 </tr>
               </tbody>
@@ -500,12 +523,7 @@ function instanceLines(g: any) {
 
 <style scoped>
 .idcell { display: flex; flex-direction: column; align-items: flex-start; gap: .15rem; min-width: 0; }
-.malflag { font-size: .62rem; text-transform: uppercase; letter-spacing: .05em; font-weight: 700;
-           padding: .06rem .32rem; border-radius: 4px; border: 1.5px solid var(--crit); color: var(--crit); }
 .due { white-space: nowrap; font-size: .76rem; color: var(--ink-2); }
-.due.overdue { color: var(--crit); font-weight: 600; }
-.ft { font-size: .6rem; font-weight: 700; margin-left: .25rem; padding: 0 .2rem; border-radius: 3px;
-      border: 1px solid var(--crit); color: var(--crit); }
 /* Not `.summary`: that is the row's summary text, and sharing the name drew a
    bordered box around every row's summary and hid this strip below 1000px. */
 .statstrip {
@@ -547,7 +565,7 @@ function instanceLines(g: any) {
 .facet.on .box { background: var(--ink); border-color: var(--ink); color: var(--surface); }
 .fname { flex-grow: 1; }
 .fn { font-size: .7rem; color: var(--ink-muted); }
-.denom { opacity: .6; }
+.denom { color: var(--ink-muted); font-weight: 400; }
 .more { padding: .7rem .85rem; border-top: 1px solid var(--rule);
         display: flex; align-items: center; gap: .8rem; }
 .moremeta { font-size: .74rem; color: var(--ink-muted); }
@@ -574,7 +592,7 @@ function instanceLines(g: any) {
 .group { border-top: 1px solid var(--rule); }
 .group:first-of-type { border-top: 0; }
 .grow {
-  display: grid; grid-template-columns: 6.6rem 8.6rem 1fr 10rem 1rem;
+  display: grid; grid-template-columns: 6.6rem 8.6rem 1fr 4.6rem 6.4rem 9rem 1rem;
   gap: .7rem; align-items: center; padding: .55rem .85rem; cursor: pointer;
 }
 .grow:hover { background: var(--plane); }
@@ -599,13 +617,32 @@ function instanceLines(g: any) {
   border: 1px dashed var(--rule); border-radius: 4px; padding: .15rem .38rem;
   white-space: nowrap; justify-self: start;
 }
-.kevflag { background: var(--sev-critical); color: var(--sev-on-dark);
+.kevflag { border: 1px solid var(--bad); color: var(--ink); font-weight: 600;
            padding: 0 .22rem; border-radius: 3px; margin-left: .22rem; }
+.gdue { font-size: var(--fs-xs); color: var(--ink-2); white-space: nowrap; }
+.gdue.overdue, .due.overdue { color: var(--ink); font-weight: 600;
+  text-decoration: underline; text-decoration-color: var(--bad); text-decoration-thickness: 2px;
+  text-underline-offset: 3px; }
 
+/* At 1024 the summary column measured 27px wide — present, but unreadable. Below
+   1180 it takes a line of its own under the id instead of being squeezed or hidden:
+   the summary is what tells a reader whether to open the row at all. */
+@media (max-width: 1180px) {
+  .grow {
+    grid-template-columns: 6.6rem 1fr auto auto;
+    grid-template-areas: "band id ssvc chev" "band sum due chev";
+    row-gap: .2rem;
+  }
+  .gssvc { grid-area: ssvc; justify-self: end; }
+  .gdue { grid-area: due; justify-self: end; }
+  .grow > :first-child { grid-area: band; align-self: start; }
+  .idcell { grid-area: id; flex-direction: row; align-items: center; gap: .4rem; }
+  .summary { grid-area: sum; white-space: normal; color: var(--ink-2); }
+  .spread { display: none; }
+  .chev { grid-area: chev; }
+}
 @media (max-width: 1000px) {
   .cols { flex-direction: column; }
   .facets { width: 100%; flex-direction: row; flex-wrap: wrap; gap: 1.2rem; }
-  .grow { grid-template-columns: 6.6rem 1fr 1rem; }
-  .summary, .spread { display: none; }
 }
 </style>

@@ -64,7 +64,7 @@ def list_findings(
     tier: str | None = None,
     has_fix: bool | None = None,
     min_band: str | None = None,
-    needs_attention: bool = False,
+    needs_attention: bool | None = None,
     sort: str = "risk",
     cursor: str | None = None,
     limit: int = Query(default=DEFAULT_LIMIT, le=MAX_LIMIT),
@@ -524,11 +524,7 @@ def intel_sources(
             "checked": ssvc_checked,
             "published": ssvc_published,
         },
-        "any_source_stale": any(
-            s["never_succeeded"] or (s["age_seconds"] or 0) > 21600 for s in sources
-        )
-        if sources
-        else True,
+        "any_source_stale": any(s["stale"] for s in sources) if sources else True,
     }
 
 

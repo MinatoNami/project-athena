@@ -62,8 +62,8 @@ def _coverage(session: Session, asset_id: str | None) -> dict[str, Any]:
             .group_by(ScanRun.asset_id)
             .subquery()
         )
-        scanned, oldest = session.execute(
-            select(func.count(), func.min(latest.c.at)).select_from(latest)
+        scanned, oldest, newest = session.execute(
+            select(func.count(), func.min(latest.c.at), func.max(latest.c.at)).select_from(latest)
         ).one()
         failing = session.execute(
             select(func.count(func.distinct(ScanRun.asset_id))).where(
@@ -77,7 +77,10 @@ def _coverage(session: Session, asset_id: str | None) -> dict[str, Any]:
             "scanned": scanned,
             "never_succeeded": total - scanned,
             "failing": failing,
+            # The stalest repository's last good scan bounds how fresh the whole
+            # list is; the newest says when anything was last checked.
             "oldest_success": oldest,
+            "latest_success": newest,
         }
     return out
 

@@ -7,6 +7,17 @@
  * flattening the grouping and throttling exist to undo.
  */
 const open = ref(false)
+const trigger = ref<HTMLButtonElement | null>(null)
+
+/** Escape closes and returns focus to the bell, where the reader left from. */
+function onKey(e: KeyboardEvent) {
+  if (e.key === 'Escape' && open.value) {
+    open.value = false
+    trigger.value?.focus()
+  }
+}
+onMounted(() => window.addEventListener('keydown', onKey))
+onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
 const { data, refresh } = await useAsyncData('notifications', () =>
   api<any>('notifications?limit=30').catch(() => null),
@@ -38,8 +49,9 @@ function when(at: string | null) {
 <template>
   <div class="bell">
     <button
-      class="trigger" :class="{ on: open }"
-      :aria-label="`Notifications, ${unread} unread`" @click="open = !open"
+      ref="trigger" class="trigger" :class="{ on: open }"
+      :aria-label="`Notifications, ${unread} unread${urgent ? `, ${urgent} urgent` : ''}`"
+      :aria-expanded="open" aria-controls="inbox-panel" @click="open = !open"
     >
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
            stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -51,7 +63,7 @@ function when(at: string | null) {
       <span v-else-if="unread" class="count">{{ unread }}</span>
     </button>
 
-    <div v-if="open" class="panel">
+    <div v-if="open" id="inbox-panel" class="panel" role="region" aria-label="Inbox">
       <div class="head">
         <span class="lbl">Inbox</span>
         <button v-if="unread" class="linkish" @click="markAll">Mark all read</button>
@@ -66,13 +78,17 @@ function when(at: string | null) {
         <li
           v-for="n in data.notifications" :key="n.id"
           class="item" :class="{ unread: !n.read_at, urgent: n.urgency === 'urgent' }"
+          role="button" tabindex="0"
+          :aria-label="`${n.urgency === 'urgent' ? 'Urgent: ' : ''}${n.title}${n.read_at ? '' : ' (unread — activate to mark read)'}`"
           @click="markRead(n.id)"
+          @keydown.enter.prevent="markRead(n.id)"
+          @keydown.space.prevent="markRead(n.id)"
         >
           <div class="top">
-            <span class="title">{{ n.title }}</span>
+            <span class="title"><UntrustedText :text="n.title" /></span>
             <span class="ago">{{ when(n.sent_at || n.created_at) }}</span>
           </div>
-          <p v-if="n.body" class="body">{{ n.body }}</p>
+          <p v-if="n.body" class="body"><UntrustedText :text="n.body" /></p>
           <div class="meta">
             <!-- The count is the grouping made visible: one message, many assets. -->
             <span v-if="n.occurrence_count > 1" class="rollup">

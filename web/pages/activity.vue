@@ -153,9 +153,13 @@ const byAction = computed(() => {
         <div class="seq mono tnum">{{ e.seq }}</div>
         <div class="line">
           <div class="what">
-            <span class="actor">{{ e.actor }}</span>
+            <span class="actor" :title="e.actor">{{ e.actor_label || e.actor }}</span>
             <span class="verb" :class="{ bad: isFailure(e.action) }">{{ verb(e.action) }}</span>
-            <code v-if="e.subject" class="subject">{{ subjectLabel(e.subject).kind }}
+            <NuxtLink
+              v-if="e.subject && subjectLabel(e.subject).kind === 'asset'"
+              :to="`/assets/${subjectLabel(e.subject).id}`" class="subject"
+            ><code>asset <span class="sid">{{ subjectLabel(e.subject).id.slice(0, 12) }}</span></code></NuxtLink>
+            <code v-else-if="e.subject" class="subject">{{ subjectLabel(e.subject).kind }}
               <span class="sid">{{ subjectLabel(e.subject).id.slice(0, 12) }}</span></code>
           </div>
           <div class="meta">
@@ -165,7 +169,7 @@ const byAction = computed(() => {
         </div>
       </div>
 
-      <div v-if="data?.next_before_seq" class="more">
+      <div v-if="data?.next_before_seq && data.next_before_seq > 1" class="more">
         <button class="btn" :disabled="pending" @click="loadMore">
           {{ pending ? 'Loading…' : 'Load older' }}
         </button>
@@ -200,8 +204,8 @@ const byAction = computed(() => {
 .verb { font-size: .81rem; color: var(--ink-2); }
 .verb.bad { color: var(--crit); font-weight: 600; }
 .subject { font-size: .73rem; color: var(--ink-muted); }
-.sid { opacity: .75; }
+.sid { color: var(--ink-muted); }
 .meta { display: flex; gap: .7rem; align-items: baseline; font-size: .72rem; color: var(--ink-muted); }
-.hash { font-size: .68rem; opacity: .7; }
+.hash { font-size: var(--fs-2xs); color: var(--ink-muted); }
 .more { padding: .7rem .85rem; border-top: 1px solid var(--rule); }
 </style>

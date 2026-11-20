@@ -29,7 +29,7 @@ export type ChartTheme = Record<keyof typeof TOKENS, string>
 
 /** Light-mode values, used for the server pass and before the first paint. */
 const FALLBACK: ChartTheme = {
-  ink: '#0b0b0b', ink2: '#52514e', muted: '#898781', rule: '#e1e0d9',
+  ink: '#0b0b0b', ink2: '#52514e', muted: '#6f6d68', rule: '#e1e0d9',
   surface: '#fcfcfb', plane: '#f9f9f7', good: '#0ca30c', warn: '#fab219',
   warnInk: '#8a5a00', crit: '#66201f', critical: '#66201f', high: '#8e2f2c',
   medium: '#b54840', low: '#d1685f', informational: '#e5948c',

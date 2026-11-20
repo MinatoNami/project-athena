@@ -121,6 +121,7 @@ const overdue = computed(() =>
             :of="`over ${m.denominator.toLocaleString()} ${m.denominator_label}`"
             :progress="progress(m)"
             :status="STATUS[m.status]"
+            goal
             :target="m.target_mvp === null
               ? undefined
               : `target ${m.lower_is_better ? 'under' : 'over'} ${m.target_mvp}${suffix(m)}`"
