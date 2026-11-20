@@ -41,6 +41,7 @@ const FACET_PARAM: Record<string, string> = {
   assessed: 'assessed=true',
   unassessed: 'assessed=false',
   kev: 'kev_only=true',
+  malicious: 'malicious=true',
   has_fix: 'has_fix=true',
   no_fix: 'has_fix=false',
   'exposure:internet': 'exposure=internet',
@@ -88,6 +89,28 @@ async function loadMore() {
   }
 }
 
+const exportingVex = ref(false)
+const exportNote = ref<string | null>(null)
+async function exportVex() {
+  exportingVex.value = true
+  exportNote.value = null
+  try {
+    await downloadJson('export/openvex', 'athena.openvex.json')
+  } catch (e: any) {
+    exportNote.value = e?.data?.detail || 'The VEX document could not be produced.'
+  } finally {
+    exportingVex.value = false
+  }
+}
+
+/** The benchmark date, in words relative to today. */
+function dueLabel(i: any) {
+  if (i.due_on_upgrade) return 'next upgrade'
+  if (!i.due) return null
+  const days = daysUntil(i.due)
+  return days < 0 ? `${-days}d overdue` : days === 0 ? 'due today' : `${days}d left`
+}
+
 async function refreshIntel() {
   refreshing.value = true
   try {
@@ -116,6 +139,7 @@ const facetGroups = computed(() => [
     label: 'Exploitation',
     options: [
       { id: 'kev', label: 'Known-exploited' },
+      { id: 'malicious', label: 'Malicious package' },
       { id: 'exposure:internet', label: 'Internet-facing' },
     ],
   },
@@ -206,15 +230,21 @@ function instanceLines(g: any) {
         </p>
       </div>
       <div class="actions">
+        <button class="btn" :disabled="exportingVex" @click="exportVex"
+                title="OpenVEX for every finding: not_affected only where a person decided it">
+          {{ exportingVex ? 'Exporting…' : 'Export VEX' }}
+        </button>
         <button class="btn" :disabled="refreshing" @click="refreshIntel">
           {{ refreshing ? 'Queued…' : 'Refresh intelligence' }}
         </button>
       </div>
     </div>
 
+    <p v-if="exportNote" class="err">{{ exportNote }}</p>
+
     <!-- The two populations, as figures rather than a paragraph. The caveat stays:
          an un-investigated finding is a version match, not a confirmed one. -->
-    <div v-if="data" class="summary">
+    <div v-if="data" class="statstrip">
       <StatTile
         label="Investigated"
         :value="(data.assessed_count ?? 0).toLocaleString()"
@@ -227,6 +257,13 @@ function instanceLines(g: any) {
         :value="facetCount('kev').matching"
         :of="`of ${facetCount('kev').total} in the estate`"
         :status="facetCount('kev').matching ? 'bad' : null"
+      />
+      <StatTile
+        v-if="facetCount('malicious').total"
+        label="Malicious packages"
+        :value="facetCount('malicious').matching"
+        :of="`of ${facetCount('malicious').total} in the estate`"
+        status="bad"
       />
       <StatTile
         label="No fix published"
@@ -369,7 +406,12 @@ function instanceLines(g: any) {
               unassessed
               <span v-if="g.kev" class="kevflag">KEV</span>
             </span>
-            <code class="cve">{{ g.vulnerability_id }}</code>
+            <!-- One grid cell: the row is a fixed five-column grid, and a sixth child
+                 would push every later cell one column over. -->
+            <span class="idcell">
+              <code class="cve">{{ g.vulnerability_id }}</code>
+              <span v-if="g.malicious" class="malflag" title="OpenSSF malicious-packages record">malware</span>
+            </span>
             <span class="summary">{{ g.summary || '—' }}</span>
             <span class="spread">
               {{ g.instance_count }} {{ g.instance_count === 1 ? 'asset' : 'assets' }}
@@ -384,6 +426,10 @@ function instanceLines(g: any) {
               <span v-if="g.epss_score != null">EPSS {{ (g.epss_score * 100).toFixed(1) }}%</span>
               <span v-else class="gap">EPSS not published — unrated, not harmless</span>
               <span v-if="g.kev_ransomware" class="bad">used in ransomware campaigns</span>
+              <span v-if="g.epss_percentile != null">
+                {{ (g.epss_percentile * 100).toFixed(0) }}th EPSS percentile
+              </span>
+              <span v-if="g.kev_due_date">CISA due {{ g.kev_due_date }}</span>
               <span v-if="g.published_at">
                 published {{ new Date(g.published_at).toLocaleDateString() }}
               </span>
@@ -391,7 +437,11 @@ function instanceLines(g: any) {
 
             <table>
               <thead>
-                <tr><th>Asset</th><th>Component</th><th>Fixed in</th><th>Assessment</th></tr>
+                <tr>
+                  <th>Asset</th><th>Component</th><th>Fixed in</th><th>Assessment</th>
+                  <th title="CISA SSVC outcome for this asset">SSVC</th>
+                  <th title="CISA BOD 26-04 deadline, as a benchmark">Due</th>
+                </tr>
               </thead>
               <tbody>
                 <tr v-for="line in instanceLines(g)" :key="line.key">
@@ -422,6 +472,12 @@ function instanceLines(g: any) {
                       <span class="muted">not investigated</span>
                     </template>
                   </td>
+                  <td><SsvcChip :outcome="line.first.ssvc" compact /></td>
+                  <td class="due" :class="{ overdue: dueLabel(line.first)?.includes('overdue') }">
+                    {{ dueLabel(line.first) ?? '—' }}
+                    <span v-if="line.first.forensic_triage" class="ft"
+                          title="Forensic triage: check for prior compromise, not only the patch">FT</span>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -443,7 +499,16 @@ function instanceLines(g: any) {
 </template>
 
 <style scoped>
-.summary {
+.idcell { display: flex; flex-direction: column; align-items: flex-start; gap: .15rem; min-width: 0; }
+.malflag { font-size: .62rem; text-transform: uppercase; letter-spacing: .05em; font-weight: 700;
+           padding: .06rem .32rem; border-radius: 4px; border: 1.5px solid var(--crit); color: var(--crit); }
+.due { white-space: nowrap; font-size: .76rem; color: var(--ink-2); }
+.due.overdue { color: var(--crit); font-weight: 600; }
+.ft { font-size: .6rem; font-weight: 700; margin-left: .25rem; padding: 0 .2rem; border-radius: 3px;
+      border: 1px solid var(--crit); color: var(--crit); }
+/* Not `.summary`: that is the row's summary text, and sharing the name drew a
+   bordered box around every row's summary and hid this strip below 1000px. */
+.statstrip {
   display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: flex-start;
   border: 1px solid var(--rule); border-radius: 9px; background: var(--surface);
   padding: .72rem .95rem; margin-bottom: .7rem;

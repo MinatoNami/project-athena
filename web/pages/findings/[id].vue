@@ -12,7 +12,7 @@ const route = useRoute()
 const { data: me } = await useMe()
 if (!me.value) await navigateTo('/login')
 
-const tab = ref<'verdict' | 'fix' | 'risk' | 'evidence' | 'advisory'>('verdict')
+const tab = ref<'verdict' | 'priority' | 'fix' | 'risk' | 'evidence' | 'advisory'>('verdict')
 
 const { data, pending, error, refresh } = await useAsyncData(`finding-${route.params.id}`, () =>
   api<any>(`findings/${route.params.id}`),
@@ -72,6 +72,7 @@ const FIX_KIND: Record<string, string> = {
   dependency: 'This is a change to a manifest',
   transitive: 'Something else has to move first',
   no_fix: 'There is nothing to install yet',
+  malicious: 'This is malware: remove it, then respond',
   entitlement: 'The fix is behind a subscription',
   unknown: 'Not enough is recorded to say',
 }
@@ -108,6 +109,7 @@ async function copyCommand() {
 
 const tabs = [
   { id: 'verdict', label: 'Verdict' },
+  { id: 'priority', label: 'Exploitability' },
   { id: 'fix', label: 'Fix' },
   { id: 'risk', label: 'Why this score' },
   { id: 'evidence', label: 'Raw evidence' },
@@ -145,6 +147,23 @@ const tabs = [
               <span v-if="data.vulnerability.kev" class="kevflag">KEV</span>
             </span>
             <h1><UntrustedText :text="data.vulnerability.summary || data.vulnerability.id" /></h1>
+          </div>
+          <div class="badges">
+            <SsvcChip :outcome="data.prioritization?.ssvc?.outcome" />
+            <span v-if="data.vulnerability.malicious" class="badge crit">malicious package</span>
+            <span v-if="data.prioritization?.kev?.due_date" class="badge"
+                  :class="{ crit: data.prioritization.kev.days_to_due < 0 }">
+              CISA due {{ data.prioritization.kev.due_date }}
+            </span>
+            <span v-if="data.prioritization?.epss?.scored" class="badge"
+                  title="Probability of exploitation activity in the next 30 days (FIRST EPSS)">
+              EPSS {{ (data.prioritization.epss.score * 100).toFixed(data.prioritization.epss.score >= 0.1 ? 0 : 1) }}%
+            </span>
+            <span v-if="data.prioritization?.deadline?.due" class="badge"
+                  :class="{ crit: data.prioritization.deadline.days_left <= 0 }"
+                  title="CISA BOD 26-04 deadline, as a benchmark">
+              BOD 26-04 {{ data.prioritization.deadline.due }}
+            </span>
           </div>
           <div class="subline">
             <code>{{ data.component.ecosystem }}:{{ data.component.name }}
@@ -200,6 +219,14 @@ const tabs = [
         It is a version match against a published advisory. Nothing has checked whether
         the component runs here, is reachable, or is exploitable — so it has no score,
         rather than a low one.
+      </div>
+
+      <div v-if="data.vulnerability.withdrawn_at" class="banner warn">
+        <strong>The publisher withdrew this advisory on
+          {{ new Date(data.vulnerability.withdrawn_at).toLocaleDateString() }}.</strong>
+        It no longer ranks in any list. It is kept here, with its history, because a
+        withdrawal is the publisher's statement — confirm it applies to you before
+        closing anything.
       </div>
 
       <div v-if="data.triage?.disposition === 'deprioritise'" class="banner">
@@ -373,6 +400,11 @@ const tabs = [
             <p class="fine">How the match was made — not whether it is exploitable here.</p>
           </div>
         </aside>
+      </div>
+
+      <!-- ══ Exploitability ══ -->
+      <div v-else-if="tab === 'priority'" class="wide">
+        <PriorityPanel :p="data.prioritization" />
       </div>
 
       <!-- ══ Why this score ══ -->
@@ -625,4 +657,9 @@ const tabs = [
   .side { width: 100%; flex-direction: row; flex-wrap: wrap; }
   .side .card { flex: 1 1 240px; }
 }
+.badges { display: flex; flex-wrap: wrap; gap: .35rem; margin: .45rem 0 .1rem; }
+.badge { font-size: .68rem; padding: .08rem .38rem; border-radius: 4px; border: 1px solid var(--rule);
+         color: var(--ink-2); background: var(--plane); white-space: nowrap; }
+.badge.crit { border-color: var(--crit); color: var(--crit); font-weight: 600; }
+.wide { max-width: 1100px; }
 </style>

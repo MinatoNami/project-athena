@@ -70,7 +70,29 @@ const runs = computed(() =>
   (asset.value?.scan_runs ?? []).map((r: any) => ({ ...r, outcome: scanOutcome(r) })),
 )
 
-const lastRun = computed(() => runs.value[0] ?? null)
+// The inventory verdict comes from the latest *inventory* run. A secrets scan that
+// finished after it says nothing about which packages are installed.
+const lastRun = computed(
+  () => runs.value.find((r: any) => !CODE_SCAN_KINDS.includes(r.kind)) ?? null,
+)
+
+const exporting = ref<string | null>(null)
+async function exportDoc(kind: 'sbom' | 'vex') {
+  exporting.value = kind
+  scanNote.value = null
+  const safe = String(asset.value?.display_name ?? 'asset').replace(/[^A-Za-z0-9._-]+/g, '-')
+  try {
+    if (kind === 'sbom') {
+      await downloadJson(`assets/${route.params.id}/sbom`, `${safe}.cdx.json`)
+    } else {
+      await downloadJson(`export/openvex?asset_id=${route.params.id}`, `${safe}.openvex.json`)
+    }
+  } catch (e: any) {
+    scanNote.value = { text: e?.data?.detail || 'The export could not be produced.', failed: true }
+  } finally {
+    exporting.value = null
+  }
+}
 </script>
 
 <template>
@@ -87,6 +109,14 @@ const lastRun = computed(() => runs.value[0] ?? null)
         <p>{{ asset.kind }} · <code>{{ asset.identity_key }}</code></p>
       </div>
       <div class="actions">
+        <button class="btn" :disabled="!!exporting" title="CycloneDX 1.6 SBOM of what was last observed"
+                @click="exportDoc('sbom')">
+          {{ exporting === 'sbom' ? 'Exporting…' : 'SBOM' }}
+        </button>
+        <button class="btn" :disabled="!!exporting"
+                title="OpenVEX: not_affected only where a person decided it" @click="exportDoc('vex')">
+          {{ exporting === 'vex' ? 'Exporting…' : 'VEX' }}
+        </button>
         <button v-if="asset.scan?.supported" class="btn" :disabled="scanning" @click="rescan">
           {{ scanning ? 'Queued…' : scanLabel }}
         </button>
@@ -171,6 +201,11 @@ const lastRun = computed(() => runs.value[0] ?? null)
       </div>
     </div>
 
+    <div v-if="asset.kind === 'repository'" class="card codecard">
+      <div class="lbl codelbl">Secrets &amp; configuration in this repository</div>
+      <CodeFindingsPanel :asset-id="String(route.params.id)" compact />
+    </div>
+
     <div v-if="asset.merge_candidates?.length" class="card">
       <span class="lbl">Possible duplicates — never merged automatically</span>
       <ul class="merges">
@@ -242,6 +277,8 @@ const lastRun = computed(() => runs.value[0] ?? null)
        border: 1px solid var(--rule); border-radius: 6px; font-size: .7rem;
        white-space: pre-wrap; word-break: break-word; color: var(--ink-2); max-height: 11rem;
        overflow: auto; }
+.codecard { margin-bottom: 1rem; }
+.codelbl { margin-bottom: .6rem; }
 .merges { margin: .4rem 0 0; padding-left: 1.1rem; font-size: .8rem; color: var(--ink-2); }
 
 @media (max-width: 1000px) { .cols { grid-template-columns: 1fr; } }

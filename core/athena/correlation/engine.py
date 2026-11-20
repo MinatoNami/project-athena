@@ -277,8 +277,11 @@ def _record(
 
     now = datetime.now(UTC)
     if existing is not None:
-        # A fix appearing later moves the finding back into actionable work.
-        if existing.state == "no_fix_available" and candidate.fixed_version:
+        # A fix appearing later moves the finding back into actionable work — and
+        # so does learning the package is malware, which has no fix to wait for.
+        if existing.state == "no_fix_available" and (
+            candidate.fixed_version or vulnerability.malicious
+        ):
             existing.state = "discovered"
             existing.state_changed_at = datetime.now(UTC)
         existing.match_method = candidate.match_method
@@ -296,7 +299,13 @@ def _record(
     # Those are real findings but nothing can be done about them, and mixing them
     # with actionable work is the volume-over-action failure the product exists to
     # avoid. The lifecycle already has a state for it.
-    state = "discovered" if candidate.fixed_version else "no_fix_available"
+    #
+    # Malware is the exception. Its record never carries a fixed version — there is
+    # no release to upgrade to — so it landed here, in a bucket the default view and
+    # the triage queue both exclude: a typosquat filed as "nothing to be done yet".
+    # The action is removal, and it is available now.
+    actionable = candidate.fixed_version or vulnerability.malicious
+    state = "discovered" if actionable else "no_fix_available"
 
     finding = Finding(
         group_key=candidate.vulnerability_id,

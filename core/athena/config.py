@@ -7,8 +7,9 @@ appear in `docker inspect`, process listings, or shell history.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -79,6 +80,31 @@ class Settings(BaseSettings):
     # compose-prefixed ones, so a sibling container can find them.
     sandbox_network: str = "athena-nodechannel"
     docker_proxy_host: str = "tcp://docker-proxy:2375"
+
+    # Code scanners run over the same checkout as Syft, with no network. Pinned by
+    # version *and* digest: in 2026 both Trivy (March) and KICS (April) had release
+    # tags overwritten with malicious images, and a scanner reads every repository
+    # this system can clone. A tag alone would have pulled the compromised build.
+    # Digests are those observed on pull on 2026-11-21; re-verify (cosign, the
+    # vendor's advisory list) before moving either.
+    code_scans_enabled: bool = True
+    gitleaks_image: str = (
+        "ghcr.io/gitleaks/gitleaks:v8.30.1"
+        "@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
+    )
+    trivy_image: str = (
+        "aquasec/trivy:0.76.2"
+        "@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb"
+    )
+
+    @field_validator("gitleaks_image", "trivy_image", mode="before")
+    @classmethod
+    def _blank_image_means_default(cls, value: Any, info: Any) -> Any:
+        """Compose passes an unset variable as an empty string. An empty image
+        reference must fall back to the pinned default, not replace it."""
+        if isinstance(value, str) and not value.strip():
+            return cls.model_fields[info.field_name].default
+        return value
 
     # ─── AI layer ───────────────────────────────────────────────────────────
     # local_only refuses any endpoint that is not demonstrably inside the operator's

@@ -91,6 +91,8 @@ def always_investigate(facts: dict[str, Any]) -> str | None:
     advisory = facts.get("advisory") or {}
     asset = facts.get("asset") or {}
 
+    if advisory.get("malicious"):
+        return "the package is published malware"
     if advisory.get("known_exploited"):
         return "known to be exploited in the wild"
     if (advisory.get("cvss") or 0) >= 9.0:

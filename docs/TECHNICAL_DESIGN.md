@@ -761,3 +761,78 @@ Import linting enforces the boundaries in CI — `executor` may not import `llm`
 6. **Evidence retention.** Proposal: raw tool output 90 days, hashes and structured claims indefinitely.
 7. **Multi-user in v1.** Recommendation: build the schema now, ship single-admin, enable roles at M6.
 8. **Node self-update** requires a node to fetch and execute a binary — the pattern Athena warns about elsewhere. Proposal: signed, operator-approved on production, never automatic.
+
+---
+
+# 24. Additions, November 2026
+
+Researched against the state of the field in late 2026 and added without changing any
+decision above. Each follows §1: facts stay separate from conclusions, every derived
+value is a pure function with tests, and anything Athena does not hold is shown as
+unknown rather than defaulted to safe.
+
+### Intelligence
+
+| Addition | What changed | Where |
+|---|---|---|
+| CVSS base scores | v3.0/v3.1 scores computed from the vector (checked against an independent implementation over all 5,184 base vectors). v4.0 vectors are parsed for decision points but **not** scored: FIRST's macro-vector table is not reproduced from memory, so a v4-only advisory falls back to its published label. Scores are computed at ingest outside `content_hash`, so adding them revised nothing. | `intel/cvss.py` |
+| Malicious packages | OSV's OpenSSF `MAL-` records are flagged `vulnerability.malicious`. They were previously filed `no_fix_available` (hidden from the queue) and told the operator to wait for a fix. Now: always investigated, lead the risk order, floored at critical with exposure/reachability pinned (malware acts outbound), remediation is removal plus credential rotation, and a model's `not_applicable` cannot close one. | `intel/ingest.py`, `risk/scoring.py`, `remediation/classify.py` |
+| Withdrawn advisories | Findings on an advisory its publisher withdrew stop ranking (OSV withdrew 157 false-positive malware reports in May 2026). The finding page keeps them, with a banner. | `findings/query.py` |
+| KEV depth | CISA's own `dateAdded`, `dueDate` and the BOD 26-04 `forensicTriage` flag are stored and refreshed. | `intel/ingest.py` |
+| EPSS model | The daily CSV's `#model_version` header is recorded (v5 went live 2026-06-15; scores jump at version boundaries). | `intel/feeds.py` |
+| CISA Vulnrichment | Hourly, for CVEs with findings only: CISA's SSVC assessment from its `CISA-ADP` container. A `poc`/`active` assessment sets `exploit_public`, the one risk input nothing else populated, and queues a rescore. | `workers/intel_jobs.py` |
+
+### Prioritisation beside the score
+
+The risk score (§8) is unchanged. Two deterministic second opinions sit beside it,
+each reporting the provenance of every input:
+
+- **SSVC** — CISA's coordinator tree (SSVC 2.0.3). CISA's own assessment is used where
+  Vulnrichment has one; otherwise automatable/technical impact are mapped from the CVSS
+  vector. Unknown points are taken at their worse value and listed as assumed. EPSS is
+  deliberately not an input: a forecast is not the fact of exploitation. `risk/ssvc.py`
+- **BOD 26-04 deadline** — the June 2026 directive's Table 1 (exposure × KEV ×
+  automatable × total impact → 3/14/60 days or next upgrade, with forensic triage),
+  with the clock starting at the earlier of KEV addition and first detection. Shown as a
+  benchmark: binding on US federal agencies only. `risk/deadline.py`
+
+### Code scanning
+
+Repository patrol now also runs **Gitleaks** (secrets) and **Trivy** (misconfiguration)
+over the same checkout, in the §12 sandbox with no network. Results land in
+`code_finding`, not `finding`: there is no advisory or component version to key on.
+
+- Images are pinned by version **and digest** (`config.py`): both Trivy (March 2026)
+  and KICS (April 2026) had release tags overwritten with malicious images.
+- Secret values are redacted inside the sandbox (`--redact`) and the adapter also
+  refuses to keep the redacted match line; Trivy's `Code.Lines` are dropped for the
+  same reason.
+- Identity is the rule, the repository-relative path and the occurrence's ordinal —
+  Gitleaks' own fingerprint embeds the per-scan checkout directory. Trivy's 2026 rule
+  rename (`DS002` → `DS-0002`) is normalised so an upgrade does not reset history.
+- Only a **succeeded** scan resolves findings it no longer sees, and a code scan never
+  refreshes inventory freshness. Only the working tree is searched (the checkout is
+  shallow); every run says so.
+
+### Exports
+
+- **CycloneDX 1.6 SBOM** per asset, stating the generating scan and whether it was
+  partial. `GET /assets/{id}/sbom`
+- **OpenVEX** per finding. `not_affected` is produced **only** from a person's
+  suppression; an automated `not_applicable` exports as `under_investigation`, because
+  Trivy and Grype drop findings a VEX marks `not_affected` and the model does not hold
+  that authority. Every export is audited. `GET /export/openvex`
+
+### UI
+
+`/intel` (source health, EPSS model, CISA SSVC coverage), `/code` (secrets and
+misconfigurations with per-kind coverage denominators), an Exploitability tab on the
+case file, SSVC and BOD 26-04 columns in the findings list, and the ⌘K command palette
+from [WEB_UI.md §5](WEB_UI.md#5-routes).
+
+### Deliberately not done
+
+CVSS v4 scoring (needs FIRST's table verbatim) · git-history secret scanning (needs a
+full clone) · VulnCheck KEV (token and attribution terms) · SAST (Semgrep CE withholds
+output fields without login; Opengrep has no official image; the rules licences need
+review) · Nmap/Nuclei (§7 M7 — need per-target egress and recorded authorisation).

@@ -121,6 +121,9 @@ const truncated = computed(() =>
 /** Why this sits where it does — the same facts as before, as chips. */
 function signals(i: any) {
   const out: { text: string; tone?: 'bad' | 'warn' }[] = []
+  if (i.group.malicious) out.push({ text: 'malicious package', tone: 'bad' })
+  if (i.ssvc === 'act') out.push({ text: 'SSVC: act', tone: 'bad' })
+  else if (i.ssvc === 'attend') out.push({ text: 'SSVC: attend', tone: 'warn' })
   if (i.group.kev) out.push({ text: 'actively exploited', tone: 'bad' })
   if (i.exposure === 'internet') out.push({ text: 'internet-facing', tone: 'bad' })
   if (!i.investigated) out.push({ text: 'not investigated', tone: 'warn' })
@@ -130,7 +133,14 @@ function signals(i: any) {
   if (i.investigated && i.confidence != null && i.confidence < 0.5) {
     out.push({ text: 'inconclusive', tone: 'warn' })
   }
-  if (!i.fixed_version) out.push({ text: 'no fix yet' })
+  if (i.due && !i.group.malicious) {
+    const days = daysUntil(i.due)
+    if (days < 0) out.push({ text: `${-days}d past BOD 26-04 date`, tone: 'bad' })
+    else if (days === 0) out.push({ text: 'BOD 26-04: due today', tone: 'bad' })
+    else if (days <= 14) out.push({ text: `BOD 26-04: ${days}d left`, tone: 'warn' })
+  }
+  if (i.forensic_triage && i.group.kev) out.push({ text: 'forensic triage', tone: 'bad' })
+  if (!i.fixed_version && !i.group.malicious) out.push({ text: 'no fix yet' })
   if (!out.length) out.push({ text: i.investigated ? 'assessed here' : 'version match' })
   return out
 }

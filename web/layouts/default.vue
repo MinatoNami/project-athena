@@ -38,9 +38,35 @@ const items = computed(() => [
   { to: '/', label: 'Today', glyph: 'today' },
   { to: '/findings', label: 'Findings', glyph: 'findings', count: nav.value?.findings?.group_count },
   { to: '/assets', label: 'Assets', glyph: 'assets', count: nav.value?.coverage?.assets_total },
+  { to: '/code', label: 'Secrets & config', glyph: 'code' },
+  { to: '/intel', label: 'Intelligence', glyph: 'intel' },
   { to: '/metrics', label: 'Metrics', glyph: 'metrics' },
   { to: '/activity', label: 'Activity', glyph: 'activity' },
 ])
+
+// ⌘K / Ctrl+K from anywhere. "/" too, unless the reader is typing into a field —
+// stealing a keystroke from a reason someone is writing would be worse than no
+// shortcut at all.
+const paletteOpen = ref(false)
+const isMac = ref(true)
+onMounted(() => {
+  isMac.value = /Mac|iPhone|iPad/.test(navigator.platform)
+  const onKey = (e: KeyboardEvent) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault()
+      paletteOpen.value = !paletteOpen.value
+      return
+    }
+    const t = e.target as HTMLElement | null
+    const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
+    if (e.key === '/' && !typing && !paletteOpen.value) {
+      e.preventDefault()
+      paletteOpen.value = true
+    }
+  }
+  window.addEventListener('keydown', onKey)
+  onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
+})
 
 function isActive(to: string) {
   return to === '/' ? route.path === '/' : route.path.startsWith(to)
@@ -84,6 +110,12 @@ async function logout() {
         <span>{{ $config.public.appName }}</span>
       </NuxtLink>
 
+      <button class="search" @click="paletteOpen = true">
+        <NavGlyph name="search" />
+        <span class="navlabel">Search</span>
+        <kbd>{{ isMac ? '⌘' : 'Ctrl' }} K</kbd>
+      </button>
+
       <ul class="navlist">
         <li v-for="item in items" :key="item.to">
           <NuxtLink :to="item.to" class="navitem" :class="{ on: isActive(item.to) }">
@@ -124,6 +156,7 @@ async function logout() {
     </nav>
 
     <main class="main"><slot /></main>
+    <CommandPalette v-model:open="paletteOpen" />
   </div>
 </template>
 
@@ -138,6 +171,14 @@ async function logout() {
   display: flex; align-items: center; gap: .55rem; padding: 0 .5rem;
   font-weight: 640; letter-spacing: -0.01em; color: var(--ink); text-decoration: none;
 }
+.search {
+  display: flex; align-items: center; gap: .6rem; padding: .4rem .62rem; margin: -.6rem 0 -.4rem;
+  border: 1px solid var(--rule); border-radius: 7px; background: var(--plane); color: var(--ink-muted);
+  font-size: .82rem; font-weight: 400; cursor: pointer; text-align: left;
+}
+.search:hover { color: var(--ink); border-color: var(--ink-muted); }
+.search kbd { font: 600 .62rem ui-monospace, SFMono-Regular, Menlo, monospace; border: 1px solid var(--rule);
+              border-radius: 4px; padding: 0 .25rem; background: var(--surface); }
 .navlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .navitem {
   display: flex; align-items: center; gap: .6rem; padding: .44rem .62rem;
@@ -186,6 +227,8 @@ async function logout() {
   .navcount { display: none; }
   .railfoot { margin: 0 0 0 auto; border: 0; padding: 0; flex-direction: row; align-items: center; }
   .status, .who { display: none; }
+  .search { margin: 0; }
+  .search .navlabel, .search kbd { display: none; }
   .status:first-child { display: flex; }
 }
 </style>

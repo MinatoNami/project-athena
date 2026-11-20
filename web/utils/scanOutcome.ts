@@ -29,12 +29,31 @@ const CAUSES: [RegExp, string][] = [
   [/clone|checkout|authentication|permission denied/i, 'Athena could not check the source out.'],
 ]
 
+/** Scan kinds that look at a repository's tree rather than inventory its packages. */
+export const CODE_SCAN_KINDS = ['secret', 'misconfiguration']
+
 export function scanOutcome(run: {
   status: string
+  kind?: string
   error?: string | null
-  stats?: { components?: number; warnings?: number } | null
+  stats?: { components?: number; warnings?: number; findings?: number; files_checked?: number } | null
 }): ScanOutcome {
   const components = run.stats?.components
+
+  // A secrets or misconfiguration scan says nothing about packages, so it is never
+  // described as having "read" any.
+  if (run.kind && CODE_SCAN_KINDS.includes(run.kind) && run.status === 'succeeded') {
+    const n = run.stats?.findings ?? 0
+    const what = run.kind === 'secret' ? 'secret' : 'misconfiguration'
+    const scope = run.kind === 'secret'
+      ? ' (working tree; history not searched)'
+      : run.stats?.files_checked != null ? ` across ${run.stats.files_checked} config files` : ''
+    return {
+      state: 'covered',
+      headline: `Checked for ${what}s${scope}: ${n ? `${n} open` : 'none found'}.`,
+      detail: null,
+    }
+  }
 
   if (run.status === 'succeeded') {
     return {

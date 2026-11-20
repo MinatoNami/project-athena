@@ -7,11 +7,12 @@ docs/TECHNICAL_DESIGN.md §5 lands in M1/M2 as those milestones are built.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -389,6 +390,24 @@ class Vulnerability(Base):
     kev: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     kev_ransomware: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     kev_added_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # CISA's own dates, distinct from `kev_added_at` (when Athena noticed). The due
+    # date is the remediation deadline the catalogue sets for federal agencies.
+    kev_date_added: Mapped[date | None] = mapped_column(Date)
+    kev_due_date: Mapped[date | None] = mapped_column(Date)
+    kev_forensic_triage: Mapped[bool | None] = mapped_column(Boolean)
+    # CISA Vulnrichment's SSVC decision points: {exploitation, automatable,
+    # technical_impact, timestamp, version}. Null with `ssvc_checked_at` set means
+    # CISA has published none; both null means nobody has asked.
+    # `none_as_null`: without it SQLAlchemy writes Python None as JSON `null`, which
+    # is NOT NULL to SQL — and "has CISA published an assessment?" then counts every
+    # CVE that was merely checked.
+    ssvc_cisa: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
+    ssvc_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # An OpenSSF malicious-packages record (`MAL-`): the package is the attack, not
+    # a flaw in it. Changes the remediation and the floor; see risk.scoring.
+    malicious: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     exploit_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     modified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -668,3 +687,45 @@ class InvestigationRecord(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     reused: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class CodeFinding(Base):
+    """A secret or misconfiguration found in a repository's tree.
+
+    Separate from `Finding` because there is no advisory and no package version to
+    key on — forcing these into that table would mean placeholder vulnerabilities
+    and placeholder components, and every query over real findings would then have
+    to know to exclude them.
+
+    Identity is the scanner's fingerprint for the location and rule, never the
+    secret: values are redacted inside the sandbox and never reach this process.
+    """
+
+    __tablename__ = "code_finding"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    asset_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("asset.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    tool: Mapped[str] = mapped_column(Text, nullable=False)
+    tool_version: Mapped[str | None] = mapped_column(Text)
+    rule_id: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)
+    path: Mapped[str] = mapped_column(Text, nullable=False)
+    line: Mapped[int | None] = mapped_column(Integer)
+    fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    detail: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    scan_run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    first_seen: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_seen: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("asset_id", "fingerprint", name="uq_code_finding_identity"),
+    )

@@ -14,6 +14,7 @@ from typing import Any
 
 import structlog
 
+from athena.intel import cvss
 from athena.intel.authority import authority_for
 from athena.intel.model import NormalisedAdvisory, NormalisedRange
 
@@ -138,6 +139,13 @@ def parse(advisory: dict[str, Any]) -> NormalisedAdvisory | None:
         aliases = [a for a in aliases if a != canonical] + [osv_id]
 
     vector, label = _severity(advisory)
+    scoring_vector = cvss.choose(
+        [
+            (entry.get("score") or "").strip()
+            for entry in advisory.get("severity") or []
+            if (entry.get("type") or "").upper().startswith("CVSS_V")
+        ]
+    )
     ranges: list[NormalisedRange] = []
 
     for affected in advisory.get("affected") or []:
@@ -201,6 +209,7 @@ def parse(advisory: dict[str, Any]) -> NormalisedAdvisory | None:
             c for c in (advisory.get("database_specific") or {}).get("cwe_ids") or [] if c
         ],
         cvss_vector=vector,
+        scoring_vector=scoring_vector,
         severity=label,
         published_at=_parse_time(advisory.get("published")),
         modified_at=_parse_time(advisory.get("modified")),

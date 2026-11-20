@@ -26,6 +26,17 @@ defineProps<{ name: string }>()
     <template v-else-if="name === 'activity'">
       <path d="M3.5 12h4l2.5-6 4 12 2.5-6h4" />
     </template>
+    <template v-else-if="name === 'code'">
+      <rect x="5" y="10.5" width="14" height="9.5" rx="1.8" />
+      <path d="M8.2 10.5V7.8a3.8 3.8 0 017.6 0v2.7" />
+    </template>
+    <template v-else-if="name === 'intel'">
+      <path d="M4 18.5a8.5 8.5 0 0116 0" /><path d="M7.5 18.5a4.5 4.5 0 019 0" />
+      <circle cx="12" cy="18.5" r="1" />
+    </template>
+    <template v-else-if="name === 'search'">
+      <circle cx="11" cy="11" r="6.5" /><path d="M16 16l4.5 4.5" />
+    </template>
   </svg>
 </template>
 

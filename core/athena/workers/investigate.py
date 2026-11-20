@@ -160,6 +160,9 @@ def _load(finding_id: str) -> dict[str, Any] | None:
                     "severity": vulnerability.severity, "cvss": vulnerability.cvss_score,
                     "known_exploited": vulnerability.kev,
                     "fixed_in": finding.fixed_version,
+                    # Only present when true, so prompts for every other finding — and
+                    # the eval corpus built on them — are byte-for-byte unchanged.
+                    **({"malicious": True} if vulnerability.malicious else {}),
                 },
                 "match": {
                     "method": finding.match_method,
@@ -448,6 +451,7 @@ def signals_for(session, finding: Finding, verdict: Verdict) -> Signals:
         verdict=verdict.verdict,
         fix_available=bool(finding.fixed_version),
         fix_requires_entitlement=(finding.fix_channel or "standard") != "standard",
+        malicious=bool(vulnerability and vulnerability.malicious),
     )
 
 
@@ -619,6 +623,7 @@ def _load_for_triage(finding_id: str) -> dict[str, Any] | None:
                     "cvss": vulnerability.cvss_score,
                     "epss": vulnerability.epss_score,
                     "known_exploited": vulnerability.kev,
+                    **({"malicious": True} if vulnerability.malicious else {}),
                 },
                 "fix": {
                     "fixed_version": finding.fixed_version,
