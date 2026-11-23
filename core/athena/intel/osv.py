@@ -142,10 +142,18 @@ def parse(advisory: dict[str, Any]) -> NormalisedAdvisory | None:
     # other sources also describe — GitHub withdraws duplicate GHSAs routinely — it
     # would mark the shared row withdrawn, and every finding for that CVE from every
     # source would drop out of the list with nothing saying why. So a withdrawn
-    # record merged under another id contributes nothing, and withdraws nothing.
+    # record merged under another id withdraws only itself: ingest clears the ranges
+    # it contributed and re-correlates, and the CVE and its other sources stand.
+    # (Skipping it instead left its old ranges in place, still matching packages.)
     withdrawn_at = _parse_time(advisory.get("withdrawn"))
     if withdrawn_at is not None and canonical != osv_id:
-        return None
+        return NormalisedAdvisory(
+            id=canonical,
+            source="osv",
+            source_record=osv_id,
+            modified_at=_parse_time(advisory.get("modified")),
+            source_withdrawn_at=withdrawn_at,
+        )
 
     # Malware is what the record says it *is* — its own id and its true aliases.
     # `related` (folded into `aliases` above for merging) only points at another

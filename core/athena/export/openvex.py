@@ -204,6 +204,8 @@ def vex_document(
         # compromised", for other scanners to act on. It is left out, not marked
         # `not_affected`: that status belongs to a person's decision (rule 2).
         .where(Vulnerability.withdrawn_at.is_(None))
+        # Likewise a finding whose every supporting range its source retracted.
+        .where(Finding.state != "unmatched")
         .order_by(Finding.vulnerability_id, Asset.display_name, Component.name)
     )
     if asset_id:

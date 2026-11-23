@@ -42,6 +42,11 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
     if known == digest:
         return "unchanged"
 
+    if advisory.source_withdrawn_at is not None:
+        return _retract_source(
+            session, advisory, source_record=source_record, digest=digest, now=now
+        )
+
     is_new_vulnerability = session.execute(
         text("SELECT 1 FROM vulnerability WHERE id = :id"), {"id": advisory.id}
     ).first() is None
@@ -145,6 +150,67 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
     )
 
     return "new" if is_new_vulnerability else "revised"
+
+
+def _retract_source(
+    session: Session,
+    advisory: NormalisedAdvisory,
+    *,
+    source_record: str,
+    digest: str,
+    now: datetime,
+) -> str:
+    """One source record withdrawn; the vulnerability it merged into is not.
+
+    Only that record's ranges go. The row's other fields came from every source and
+    stay, and `withdrawn_at` is left alone — it would hide the CVE from every source.
+    When ranges were removed the vulnerability is revised, so the poller
+    re-correlates it and findings no remaining range supports are closed
+    (`correlate_advisory`).
+    """
+    exists = session.execute(
+        text("SELECT 1 FROM vulnerability WHERE id = :id"), {"id": advisory.id}
+    ).first()
+    if exists is None:
+        # Withdrawn before Athena ever saw it: nothing was contributed, so nothing
+        # is retracted, and no row is created for it.
+        return "unchanged"
+
+    removed = session.execute(
+        delete(AffectedRange).where(
+            AffectedRange.vulnerability_id == advisory.id,
+            AffectedRange.source_record == source_record,
+        )
+    ).rowcount
+    if removed:
+        session.execute(
+            text(
+                "UPDATE vulnerability SET revision = revision + 1, revised_at = :now"
+                " WHERE id = :id"
+            ),
+            {"id": advisory.id, "now": now},
+        )
+    session.execute(
+        text(
+            """
+            INSERT INTO advisory_source
+                (vulnerability_id, source_record, source, content_hash, modified_at)
+            VALUES (:id, :rec, :source, :hash, :modified)
+            ON CONFLICT (vulnerability_id, source_record) DO UPDATE SET
+                content_hash = EXCLUDED.content_hash,
+                modified_at  = EXCLUDED.modified_at,
+                ingested_at  = now()
+            """
+        ),
+        {
+            "id": advisory.id,
+            "rec": source_record,
+            "source": advisory.source,
+            "hash": digest,
+            "modified": advisory.modified_at,
+        },
+    )
+    return "revised" if removed else "unchanged"
 
 
 def is_malicious(advisory: NormalisedAdvisory) -> bool:

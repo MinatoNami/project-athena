@@ -161,10 +161,15 @@ def _base(query: FindingQuery) -> Select:
     )
     if query.state:
         stmt = stmt.where(Finding.state == query.state)
-    elif not query.include_no_fix:
-        # Default view is work that can actually be done. Findings with no published
-        # fix are real, but they are not action — shown on request, counted always.
-        stmt = stmt.where(Finding.state != "no_fix_available")
+    else:
+        # A finding no published range supports any more is not a finding: its
+        # source retracted the match. Listed only when asked for by state.
+        stmt = stmt.where(Finding.state != "unmatched")
+        if not query.include_no_fix:
+            # Default view is work that can actually be done. Findings with no
+            # published fix are real, but they are not action — shown on request,
+            # counted always.
+            stmt = stmt.where(Finding.state != "no_fix_available")
     if query.asset_id:
         stmt = stmt.where(Finding.asset_id == query.asset_id)
     # A withdrawn advisory is its publisher saying it was wrong — in May 2026 OSV
@@ -456,7 +461,11 @@ def query_findings(session: Session, query: FindingQuery) -> Page:
         select(func.count(func.distinct(Finding.group_key)))
         .select_from(Finding)
         .join(Vulnerability, Vulnerability.id == Finding.vulnerability_id)
-        .where(_suppressed_exists(), Vulnerability.withdrawn_at.is_(None))
+        .where(
+            _suppressed_exists(),
+            Vulnerability.withdrawn_at.is_(None),
+            Finding.state != "unmatched",
+        )
     ).scalar_one()
 
     # Held back, never hidden: the size of the inherited backlog stays a number on
@@ -466,7 +475,7 @@ def query_findings(session: Session, query: FindingQuery) -> Page:
         .select_from(Finding)
         .join(Asset, Asset.id == Finding.asset_id)
         .join(Vulnerability, Vulnerability.id == Finding.vulnerability_id)
-        .where(~_is_new(), Vulnerability.withdrawn_at.is_(None))
+        .where(~_is_new(), Vulnerability.withdrawn_at.is_(None), Finding.state != "unmatched")
     ).scalar_one()
 
     # Assets carrying findings that nobody has drawn a line under yet. This is what

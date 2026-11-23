@@ -401,7 +401,9 @@ def sla_report(session: Session) -> dict[str, Any]:
                 Finding.risk_band == band,
                 # Open means somebody could still act. Dismissed and unfixable
                 # findings are not late; they are elsewhere, and counted there.
-                Finding.state.notin_(("resolved", "false_positive", "no_fix_available")),
+                Finding.state.notin_(
+                    ("resolved", "false_positive", "no_fix_available", "unmatched")
+                ),
             )
         ).one()
         bands.append(

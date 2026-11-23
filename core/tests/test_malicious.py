@@ -86,8 +86,12 @@ def test_a_withdrawn_duplicate_does_not_withdraw_the_cve_it_merges_into():
     """GitHub withdraws duplicate GHSAs routinely. Folded under the CVE, the
     withdrawal marked the shared row withdrawn and every finding for that CVE, from
     every source, dropped out of the list."""
-    duplicate = _ghsa(aliases=["CVE-2025-1"], withdrawn="2025-10-01T00:00:00Z")
-    assert parse(duplicate) is None
+    duplicate = parse(_ghsa(aliases=["CVE-2025-1"], withdrawn="2025-10-01T00:00:00Z"))
+    assert duplicate is not None and duplicate.id == "CVE-2025-1"
+    # It withdraws itself — its ranges, cleared on ingest — and not the CVE.
+    assert duplicate.withdrawn_at is None
+    assert duplicate.source_withdrawn_at is not None
+    assert duplicate.ranges == [] and duplicate.source_record == "GHSA-aaaa-bbbb-cccc"
 
 
 def test_a_withdrawn_record_that_is_its_own_row_is_still_withdrawn():

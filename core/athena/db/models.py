@@ -488,6 +488,8 @@ FINDING_STATES = (
     "awaiting_approval", "remediating", "verifying", "resolved",
     "false_positive", "mitigated", "accepted_risk", "deferred", "no_fix_available",
     "regressed",
+    # Every range that matched it was retracted by its source (migration 0019).
+    "unmatched",
 )
 finding_state_enum = ENUM(*FINDING_STATES, name="finding_state", create_type=False)
 

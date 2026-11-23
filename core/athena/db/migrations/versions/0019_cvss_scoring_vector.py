@@ -1,9 +1,14 @@
-"""The vector a CVSS score was computed from.
+"""The vector a CVSS score was computed from, and findings no range supports.
 
 A record often publishes v4.0 and v3.1 side by side. `cvss_vector` keeps the first,
 while the score is computed from the v3.1 one — so the finding page compared the
 score with the wrong vector and presented Athena's number as the advisory's own.
 `cvss_scoring_vector` is written with the score, and only when Athena computed it.
+
+`finding_state` gains `unmatched`: a finding whose every supporting range was
+retracted by its source (a withdrawn duplicate GHSA, a corrected bound). Correlation
+used to leave those open forever; it now closes them, and reopens them if a range
+returns.
 
 Its own revision rather than an edit to 0018, which has already been released: a
 database that ran 0018 would never see a column added there.
@@ -27,6 +32,8 @@ def upgrade() -> None:
     # carried this column for a few hours.
     op.execute("ALTER TABLE vulnerability ADD COLUMN IF NOT EXISTS cvss_scoring_vector text")
     _backfill()
+    # Usable once this transaction commits; nothing below uses it.
+    op.execute("ALTER TYPE finding_state ADD VALUE IF NOT EXISTS 'unmatched'")
 
 
 def _backfill() -> None:
@@ -60,4 +67,10 @@ def _backfill() -> None:
 
 
 def downgrade() -> None:
+    # Postgres cannot drop an enum value. Findings in it go back to `discovered`, the
+    # state they held before being closed, so the older code never meets it; the
+    # value itself stays, unused, and a re-upgrade skips adding it.
+    # Compared as text: a literal 'unmatched' is rejected outright by a type that
+    # never gained the value.
+    op.execute("UPDATE finding SET state = 'discovered' WHERE state::text = 'unmatched'")
     op.drop_column("vulnerability", "cvss_scoring_vector")

@@ -284,6 +284,15 @@ def _record(
         ):
             existing.state = "discovered"
             existing.state_changed_at = datetime.now(UTC)
+        # Matched again after a source retracted the range behind it: a corrected or
+        # re-published range makes it real again (see `_close_unmatched`).
+        if existing.state == "unmatched":
+            existing.state = (
+                "discovered"
+                if candidate.fixed_version or vulnerability.malicious
+                else "no_fix_available"
+            )
+            existing.state_changed_at = now
         existing.match_method = candidate.match_method
         existing.match_confidence = candidate.match_confidence
         existing.matched_range_id = candidate.matched_range_id
@@ -456,6 +465,7 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
         by_package.setdefault((r.ecosystem, r.package), []).append(r)
 
     matched = created = candidates = 0
+    matched_pairs: set[tuple[Any, Any]] = set()
     for (ecosystem, package), package_ranges in by_package.items():
         installed = session.execute(
             select(Component, AssetComponent.asset_id)
@@ -477,6 +487,7 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
                 continue
 
             matched += 1
+            matched_pairs.add((asset_id, component.id))
             _, is_new = _record(
                 session,
                 _candidate(
@@ -494,13 +505,72 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
             )
             created += int(is_new)
 
+    unmatched = _close_unmatched(session, vulnerability, matched_pairs)
+
     return {
         "status": "ok",
         "packages": len(by_package),
         "candidates": candidates,
         "matched": matched,
         "created": created,
+        "unmatched": unmatched,
     }
+
+
+# States a finding can be in while its match is still the reason it exists. Later
+# states (a fix under way, a decision taken) are left to their own owners.
+OPEN_STATES = ("discovered", "investigating", "confirmed", "no_fix_available", "regressed")
+
+
+def _close_unmatched(
+    session: Session, vulnerability: Vulnerability, matched_pairs: set[tuple[Any, Any]]
+) -> int:
+    """Close open findings that no remaining range supports.
+
+    Correlation used to only add and refresh matches, so a range its source
+    retracted — a withdrawn duplicate GHSA, a corrected bound — left behind every
+    finding it had produced, matching nothing and listed forever. Only findings on
+    packages still installed are closed here: one whose package has gone is
+    inventory's to resolve, for a different reason.
+    """
+    from athena.audit import record
+
+    open_findings = session.execute(
+        select(Finding).where(
+            Finding.vulnerability_id == vulnerability.id,
+            Finding.state.in_(OPEN_STATES),
+        )
+    ).scalars().all()
+    now = datetime.now(UTC)
+    closed = 0
+    for finding in open_findings:
+        if (finding.asset_id, finding.component_id) in matched_pairs:
+            continue
+        installed = session.execute(
+            select(AssetComponent.asset_id).where(
+                AssetComponent.asset_id == finding.asset_id,
+                AssetComponent.component_id == finding.component_id,
+            )
+        ).first()
+        if installed is None:
+            continue
+        finding.state = "unmatched"
+        finding.state_changed_at = now
+        finding.last_evaluated_at = now
+        finding.advisory_revision = vulnerability.revision
+        record(
+            session,
+            actor="system:correlation",
+            action="FINDING_UNMATCHED",
+            subject=f"finding:{finding.id}",
+            detail={
+                "vulnerability_id": vulnerability.id,
+                "advisory_revision": vulnerability.revision,
+                "reason": "no published range covers the installed version any more",
+            },
+        )
+        closed += 1
+    return closed
 
 
 def stale_findings(session: Session, limit: int = 500) -> list[str]:

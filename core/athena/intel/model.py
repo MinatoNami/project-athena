@@ -51,6 +51,10 @@ class NormalisedAdvisory:
     # `content_hash` for the same reason as `scoring_vector`: it is derived from ids
     # already hashed.
     malicious: bool = False
+    # This source record was withdrawn while the id it merged under was not (a
+    # duplicate GHSA under a CVE other sources describe). Ingest clears its ranges
+    # and nothing else; see `upsert_advisory`.
+    source_withdrawn_at: datetime | None = None
     # The vector the base score is computed from, when the record publishes several
     # (v3.1 and v4.0 side by side is common). Deliberately outside `content_hash`:
     # the score is a function of a vector already hashed, and adding a field to the
@@ -81,5 +85,9 @@ def content_hash(advisory: NormalisedAdvisory) -> str:
             key=lambda row: tuple("" if v is None else str(v) for v in row),
         ),
     }
+    # Added only when set, so every other record's hash — and so the corpus's
+    # revision state — is unchanged by the field existing.
+    if advisory.source_withdrawn_at is not None:
+        material["source_withdrawn"] = advisory.source_withdrawn_at.isoformat()
     encoded = json.dumps(material, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
