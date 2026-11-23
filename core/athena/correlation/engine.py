@@ -265,8 +265,14 @@ def _ranges_for(session: Session, ecosystem: str, package: str) -> dict[str, lis
 
 def _record(
     session: Session, candidate: CandidateFinding, *, vulnerability: Vulnerability
-) -> tuple[Finding, bool]:
-    """Create or refresh a candidate finding. Always `discovered`, never confirmed."""
+) -> tuple[Finding, str]:
+    """Create or refresh a candidate finding. Always `discovered`, never confirmed.
+
+    Returns the finding and what happened to it: "created", "reopened" (it had been
+    `unmatched` and a range covers it again) or "refreshed". The callers publish on
+    the first two — a page must hear about a finding coming back as much as about a
+    new one.
+    """
     existing = session.execute(
         select(Finding).where(
             Finding.vulnerability_id == candidate.vulnerability_id,
@@ -286,13 +292,27 @@ def _record(
             existing.state_changed_at = datetime.now(UTC)
         # Matched again after a source retracted the range behind it: a corrected or
         # re-published range makes it real again (see `_close_unmatched`).
-        if existing.state == "unmatched":
+        reopened = existing.state == "unmatched"
+        if reopened:
+            from athena.audit import record
+
             existing.state = (
                 "discovered"
                 if candidate.fixed_version or vulnerability.malicious
                 else "no_fix_available"
             )
             existing.state_changed_at = now
+            record(
+                session,
+                actor="system:correlation",
+                action="FINDING_REMATCHED",
+                subject=f"finding:{existing.id}",
+                detail={
+                    "vulnerability_id": vulnerability.id,
+                    "advisory_revision": vulnerability.revision,
+                    "state": existing.state,
+                },
+            )
         existing.match_method = candidate.match_method
         existing.match_confidence = candidate.match_confidence
         existing.matched_range_id = candidate.matched_range_id
@@ -302,7 +322,7 @@ def _record(
         existing.fixed_version = candidate.fixed_version
         existing.advisory_revision = candidate.advisory_revision
         existing.last_evaluated_at = now
-        return existing, False
+        return existing, "reopened" if reopened else "refreshed"
 
     # A distribution routinely publishes an advisory before, or without, a fix.
     # Those are real findings but nothing can be done about them, and mixing them
@@ -335,7 +355,7 @@ def _record(
     session.flush()
 
     _attach_evidence(session, finding, candidate, vulnerability)
-    return finding, True
+    return finding, "created"
 
 
 def _attach_evidence(
@@ -404,7 +424,7 @@ def correlate_asset(session: Session, asset: Asset) -> dict[str, Any]:
         .where(AssetComponent.asset_id == asset.id)
     ).scalars().all()
 
-    created = evaluated = matched = 0
+    created = evaluated = matched = reopened = 0
     for component in rows:
         grouped = _ranges_for(session, component.ecosystem, component.name)
         for vuln_id, ranges in grouped.items():
@@ -424,7 +444,7 @@ def correlate_asset(session: Session, asset: Asset) -> dict[str, Any]:
                 continue
 
             matched += 1
-            _, is_new = _record(
+            _, outcome = _record(
                 session,
                 _candidate(
                     vulnerability_id=vuln_id,
@@ -439,9 +459,16 @@ def correlate_asset(session: Session, asset: Asset) -> dict[str, Any]:
                 ),
                 vulnerability=vulnerability,
             )
-            created += int(is_new)
+            created += int(outcome == "created")
+            reopened += int(outcome == "reopened")
 
-    return {"components": len(rows), "evaluated": evaluated, "matched": matched, "created": created}
+    return {
+        "components": len(rows),
+        "evaluated": evaluated,
+        "matched": matched,
+        "created": created,
+        "reopened": reopened,
+    }
 
 
 def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any]:
@@ -464,7 +491,7 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
     for r in ranges:
         by_package.setdefault((r.ecosystem, r.package), []).append(r)
 
-    matched = created = candidates = 0
+    matched = created = candidates = reopened = 0
     matched_pairs: set[tuple[Any, Any]] = set()
     for (ecosystem, package), package_ranges in by_package.items():
         installed = session.execute(
@@ -488,7 +515,7 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
 
             matched += 1
             matched_pairs.add((asset_id, component.id))
-            _, is_new = _record(
+            _, outcome = _record(
                 session,
                 _candidate(
                     vulnerability_id=vulnerability_id,
@@ -503,7 +530,8 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
                 ),
                 vulnerability=vulnerability,
             )
-            created += int(is_new)
+            created += int(outcome == "created")
+            reopened += int(outcome == "reopened")
 
     unmatched = _close_unmatched(session, vulnerability, matched_pairs)
 
@@ -513,6 +541,7 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
         "candidates": candidates,
         "matched": matched,
         "created": created,
+        "reopened": reopened,
         "unmatched": unmatched,
     }
 
