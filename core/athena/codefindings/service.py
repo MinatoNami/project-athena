@@ -8,6 +8,12 @@ freshness would make a repository whose SBOM scan keeps failing look current.
 Resolution follows the rule the rest of the system uses for coverage. Only a scan
 that **succeeded** can resolve anything — a finding missing from a scan that timed
 out or failed was not looked for, and "not looked for" must never read as "fixed".
+
+The same rule covers a scan that cannot say *which* finding went. An adapter may
+mark observations it can only tell apart by order with a shared `identity_group`
+(the same credential pasted twice, say). When such a group shrinks, one of its
+members is gone but the report does not say which, so the unmatched one is held
+open — counted as `held`, never resolved — until the group disappears entirely.
 """
 
 from __future__ import annotations
@@ -76,12 +82,15 @@ def record_code_scan(
     session.add(run)
     session.flush()
 
-    counts = {"new": 0, "seen": 0, "resolved": 0, "reopened": 0}
+    counts = {"new": 0, "seen": 0, "resolved": 0, "reopened": 0, "held": 0}
     seen: set[str] = set()
+    present_groups: set[str] = set()
     for obs in observations or []:
         if obs.kind != kind or obs.fingerprint in seen:
             continue
         seen.add(obs.fingerprint)
+        if group := obs.detail.get("identity_group"):
+            present_groups.add(group)
         existing = session.execute(
             select(CodeFinding).where(
                 CodeFinding.asset_id == asset.id, CodeFinding.fingerprint == obs.fingerprint
@@ -137,12 +146,19 @@ def record_code_scan(
             .all()
         )
         for finding in stale:
+            # Its group is still in the tree: one of its indistinguishable members
+            # went, and nothing says it was this one. Absence of proof of absence.
+            if (finding.detail or {}).get("identity_group") in present_groups:
+                counts["held"] += 1
+                continue
             finding.resolved_at = now
-        counts["resolved"] = len(stale)
+            counts["resolved"] += 1
 
     run.stats = {**(stats or {}), "findings": len(seen), **counts}
     session.flush()
 
+    # A held finding changed nothing, so it is in the run's stats but does not by
+    # itself write an audit event — it would otherwise write one every patrol.
     if counts["new"] or counts["reopened"] or counts["resolved"] or status != "succeeded":
         record(
             session,

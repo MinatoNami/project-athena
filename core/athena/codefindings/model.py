@@ -18,7 +18,8 @@ class CodeObservation:
     line: int | None
     # Stable across scans of the same tree. Built by the adapter from the location
     # and rule — never from a secret's value, which is redacted before it reaches
-    # this process.
+    # this process. Observations told apart only by their order share a
+    # `detail["identity_group"]`, so a scan never resolves one it cannot single out.
     fingerprint: str
     detail: dict[str, Any] = field(default_factory=dict)
 

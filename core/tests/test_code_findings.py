@@ -127,6 +127,43 @@ def test_secret_identity_survives_an_edit_above_it():
     assert a.fingerprint == b.fingerprint and b.line == 40
 
 
+def _gitleaks(*hits: tuple[int, float]) -> str:
+    """A report of github-pat hits in app/settings.py, one per (line, entropy).
+
+    The entropies below are what the pinned Gitleaks printed, under `--redact`, for
+    two different fake tokens in one file.
+    """
+    base = json.loads(GITLEAKS_REPORT)[0]
+    return json.dumps(
+        [{**base, "StartLine": line, "EndLine": line, "Entropy": entropy} for line, entropy in hits]
+    )
+
+
+FIRST, SECOND = 4.553056, 4.6841836
+
+
+def test_removing_one_credential_does_not_hand_its_identity_to_another():
+    """Two tokens for one rule in one file; the first is deleted. An occurrence
+    ordinal moved the second into the first's identity — resolving the token that
+    is still there and giving it the deleted one's history."""
+    both = secrets.parse(_gitleaks((1, FIRST), (2, SECOND)), checkout="checkout-0123456789ab")
+    after = secrets.parse(_gitleaks((1, SECOND)), checkout="checkout-0123456789ab")
+    assert len({o.fingerprint for o in both}) == 2
+    [survivor] = after
+    assert survivor.fingerprint == both[1].fingerprint
+    assert survivor.fingerprint != both[0].fingerprint
+    assert survivor.line == 1
+
+
+def test_the_same_credential_twice_shares_an_identity_group():
+    copies = secrets.parse(_gitleaks((3, FIRST), (9, FIRST)), checkout="c")
+    assert copies[0].fingerprint != copies[1].fingerprint
+    assert copies[0].detail["identity_group"] == copies[1].detail["identity_group"]
+    # A credential that appears once has nothing to share a group with.
+    single = secrets.parse(_gitleaks((3, FIRST), (9, SECOND)), checkout="c")
+    assert single[0].detail["identity_group"] != single[1].detail["identity_group"]
+
+
 def test_an_empty_gitleaks_report_is_no_findings_not_an_error():
     assert secrets.parse("[]", checkout="x") == []
 
@@ -209,7 +246,57 @@ def test_a_scan_creates_then_recognises_its_findings(session, repo):
         status="succeeded",
         observations=_secret(),
     )
-    assert first["new"] == 1 and second == {"new": 0, "seen": 1, "resolved": 0, "reopened": 0}
+    assert first["new"] == 1 and second == {
+        "new": 0,
+        "seen": 1,
+        "resolved": 0,
+        "reopened": 0,
+        "held": 0,
+    }
+
+
+def _scan(session, repo, report):
+    return record_code_scan(
+        session,
+        asset=repo,
+        kind="secret",
+        tool="gitleaks",
+        tool_version="v8.30.1",
+        status="succeeded",
+        observations=secrets.parse(report, checkout="checkout-0123456789ab"),
+    )
+
+
+def test_removing_the_first_of_two_credentials_resolves_that_one(session, repo):
+    from athena.db.models import CodeFinding
+
+    _scan(session, repo, _gitleaks((1, FIRST), (2, SECOND)))
+    rows = session.query(CodeFinding).filter_by(asset_id=repo.id).order_by(CodeFinding.line).all()
+    removed, kept = rows
+    kept_since = kept.first_seen
+
+    counts = _scan(session, repo, _gitleaks((1, SECOND)))
+    assert counts["resolved"] == 1 and counts["seen"] == 1 and counts["held"] == 0
+    session.refresh(removed)
+    session.refresh(kept)
+    assert removed.resolved_at is not None, "the deleted token is the one resolved"
+    assert kept.resolved_at is None, "the token still in the file stays open"
+    assert kept.first_seen == kept_since and kept.line == 1
+
+
+def test_a_shrinking_group_of_identical_copies_is_held_open_not_resolved(session, repo):
+    """The same token pasted twice, then one copy deleted. Nothing in the report
+    says which copy went, so neither finding is declared resolved."""
+    from athena.db.models import CodeFinding
+
+    _scan(session, repo, _gitleaks((3, FIRST), (9, FIRST)))
+    one_left = _scan(session, repo, _gitleaks((3, FIRST)))
+    assert one_left["resolved"] == 0 and one_left["held"] == 1
+    open_ = session.query(CodeFinding).filter_by(asset_id=repo.id, resolved_at=None).count()
+    assert open_ == 2
+
+    gone = _scan(session, repo, _gitleaks())
+    assert gone["resolved"] == 2 and gone["held"] == 0
 
 
 def test_only_a_successful_scan_resolves(session, repo):

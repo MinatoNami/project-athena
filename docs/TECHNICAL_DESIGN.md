@@ -807,9 +807,13 @@ over the same checkout, in the §12 sandbox with no network. Results land in
 - Secret values are redacted inside the sandbox (`--redact`) and the adapter also
   refuses to keep the redacted match line; Trivy's `Code.Lines` are dropped for the
   same reason.
-- Identity is the rule, the repository-relative path and the occurrence's ordinal —
-  Gitleaks' own fingerprint embeds the per-scan checkout directory. Trivy's 2026 rule
-  rename (`DS002` → `DS-0002`) is normalised so an upgrade does not reset history.
+- A secret's identity is the rule, the repository-relative path and the entropy
+  Gitleaks reports for the value (which survives `--redact` and cannot be reversed
+  into the value) — Gitleaks' own fingerprint embeds the per-scan checkout directory
+  and the line. Hits that agree on all three are told apart by order only, so when
+  such a group shrinks the unmatched finding is held open, not resolved: the report
+  cannot say which copy went. Trivy's 2026 rule rename (`DS002` → `DS-0002`) is
+  normalised so an upgrade does not reset history.
 - Only a **succeeded** scan resolves findings it no longer sees, and a code scan never
   refreshes inventory freshness. Only the working tree is searched (the checkout is
   shallow); every run says so.
