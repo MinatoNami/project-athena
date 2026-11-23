@@ -147,7 +147,8 @@ def count_affected_assets(session: Session, *, vulnerability_id: str) -> dict[st
         text(
             "SELECT a.tier, count(*) AS n FROM finding f "
             "  JOIN asset a ON a.id = f.asset_id "
-            " WHERE f.vulnerability_id = :v GROUP BY a.tier"
+            # A finding no published range supports is not spread.
+            " WHERE f.vulnerability_id = :v AND f.state <> 'unmatched' GROUP BY a.tier"
         ),
         {"v": vulnerability_id},
     ).all()

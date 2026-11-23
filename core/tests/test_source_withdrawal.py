@@ -143,3 +143,42 @@ def test_a_withdrawn_duplicate_never_seen_creates_nothing(session):
     )
     assert upsert_advisory(session, parse(record)) == "unchanged"
     assert session.get(Vulnerability, cve) is None
+
+
+def test_an_unmatched_finding_does_not_keep_its_advisory_stale(session):
+    """A later revision that still does not cover the package must not leave the
+    advisory in the hourly stale sweep for good."""
+    from athena.correlation.engine import stale_findings
+
+    cve = f"CVE-2099-{uuid.uuid4().int % 10**9}"
+    package = f"pkg-{uuid.uuid4().hex[:6]}"
+    ghsa = f"GHSA-{uuid.uuid4().hex[:4]}-1111-2222"
+    upsert_advisory(session, parse(_record(ghsa, cve, package)))
+    host, _ = _installed(session, package)
+    correlate_advisory(session, cve)
+    upsert_advisory(session, parse(_record(ghsa, cve, package, withdrawn="2026-11-10T00:00:00Z")))
+    correlate_advisory(session, cve)
+    assert _finding(session, cve, host).state == "unmatched"
+
+    # Another source revises the CVE, for a package this host does not have.
+    upsert_advisory(session, parse(_record(f"PYSEC-{uuid.uuid4().hex[:8]}", cve, "other-pkg")))
+    assert cve in stale_findings(session, limit=100_000)
+    correlate_advisory(session, cve)
+    assert _finding(session, cve, host).state == "unmatched"
+    assert cve not in stale_findings(session, limit=100_000)
+
+
+def test_a_withdrawn_advisory_leaves_the_stale_sweep_once_looked_at(session):
+    from athena.correlation.engine import stale_findings
+
+    cve = f"MAL-2099-{uuid.uuid4().hex[:6]}"
+    package = f"pkg-{uuid.uuid4().hex[:6]}"
+    upsert_advisory(session, parse(_record(cve, cve, package) | {"aliases": []}))
+    _installed(session, package)
+    correlate_advisory(session, cve)
+    # Withdrawal is itself a revision.
+    withdrawn = _record(cve, cve, package, withdrawn="2026-11-10T00:00:00Z") | {"aliases": []}
+    upsert_advisory(session, parse(withdrawn))
+    assert cve in stale_findings(session, limit=100_000)
+    assert correlate_advisory(session, cve)["status"] == "withdrawn"
+    assert cve not in stale_findings(session, limit=100_000)

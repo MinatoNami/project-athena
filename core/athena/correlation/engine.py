@@ -481,6 +481,10 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
     if vulnerability is None:
         return {"status": "unknown_advisory"}
     if vulnerability.withdrawn_at is not None:
+        # Nothing to match, but its findings have now been looked at against this
+        # revision — withdrawal itself is a revision, and leaving them behind it kept
+        # the advisory in the hourly stale sweep for good.
+        _mark_evaluated(session, vulnerability)
         return {"status": "withdrawn", "matched": 0}
 
     ranges = session.execute(
@@ -534,6 +538,7 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
             reopened += int(outcome == "reopened")
 
     unmatched = _close_unmatched(session, vulnerability, matched_pairs)
+    _mark_evaluated(session, vulnerability)
 
     return {
         "status": "ok",
@@ -544,6 +549,24 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
         "reopened": reopened,
         "unmatched": unmatched,
     }
+
+
+def _mark_evaluated(session: Session, vulnerability: Vulnerability) -> None:
+    """Every finding of this advisory has now been weighed against its revision.
+
+    `_record` brings matched findings up to date, but a finding that did not match —
+    unmatched, resolved, a package since removed — kept its old revision, and
+    `stale_findings` re-queued the advisory every hour, indefinitely. The revision
+    marks what a finding was last evaluated against, and this run evaluated all of
+    them.
+    """
+    session.execute(
+        text(
+            "UPDATE finding SET advisory_revision = :rev"
+            " WHERE vulnerability_id = :id AND advisory_revision < :rev"
+        ),
+        {"rev": vulnerability.revision, "id": vulnerability.id},
+    )
 
 
 # States a finding can be in while its match is still the reason it exists. Later

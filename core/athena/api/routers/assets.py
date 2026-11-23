@@ -216,7 +216,9 @@ def unclassified(
 
     finding_counts = dict(
         session.execute(
-            select(Finding.asset_id, func.count()).group_by(Finding.asset_id)
+            select(Finding.asset_id, func.count())
+            .where(Finding.state != "unmatched")
+            .group_by(Finding.asset_id)
         ).all()
     )
 
@@ -706,6 +708,12 @@ class BaselineRequest(BaseModel):
     move_existing: bool = False
 
 
+# Findings the list can show at all. The preview is subtracted from the list's own
+# count, so it must leave out what the list leaves out: withdrawn advisories and
+# findings no published range supports.
+_LISTED = (Vulnerability.withdrawn_at.is_(None), Finding.state != "unmatched")
+
+
 def _baseline_preview(session: Session, asset_id: str | None) -> dict[str, Any]:
     """What a baseline would accept, counted before it is drawn."""
     from athena.findings.query import _is_new
@@ -715,7 +723,7 @@ def _baseline_preview(session: Session, asset_id: str | None) -> dict[str, Any]:
         .select_from(Finding)
         .join(Asset, Asset.id == Finding.asset_id)
         .join(Vulnerability, Vulnerability.id == Finding.vulnerability_id)
-        .where(Asset.tombstoned_at.is_(None), _is_new())
+        .where(Asset.tombstoned_at.is_(None), _is_new(), *_LISTED)
     )
     if asset_id:
         stmt = stmt.where(Finding.asset_id == asset_id)
@@ -762,6 +770,7 @@ def _exempt_count(session: Session, asset_id: str | None) -> int:
             Asset.tombstoned_at.is_(None),
             Finding.state != "no_fix_available",
             (Vulnerability.kev.is_(True)) | (_BAND_RANK >= 3),
+            *_LISTED,
         )
     )
     if asset_id:
