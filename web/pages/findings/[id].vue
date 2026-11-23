@@ -118,19 +118,38 @@ const FIX_KIND: Record<string, string> = {
 }
 
 /**
- * The scoring arithmetic as bars. Weights are small numbers whose *relative* size
- * is the point — which is precisely what a column of two-decimal figures hides and
- * a bar shows. The exact values stay one click away in the table view.
+ * The scoring arithmetic as bars — as what it is, a product of multipliers.
+ *
+ * `raw = base × (0.30 + 0.70 × exploitation) × exposure × running × importance ×
+ * reachability`. Drawn as "contributions" sorted by size, a neutral 1.00 got the
+ * longest bar while the 0.10 that crushed the score got the shortest, and the
+ * product itself was plotted as one more factor. Each bar is now the multiplier
+ * actually applied, in formula order, and the product is stated rather than drawn.
  */
-const riskFactors = computed(() =>
-  Object.entries(risk.value?.factors ?? {})
-    .map(([name, v]) => ({
-      label: pretty(String(name)),
-      value: Math.round(Number(v) * 100) / 100,
-      exact: Number(v).toFixed(2),
-    }))
-    .sort((a, b) => b.value - a.value),
-)
+const FACTOR_ORDER = ['base', 'exploitation', 'exposure', 'running', 'importance', 'reachability']
+const riskFactors = computed(() => {
+  const factors: Record<string, number> = risk.value?.factors ?? {}
+  return FACTOR_ORDER.filter(name => factors[name] != null).map((name) => {
+    const raw = Number(factors[name])
+    // Exploitation enters through a floor: none at all still keeps 30% of the score.
+    const applied = name === 'exploitation' ? 0.30 + 0.70 * raw : raw
+    return {
+      label: pretty(name),
+      value: Math.round(applied * 100) / 100,
+      exact: `×${applied.toFixed(2)}`,
+      hint: applied >= 0.995 ? 'leaves the score as it is' : `keeps ${Math.round(applied * 100)}% of it`,
+    }
+  })
+})
+const rawProduct = computed(() => {
+  const raw = risk.value?.factors?.raw
+  return raw == null ? null : Number(raw).toFixed(2)
+})
+
+const CASE_TABS = computed(() => tabs.map(t => t.id))
+function selectCaseTab(id: string) {
+  tab.value = id as any
+}
 
 const fix = computed(() => data.value?.remediation ?? null)
 
@@ -323,11 +342,15 @@ const tabs = [
 
       <div class="tabs" role="tablist" aria-label="Case file">
         <button
-          v-for="t in tabs" :key="t.id" class="tab" :class="{ on: tab === t.id }"
-          role="tab" :aria-selected="tab === t.id"
-          @click="tab = t.id as any"
+          v-for="t in tabs" :id="`case-tab-${t.id}`" :key="t.id" class="tab" :class="{ on: tab === t.id }"
+          role="tab" :aria-selected="tab === t.id" aria-controls="case-panel"
+          :tabindex="tab === t.id ? 0 : -1"
+          @click="selectCaseTab(t.id)"
+          @keydown="tabKeydown($event, CASE_TABS, tab, selectCaseTab)"
         >{{ t.label }}</button>
       </div>
+
+      <div id="case-panel" role="tabpanel" :aria-labelledby="`case-tab-${tab}`">
 
       <!-- ══ Verdict ══ -->
       <div v-if="tab === 'verdict'" class="cols">
@@ -539,13 +562,18 @@ const tabs = [
         <template v-else>
           <ChartFrame
             :title="`How ${risk.score} was reached`"
-            note="weight each factor contributed"
+            :note="rawProduct === null
+              ? 'each factor multiplies the score; 1.00 leaves it unchanged'
+              : `multiplied together: ${rawProduct}, before the overrides below`"
             :table="{
-              columns: ['Factor', 'Weight'],
-              rows: riskFactors.map(f => [f.label, f.exact]),
+              columns: ['Factor', 'Multiplier'],
+              rows: [
+                ...riskFactors.map(f => [f.label, f.exact]),
+                ...(rawProduct === null ? [] : [['Product', rawProduct]]),
+              ],
             }"
           >
-            <ChartBars :rows="riskFactors" summary="Risk score contribution by factor" />
+            <ChartBars :rows="riskFactors" summary="Multiplier each risk factor applied, in formula order" />
           </ChartFrame>
           <div v-if="risk.overrides?.length" class="card">
             <div class="lbl">Overrides applied, in order</div>
@@ -615,6 +643,7 @@ const tabs = [
             </tbody>
           </table>
         </div>
+      </div>
       </div>
       <SuppressDialog
         v-if="suppressing"

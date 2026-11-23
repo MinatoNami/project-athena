@@ -403,6 +403,9 @@ class Vulnerability(Base):
     # CVE that was merely checked.
     ssvc_cisa: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
     ssvc_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The vector `cvss_score` was computed from; null when the advisory published
+    # the number itself. Written with the score, never apart from it.
+    cvss_scoring_vector: Mapped[str | None] = mapped_column(Text)
     # An OpenSSF malicious-packages record (`MAL-`): the package is the attack, not
     # a flaw in it. Changes the remediation and the floor; see risk.scoring.
     malicious: Mapped[bool] = mapped_column(

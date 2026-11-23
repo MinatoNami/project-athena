@@ -21,19 +21,15 @@ const props = defineProps<{
 const showing = ref<'chart' | 'table'>('chart')
 
 function csv() {
-  const escape = (c: string | number) => {
-    const s = String(c)
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
-  }
   const body = [props.table.columns, ...props.table.rows]
-    .map(row => row.map(escape).join(','))
+    .map(row => row.map(csvCell).join(','))
     .join('\n')
   const url = URL.createObjectURL(new Blob([body], { type: 'text/csv' }))
   const a = document.createElement('a')
   a.href = url
   a.download = `${props.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.csv`
   a.click()
-  URL.revokeObjectURL(url)
+  revokeLater(url)
 }
 </script>
 

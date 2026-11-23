@@ -148,6 +148,11 @@ def parse_epss_csv(raw: str) -> tuple[dict[str, tuple[float, float]], dict[str, 
 VULNRICHMENT_URL = (
     "https://raw.githubusercontent.com/cisagov/vulnrichment/develop/{year}/{bucket}xxx/{cve}.json"
 )
+
+# A CVE is worth one request to CISA while it has a finding in any other state. The
+# enrichment job selects by this, and /intel/sources counts coverage by it, so the
+# coverage figure's denominator is the set the job actually works through.
+VULNRICHMENT_SKIP_STATES = ("resolved", "false_positive")
 _CVE = re.compile(r"^CVE-(\d{4})-(\d{4,19})$")
 
 

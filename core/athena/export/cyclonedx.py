@@ -44,6 +44,27 @@ def component_purl(component: Component) -> str | None:
         return None
 
 
+# Runs that read an asset's code rather than its packages. They share `scan_run`
+# with inventory but say nothing about what is installed.
+CODE_SCAN_KINDS = ("secret", "misconfiguration")
+# The one node capability that reports packages; the others (ports, services,
+# Docker) are separate runs that finish later in the same sweep.
+HOST_PACKAGES_TOOL = "athena-node/list_packages"
+
+
+def _inventory_runs(asset: Asset) -> list[Any]:
+    """Which runs can speak for this SBOM's contents.
+
+    "The last scan" was any run on the asset — a Trivy config scan on a repository,
+    or a host's Docker inspection that succeeded right after its package listing
+    failed, which stamped `succeeded` and no caveat on an inventory nobody had read.
+    """
+    conditions: list[Any] = [ScanRun.kind.notin_(CODE_SCAN_KINDS)]
+    if asset.kind == "host":
+        conditions.append(ScanRun.tool == HOST_PACKAGES_TOOL)
+    return conditions
+
+
 def sbom_for(session: Session, asset: Asset) -> dict[str, Any]:
     """A CycloneDX JSON document for the components recorded on `asset`."""
     rows = session.execute(
@@ -56,7 +77,7 @@ def sbom_for(session: Session, asset: Asset) -> dict[str, Any]:
     last_scan = (
         session.execute(
             select(ScanRun)
-            .where(ScanRun.asset_id == asset.id)
+            .where(ScanRun.asset_id == asset.id, *_inventory_runs(asset))
             .order_by(ScanRun.started_at.desc())
             .limit(1)
         )

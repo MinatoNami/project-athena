@@ -22,10 +22,11 @@ justification enum is used only where the reason code actually means it.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -72,9 +73,32 @@ def product_id(asset: Asset) -> str:
             return purl
     if asset.kind == "repository":
         url = asset.attributes.get("url") or asset.attributes.get("clone_url")
-        if url:
-            return url
+        if url and (public := public_repository_url(url)):
+            return public
     return f"urn:athena:asset:{asset.id}"
+
+
+def public_repository_url(url: str) -> str | None:
+    """A clone URL with nothing in it that is not the repository's address.
+
+    The clone URL is stored as the operator gave it, and that is often
+    `https://x-access-token:ghp_…@host/org/repo.git`. This document is built to leave
+    Athena, so user info, query and fragment are dropped, and an scp-style
+    `git@host:org/repo` becomes a URL an IRI consumer can read.
+    """
+    url = url.strip()
+    scp = re.match(r"^[^@/]+@(?P<host>[^:/]+):(?P<path>.+)$", url)
+    if scp and "://" not in url:
+        return f"ssh://{scp.group('host')}/{scp.group('path').lstrip('/')}"
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return None
+    if not parts.scheme or not parts.hostname:
+        return None
+    netloc = parts.hostname + (f":{port}" if port else "")
+    return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
 
 
 def _statement(
@@ -250,4 +274,4 @@ def vex_document(
     }
 
 
-__all__ = ["product_id", "vex_document"]
+__all__ = ["product_id", "public_repository_url", "vex_document"]

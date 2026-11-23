@@ -301,8 +301,8 @@ def test_the_three_today_tabs_partition_the_estate(session, estate):
             session, FindingQuery(limit=200, **kw)).groups}
 
     needs = ids(needs_attention=True)
-    cleared = ids(assessed=True, needs_attention=False)
-    waiting = ids(assessed=False, needs_attention=False)
+    cleared = ids(fully_assessed=True, needs_attention=False)
+    waiting = ids(fully_assessed=False, needs_attention=False)
     assert not (needs & cleared) and not (needs & waiting) and not (cleared & waiting)
     assert needs | cleared | waiting == ids()
 
@@ -310,3 +310,23 @@ def test_the_three_today_tabs_partition_the_estate(session, estate):
     assert facets["needs_attention"]["total"] == len(needs)
     assert facets["cleared"]["total"] == len(cleared)
     assert facets["waiting"]["total"] == len(waiting)
+
+
+def test_a_partly_assessed_group_is_waiting_not_cleared(session, estate):
+    """One of two instances assessed as low, the other never looked at. "Cleared"
+    would say the group was dealt with while half of it is unknown."""
+    a = _asset(session, "build-1", tier="development", exposure="isolated")
+    b = _asset(session, "build-2", tier="development", exposure="isolated")
+    partial = _advisory(session, f"CVE-E-{uuid.uuid4().hex[:6]}", cvss=3.1)
+    _finding(session, partial, a, _component(session, "zlib"), band="low", score=3)
+    _finding(session, partial, b, _component(session, "zlib"))
+    session.flush()
+
+    def ids(**kw):
+        return {g["vulnerability_id"] for g in query_findings(
+            session, FindingQuery(limit=200, **kw)).groups}
+
+    assert partial.id in ids(fully_assessed=False, needs_attention=False)
+    assert partial.id not in ids(fully_assessed=True, needs_attention=False)
+    # `assessed` keeps its own meaning — any instance — for the findings filter.
+    assert partial.id in ids(assessed=True)

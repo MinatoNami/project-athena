@@ -50,7 +50,9 @@ function when(at: string | null) {
   <div class="bell">
     <button
       ref="trigger" class="trigger" :class="{ on: open }"
-      :aria-label="`Notifications, ${unread} unread${urgent ? `, ${urgent} urgent` : ''}`"
+      :aria-label="data == null
+        ? 'Notifications, could not be loaded'
+        : `Notifications, ${unread} unread${urgent ? `, ${urgent} urgent` : ''}`"
       :aria-expanded="open" aria-controls="inbox-panel" @click="open = !open"
     >
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -69,13 +71,19 @@ function when(at: string | null) {
         <button v-if="unread" class="linkish" @click="markAll">Mark all read</button>
       </div>
 
-      <p v-if="!data?.notifications?.length" class="empty">
+      <!-- A failed fetch is not an empty inbox. -->
+      <p v-if="data == null" class="empty">
+        The inbox could not be loaded, so this says nothing about what is waiting.
+        <button class="linkish" @click="refresh()">Try again</button>
+      </p>
+
+      <p v-else-if="!data.notifications?.length" class="empty">
         Nothing yet. You are told when a finding is scored into a band worth acting on,
         or when something you set aside comes back.
       </p>
 
-      <ul v-else class="items">
-        <li
+      <div v-else class="items">
+        <div
           v-for="n in data.notifications" :key="n.id"
           class="item" :class="{ unread: !n.read_at, urgent: n.urgency === 'urgent' }"
           role="button" tabindex="0"
@@ -102,8 +110,8 @@ function when(at: string | null) {
               in digest
             </span>
           </div>
-        </li>
-      </ul>
+        </div>
+      </div>
 
       <p v-if="data?.held_for_digest" class="fine">
         {{ data.held_for_digest }} held for the digest so the urgent ones stay findable.

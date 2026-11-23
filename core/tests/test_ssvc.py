@@ -162,3 +162,18 @@ def test_kev_outranks_a_stale_cisa_exploitation_value():
 def test_the_reference_spelling_public_poc_is_normalised():
     decision = _decide(cisa={"exploitation": "public poc"})
     assert decision.points["exploitation"].value == "poc"
+
+
+@pytest.mark.parametrize(
+    ("tier", "criticality", "assumed"),
+    [
+        ("production", None, True),
+        ("development", None, True),
+        ("unknown", 4, True),
+        ("production", 3, False),
+        ("development", 2, False),
+    ],
+)
+def test_importance_resting_on_a_missing_input_says_so(tier, criticality, assumed):
+    point = ssvc.mission_wellbeing(tier=tier, criticality=criticality)
+    assert point.assumed is assumed

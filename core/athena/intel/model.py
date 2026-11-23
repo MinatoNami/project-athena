@@ -47,6 +47,10 @@ class NormalisedAdvisory:
     # The originating record id (UBUNTU-CVE-…, GHSA-…). Several records converge on
     # one CVE, and each owns its own ranges — this is what keeps them apart.
     source_record: str = ""
+    # Set by the adapter from the record's own id and true aliases. Outside
+    # `content_hash` for the same reason as `scoring_vector`: it is derived from ids
+    # already hashed.
+    malicious: bool = False
     # The vector the base score is computed from, when the record publishes several
     # (v3.1 and v4.0 side by side is common). Deliberately outside `content_hash`:
     # the score is a function of a vector already hashed, and adding a field to the

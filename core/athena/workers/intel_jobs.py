@@ -135,8 +135,10 @@ def poll_epss(payload: dict[str, Any]) -> dict[str, Any]:
         record_source_result(
             session, name="epss", succeeded=True, advisories=len(scores),
             # The cursor carries the model, so the intel page can say which EPSS the
-            # scores on every finding came from.
-            cursor=f"{model}@{meta.get('score_date', '')}" if model else None,
+            # scores on every finding came from. Written even when the file did not
+            # name one: an empty cursor is not stored, and the page then credited
+            # these scores to whichever model the previous fetch named.
+            cursor=f"{model or 'unknown'}@{meta.get('score_date', '')}",
         )
     log.info("intel.epss", scored=len(scores), matched=updated, model=model)
     return {"status": "ok", "scored": len(scores), "matched": updated, "model": model}
@@ -146,6 +148,40 @@ def poll_epss(payload: dict[str, Any]) -> dict[str, Any]:
 # twice a day, but an assessment, once written, rarely moves.
 VULNRICHMENT_RECHECK_DAYS = 7
 VULNRICHMENT_BATCH = 200
+
+
+def vulnrichment_due(session: Any, *, limit: int) -> list[str]:
+    """CVEs to ask CISA about: an open finding here, and no answer or a stale one.
+
+    Unchecked first, then known-exploited. Shares its notion of "open" with the
+    coverage figure on /intel/sources (`VULNRICHMENT_SKIP_STATES`).
+    """
+    from sqlalchemy import bindparam, text
+
+    return [
+        row[0]
+        for row in session.execute(
+            text(
+                """
+                SELECT v.id FROM vulnerability v
+                 WHERE v.id LIKE 'CVE-%'
+                   AND v.withdrawn_at IS NULL
+                   AND (v.ssvc_checked_at IS NULL
+                        OR v.ssvc_checked_at < now() - make_interval(days => :days))
+                   AND EXISTS (SELECT 1 FROM finding f
+                                WHERE f.vulnerability_id = v.id
+                                  AND f.state NOT IN :skip)
+                 ORDER BY v.ssvc_checked_at NULLS FIRST, v.kev DESC, v.id
+                 LIMIT :limit
+                """
+            ).bindparams(bindparam("skip", expanding=True)),
+            {
+                "days": VULNRICHMENT_RECHECK_DAYS,
+                "limit": limit,
+                "skip": list(feeds.VULNRICHMENT_SKIP_STATES),
+            },
+        )
+    ]
 
 
 @handler("intel.enrich.vulnrichment")
@@ -160,28 +196,9 @@ def enrich_vulnrichment(payload: dict[str, Any]) -> dict[str, Any]:
     in Athena could establish — and a rescore follows, because that input moves the
     exploitation factor.
     """
-    from sqlalchemy import text
-
     batch = int(payload.get("limit") or VULNRICHMENT_BATCH)
     with session_scope() as session:
-        ids = [
-            row[0] for row in session.execute(
-                text(
-                    """
-                    SELECT v.id FROM vulnerability v
-                     WHERE v.id LIKE 'CVE-%'
-                       AND (v.ssvc_checked_at IS NULL
-                            OR v.ssvc_checked_at < now() - make_interval(days => :days))
-                       AND EXISTS (SELECT 1 FROM finding f
-                                    WHERE f.vulnerability_id = v.id
-                                      AND f.state NOT IN ('resolved', 'false_positive'))
-                     ORDER BY v.ssvc_checked_at NULLS FIRST, v.kev DESC, v.id
-                     LIMIT :limit
-                    """
-                ),
-                {"days": VULNRICHMENT_RECHECK_DAYS, "limit": batch},
-            )
-        ]
+        ids = vulnrichment_due(session, limit=batch)
 
     found = absent = failed = moved = 0
     errors: list[str] = []

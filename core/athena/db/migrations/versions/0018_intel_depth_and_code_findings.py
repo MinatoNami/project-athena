@@ -54,6 +54,11 @@ def upgrade() -> None:
     # even when CISA has none, so "looked and found nothing" is not "never looked".
     op.add_column("vulnerability", sa.Column("ssvc_cisa", JSONB()))
     op.add_column("vulnerability", sa.Column("ssvc_checked_at", sa.DateTime(timezone=True)))
+    # The vector `cvss_score` was computed from, when Athena computed it. A record
+    # often publishes v4.0 and v3.1 side by side; `cvss_vector` keeps the first, the
+    # score comes from the v3 one, and without this the page compared the score
+    # with the wrong vector and called it the advisory's own number.
+    op.add_column("vulnerability", sa.Column("cvss_scoring_vector", sa.Text()))
 
     op.execute(
         """
@@ -148,12 +153,14 @@ def _backfill_cvss_scores() -> None:
             " WHERE cvss_score IS NULL AND cvss_vector LIKE 'CVSS:3%'"
         )
     ).all()
-    update = sa.text("UPDATE vulnerability SET cvss_score = :score WHERE id = :id")
+    update = sa.text(
+        "UPDATE vulnerability SET cvss_score = :score, cvss_scoring_vector = :vector WHERE id = :id"
+    )
     batch = []
     for vuln_id, vector in rows:
         computed = base_score(vector)
         if computed is not None:
-            batch.append({"id": vuln_id, "score": computed})
+            batch.append({"id": vuln_id, "score": computed, "vector": vector})
         if len(batch) >= 2000:
             bind.execute(update, batch)
             batch.clear()
@@ -164,6 +171,7 @@ def _backfill_cvss_scores() -> None:
 def downgrade() -> None:
     op.drop_index("ix_code_finding_open", table_name="code_finding")
     op.drop_table("code_finding")
+    op.drop_column("vulnerability", "cvss_scoring_vector")
     op.drop_column("vulnerability", "ssvc_checked_at")
     op.drop_column("vulnerability", "ssvc_cisa")
     op.drop_column("vulnerability", "kev_forensic_triage")

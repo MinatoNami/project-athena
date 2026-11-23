@@ -138,6 +138,23 @@ def parse(advisory: dict[str, Any]) -> NormalisedAdvisory | None:
     if canonical != osv_id:
         aliases = [a for a in aliases if a != canonical] + [osv_id]
 
+    # A withdrawal speaks for the record that carries it. Folded under a CVE that
+    # other sources also describe — GitHub withdraws duplicate GHSAs routinely — it
+    # would mark the shared row withdrawn, and every finding for that CVE from every
+    # source would drop out of the list with nothing saying why. So a withdrawn
+    # record merged under another id contributes nothing, and withdraws nothing.
+    withdrawn_at = _parse_time(advisory.get("withdrawn"))
+    if withdrawn_at is not None and canonical != osv_id:
+        return None
+
+    # Malware is what the record says it *is* — its own id and its true aliases.
+    # `related` (folded into `aliases` above for merging) only points at another
+    # issue, and a CVE that merely mentions a MAL- report is not itself malware.
+    malicious = any(
+        isinstance(i, str) and i.upper().startswith("MAL-")
+        for i in [osv_id, *(advisory.get("aliases") or [])]
+    )
+
     vector, label = _severity(advisory)
     scoring_vector = cvss.choose(
         [
@@ -213,7 +230,8 @@ def parse(advisory: dict[str, Any]) -> NormalisedAdvisory | None:
         severity=label,
         published_at=_parse_time(advisory.get("published")),
         modified_at=_parse_time(advisory.get("modified")),
-        withdrawn_at=_parse_time(advisory.get("withdrawn")),
+        withdrawn_at=withdrawn_at,
+        malicious=malicious,
         references=[
             {"type": r.get("type"), "url": r.get("url")}
             for r in advisory.get("references") or []

@@ -11,6 +11,8 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, date, datetime
 
+import pytest
+
 from athena.intel.ingest import apply_kev, is_malicious, upsert_advisory
 from athena.intel.model import NormalisedAdvisory, NormalisedRange, content_hash
 from athena.intel.osv import parse
@@ -56,9 +58,42 @@ def test_an_osv_mal_record_is_recognised():
     assert is_malicious(advisory)
 
 
-def test_a_cve_aliased_to_a_mal_record_is_recognised():
-    advisory = NormalisedAdvisory(id="CVE-2025-1", aliases=["MAL-2025-9"], source_record="x")
+def _ghsa(**fields):
+    return {
+        "id": "GHSA-aaaa-bbbb-cccc",
+        "affected": MAL_RECORD["affected"],
+        "modified": "2025-09-16T00:00:00Z",
+        **fields,
+    }
+
+
+def test_a_record_aliased_to_a_mal_report_is_recognised():
+    advisory = parse(_ghsa(aliases=["CVE-2025-1", "MAL-2025-9"]))
+    assert advisory is not None and advisory.id == "CVE-2025-1"
     assert is_malicious(advisory)
+
+
+def test_a_record_that_only_relates_to_a_mal_report_is_not_malware():
+    """`related` points at another issue. It is folded into aliases so records can
+    merge, but a CVE that mentions a MAL- report is not thereby malware — and the
+    flag is sticky, so a false positive here would never clear."""
+    advisory = parse(_ghsa(aliases=["CVE-2025-1"], related=["MAL-2025-9"]))
+    assert advisory is not None and "MAL-2025-9" in advisory.aliases
+    assert not is_malicious(advisory)
+
+
+def test_a_withdrawn_duplicate_does_not_withdraw_the_cve_it_merges_into():
+    """GitHub withdraws duplicate GHSAs routinely. Folded under the CVE, the
+    withdrawal marked the shared row withdrawn and every finding for that CVE, from
+    every source, dropped out of the list."""
+    duplicate = _ghsa(aliases=["CVE-2025-1"], withdrawn="2025-10-01T00:00:00Z")
+    assert parse(duplicate) is None
+
+
+def test_a_withdrawn_record_that_is_its_own_row_is_still_withdrawn():
+    retracted = {**MAL_RECORD, "withdrawn": "2025-10-01T00:00:00Z"}
+    advisory = parse(retracted)
+    assert advisory is not None and advisory.withdrawn_at is not None
 
 
 def test_an_ordinary_advisory_is_not_malware():
@@ -253,3 +288,20 @@ def test_a_malformed_kev_date_is_absent_not_invented(session):
     v = session.get(Vulnerability, cve)
     assert v.kev is True
     assert v.kev_date_added is None and v.kev_due_date is None
+
+
+@pytest.mark.parametrize(
+    ("verdict", "malicious", "state"),
+    [
+        ("not_applicable", True, "discovered"),
+        ("not_applicable", False, "false_positive"),
+        ("applicable", True, "confirmed"),
+        ("uncertain", True, "discovered"),
+    ],
+)
+def test_the_model_cannot_close_a_malware_finding(verdict, malicious, state):
+    """The score already ignores a model's "not applicable" on malware; the state
+    must too, or the finding leaves every open count on the model's word alone."""
+    from athena.workers.investigate import state_for
+
+    assert state_for(verdict, malicious=malicious) == state

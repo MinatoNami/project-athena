@@ -18,8 +18,9 @@ const open = ref<string | null>(null)
 const QUERIES = {
   needs: 'needs_attention=true&sort=risk&limit=50',
   // Outside the queue only, so the three tabs never list the same thing twice.
-  waiting: 'assessed=false&needs_attention=false&sort=risk&limit=50',
-  cleared: 'assessed=true&needs_attention=false&sort=risk&limit=50',
+  // Cleared means every instance was looked at; one that was not is still waiting.
+  waiting: 'fully_assessed=false&needs_attention=false&sort=risk&limit=50',
+  cleared: 'fully_assessed=true&needs_attention=false&sort=risk&limit=50',
 }
 
 const { data, pending, error, refresh } = await useAsyncData(
@@ -43,8 +44,30 @@ const { data: unclassified } = await useAsyncData('today-unclassified', () =>
   api<any>('assets/unclassified').catch(() => null),
 )
 
-useEvents(['findings'], refresh)
+// The estate figures move with the list: the tab counts, the strip and the charts
+// all describe the same findings the rows do, and an investigation finishing
+// changes both.
+useEvents(['findings'], () => {
+  refresh()
+  refreshEstate()
+})
 const { severity } = useChartTheme()
+
+/**
+ * Which tab the rows on screen belong to. Nuxt sets `pending` on every refresh, so
+ * keying the skeleton on it blanked the queue — and dropped the open row and the
+ * keyboard focus — each time a live update arrived. Only a tab switch, or a first
+ * load, has nothing true to show in the meantime.
+ */
+const shownTab = ref(tab.value)
+watch(data, () => { shownTab.value = tab.value })
+const loading = computed(() => pending.value && (!data.value || shownTab.value !== tab.value))
+
+const TAB_IDS = ['needs', 'waiting', 'cleared'] as const
+function selectTab(id: string) {
+  tab.value = id as typeof tab.value
+  open.value = null
+}
 
 /**
  * One entry per decision, not per row in the database. Fourteen tags of one image
@@ -79,10 +102,14 @@ const rows = computed(() =>
 
 const facet = (name: string) => estate.value?.facets?.[name]?.total ?? 0
 
+// A failed estate fetch is not an empty estate: without this, the headline said
+// "Nothing is waiting on you" and every count read 0 whenever that one call failed.
+const estateUnknown = computed(() => estate.value == null)
+
 const tabs = computed(() => [
-  { id: 'needs', label: 'Needs you', count: facet('needs_attention') },
-  { id: 'waiting', label: 'Waiting on Athena', count: facet('waiting') },
-  { id: 'cleared', label: 'Cleared', count: facet('cleared') },
+  { id: 'needs', label: 'Needs you', count: estateUnknown.value ? null : facet('needs_attention') },
+  { id: 'waiting', label: 'Waiting on Athena', count: estateUnknown.value ? null : facet('waiting') },
+  { id: 'cleared', label: 'Cleared', count: estateUnknown.value ? null : facet('cleared') },
 ])
 
 /**
@@ -148,27 +175,33 @@ async function suppressed() {
   await Promise.all([refresh(), refreshEstate()])
 }
 
+/**
+ * Groups held out of every tab, estate-wide. Only counts of the same thing over
+ * the same population belong on one chart: "needs an entitlement" and "lower
+ * priority" used to sit here too, counted as rows of whichever tab was open — so
+ * they changed on a tab switch, and the entitlement rows were never out of the
+ * queue at all.
+ */
 const heldBack = computed(() => {
   const out: { label: string; value: number }[] = []
-  if (data.value?.no_fix_available_count) {
-    out.push({ label: 'No fix published', value: data.value.no_fix_available_count })
+  if (estate.value?.no_fix_available_count) {
+    out.push({ label: 'No fix published', value: estate.value.no_fix_available_count })
   }
-  const entitled = instances.value.filter(
-    (i: any) => i.fix_channel && i.fix_channel !== 'standard',
-  ).length
-  if (entitled) out.push({ label: 'Needs an entitlement', value: entitled })
   if (estate.value?.suppressed_group_count) {
     out.push({ label: 'Suppressed by you', value: estate.value.suppressed_group_count })
   }
   if (estate.value?.baseline_group_count) {
     out.push({ label: 'Pre-existing', value: estate.value.baseline_group_count })
   }
-  const deprioritised = instances.value.filter(
-    (i: any) => i.triage_disposition === 'deprioritise',
-  ).length
-  if (deprioritised) out.push({ label: 'Lower priority', value: deprioritised })
   return out
 })
+
+/** Rows of this tab left out of its list because triage ranked them lower. */
+const hiddenLowerPriority = computed(() =>
+  tab.value === 'needs'
+    ? 0
+    : instances.value.filter((i: any) => i.triage_disposition === 'deprioritise').length,
+)
 </script>
 
 <template>
@@ -176,8 +209,9 @@ const heldBack = computed(() => {
     <div class="page-head">
       <div class="page-title">
         <h1>Today</h1>
-        <p v-if="!pending">
-          <template v-if="facet('needs_attention')">
+        <p v-if="!loading">
+          <template v-if="estateUnknown">Counts could not be loaded — this is not an all-clear.</template>
+          <template v-else-if="facet('needs_attention')">
             <strong>{{ facet('needs_attention') }}</strong> need a person.
           </template>
           <template v-else>Nothing is waiting on you.</template>
@@ -197,9 +231,11 @@ const heldBack = computed(() => {
           ? `${unassessedGroups.toLocaleString()} more have no band — nothing has assessed them`
           : 'one row per decision, across the estate'"
         :empty="!bands.length"
-        :empty-text="unassessedGroups
-          ? `None of the ${unassessedGroups.toLocaleString()} groups found so far has been assessed, so none has a band yet.`
-          : 'Nothing matched yet.'"
+        :empty-text="estateUnknown
+          ? 'Counts could not be loaded.'
+          : unassessedGroups
+            ? `None of the ${unassessedGroups.toLocaleString()} groups found so far has been assessed, so none has a band yet.`
+            : 'Nothing matched yet.'"
         :table="{ columns: ['Band', 'Groups'], rows: bands.map(b => [b.label, b.value]) }"
       >
         <ChartBars :rows="bands" unit="groups" summary="Finding groups by worst band reached" />
@@ -209,27 +245,31 @@ const heldBack = computed(() => {
         title="Where they sit"
         note="dashed means nobody has classified the asset"
         :empty="!exposure.length"
-        empty-text="No exposure recorded yet."
+        :empty-text="estateUnknown ? 'Counts could not be loaded.' : 'No exposure recorded yet.'"
         :table="{ columns: ['Exposure', 'Groups'], rows: exposure.map(e => [e.label, e.value]) }"
       >
         <ChartBars :rows="exposure" unit="groups" summary="Finding groups by asset exposure" />
       </ChartFrame>
     </div>
 
-    <div class="tabs" role="tablist" aria-label="Queue">
-      <button
-        v-for="t in tabs" :key="t.id" class="tab" :class="{ on: tab === t.id }"
-        role="tab" :aria-selected="tab === t.id"
-        @click="tab = t.id as any; open = null"
-      >
-        {{ t.label }} <span class="mono tnum count">{{ t.count }}</span>
-      </button>
+    <div class="tabbar">
+      <div class="tabs" role="tablist" aria-label="Queue">
+        <button
+          v-for="t in tabs" :id="`tab-${t.id}`" :key="t.id" class="tab" :class="{ on: tab === t.id }"
+          role="tab" :aria-selected="tab === t.id" aria-controls="queue-panel"
+          :tabindex="tab === t.id ? 0 : -1"
+          @click="selectTab(t.id)"
+          @keydown="tabKeydown($event, TAB_IDS, tab, selectTab)"
+        >
+          {{ t.label }} <span class="mono tnum count">{{ t.count ?? '—' }}</span>
+        </button>
+      </div>
       <span class="hint">Ranked by what changes if you ignore it</span>
     </div>
 
     <div class="cols">
-      <div class="queue">
-        <RowSkeleton v-if="pending" :rows="4" />
+      <div id="queue-panel" class="queue" role="tabpanel" :aria-labelledby="`tab-${tab}`">
+        <RowSkeleton v-if="loading" :rows="4" />
 
         <StateBlock v-else-if="error" kind="error" title="Cannot reach Athena">
           The core service did not answer. Your findings are not lost — this view
@@ -345,6 +385,10 @@ const heldBack = computed(() => {
           {{ (data?.matching_group_count ?? 0).toLocaleString() }}.
           <NuxtLink to="/findings">See all →</NuxtLink>
         </p>
+        <p v-if="hiddenLowerPriority" class="truncated">
+          {{ plural(hiddenLowerPriority, 'more row') }} ranked lower by triage
+          {{ hiddenLowerPriority === 1 ? 'is' : 'are' }} left out of this tab, not removed.
+        </p>
         </template>
       </div>
 
@@ -394,7 +438,8 @@ const heldBack = computed(() => {
 <style scoped>
 .charts { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; margin: .8rem 0 .2rem; }
 
-.tabs { display: flex; align-items: center; gap: .35rem; margin: 1rem 0 .8rem; }
+.tabbar { display: flex; align-items: center; gap: .35rem; margin: 1rem 0 .8rem; flex-wrap: wrap; }
+.tabs { display: flex; align-items: center; gap: .35rem; }
 .tab {
   font: inherit; font-size: .8rem; font-weight: 500; padding: .35rem .7rem;
   border-radius: 7px; border: 1px solid transparent; background: transparent;

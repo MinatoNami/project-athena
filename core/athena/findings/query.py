@@ -91,6 +91,11 @@ class FindingQuery:
     # Facets.
     q: str | None = None
     assessed: bool | None = None
+    # Every instance investigated (True), or at least one not (False). What the
+    # "cleared" and "waiting" tabs split on: `assessed` is "any instance", so a group
+    # with one of ten assets assessed as low read as cleared while nine had never
+    # been looked at — unknown shown as clean.
+    fully_assessed: bool | None = None
     kev: bool = False
     # OpenSSF malicious-packages records. A facet of its own because the response is
     # incident handling, not patching, and it is a different person's morning.
@@ -118,6 +123,7 @@ class FindingQuery:
             (
                 self.q,
                 self.assessed is not None,
+                self.fully_assessed is not None,
                 self.kev,
                 self.malicious,
                 self.exposure,
@@ -284,6 +290,10 @@ def _grouped(query: FindingQuery, *, with_facets: bool) -> Select:
             grouped = grouped.having(func.count(Finding.investigation_id) > 0)
         elif query.assessed is False:
             grouped = grouped.having(func.count(Finding.investigation_id) == 0)
+        if query.fully_assessed is True:
+            grouped = grouped.having(func.count(Finding.investigation_id) == func.count())
+        elif query.fully_assessed is False:
+            grouped = grouped.having(func.count(Finding.investigation_id) < func.count())
         if query.has_fix is True:
             grouped = grouped.having(func.count(Finding.fixed_version) > 0)
         elif query.has_fix is False:
@@ -371,15 +381,17 @@ def _facet_counts(session: Session, query: FindingQuery, *, with_facets: bool) -
             .filter((sub.c.worst_rank >= 2) | (sub.c.kev > 0) | (sub.c.malicious > 0))
             .label("needs_attention"),
             # The other two Today tabs, disjoint from the queue and from each other.
+            # Cleared only when every instance has been looked at; one unassessed
+            # instance is still work waiting on Athena.
             func.count()
             .filter(
-                (sub.c.investigated_count > 0)
+                (sub.c.investigated_count == sub.c.instance_count)
                 & ~((sub.c.worst_rank >= 2) | (sub.c.kev > 0) | (sub.c.malicious > 0))
             )
             .label("cleared"),
             func.count()
             .filter(
-                (sub.c.investigated_count == 0)
+                (sub.c.investigated_count < sub.c.instance_count)
                 & ~((sub.c.worst_rank >= 2) | (sub.c.kev > 0) | (sub.c.malicious > 0))
             )
             .label("waiting"),
@@ -438,10 +450,13 @@ def query_findings(session: Session, query: FindingQuery) -> Page:
 
     # Counted even when excluded. An operator must be able to see how much has been
     # dismissed without having to go looking for it.
+    # Withdrawn advisories are out of these counts as they are out of the list: a
+    # number on the page that no filter can ever show is not "held back".
     suppressed = session.execute(
         select(func.count(func.distinct(Finding.group_key)))
         .select_from(Finding)
-        .where(_suppressed_exists())
+        .join(Vulnerability, Vulnerability.id == Finding.vulnerability_id)
+        .where(_suppressed_exists(), Vulnerability.withdrawn_at.is_(None))
     ).scalar_one()
 
     # Held back, never hidden: the size of the inherited backlog stays a number on
@@ -451,7 +466,7 @@ def query_findings(session: Session, query: FindingQuery) -> Page:
         .select_from(Finding)
         .join(Asset, Asset.id == Finding.asset_id)
         .join(Vulnerability, Vulnerability.id == Finding.vulnerability_id)
-        .where(~_is_new())
+        .where(~_is_new(), Vulnerability.withdrawn_at.is_(None))
     ).scalar_one()
 
     # Assets carrying findings that nobody has drawn a line under yet. This is what

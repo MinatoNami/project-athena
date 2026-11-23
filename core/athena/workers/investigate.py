@@ -41,6 +41,25 @@ VERDICT_STATE = {
 }
 
 
+def state_for(verdict: str, *, malicious: bool) -> str:
+    """The lifecycle state a verdict moves a finding to.
+
+    Malware is the exception to "not applicable closes it": the score already
+    records that verdict without obeying it (`risk.scoring._malware`), and the state
+    must agree — `false_positive` takes a finding out of every open count, the
+    queue and the CISA lookups. Whether published malware is a false positive is a
+    person's call, so the model's view leaves the finding open for one.
+    """
+    if malicious and verdict == "not_applicable":
+        return "discovered"
+    return VERDICT_STATE.get(verdict, "discovered")
+
+
+def _is_malware(session: Any, finding: Finding) -> bool:
+    vulnerability = session.get(Vulnerability, finding.vulnerability_id)
+    return bool(vulnerability and vulnerability.malicious)
+
+
 @handler("investigate.finding")
 def investigate_finding(payload: dict[str, Any]) -> dict[str, Any]:
     """Investigate one candidate finding.
@@ -291,7 +310,7 @@ def _apply(
         finding.risk_band = str(risk.band)
         finding.confidence = verdict.verdict_confidence
         finding.investigation_id = investigation_id
-        finding.state = VERDICT_STATE.get(verdict.verdict, "discovered")
+        finding.state = state_for(verdict.verdict, malicious=_is_malware(session, finding))
         finding.state_changed_at = datetime.now(UTC)
         finding.last_evaluated_at = datetime.now(UTC)
 

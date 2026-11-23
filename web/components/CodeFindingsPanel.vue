@@ -66,8 +66,12 @@ function ago(at: string) {
                 ? (cov[k].failing ? `last scan failed` : undefined)
                 : `${cov[k].scanned} of ${plural(cov.repositories, 'repository', 'repositories')} checked${cov[k].failing ? ` · ${cov[k].failing} failing` : ''}`"
             />
-            <span v-if="cov?.[k]?.latest_success" class="checked">
-              checked <FreshnessIndicator :at="cov[k].latest_success" />
+            <!-- The stalest repository's last good scan bounds how fresh this list
+                 is. The newest one said "checked 5m ago" beside a repository last
+                 searched three months back. -->
+            <span v-if="cov?.[k]?.oldest_success" class="checked">
+              {{ cov[k].scanned > 1 ? 'oldest check' : 'checked' }}
+              <FreshnessIndicator :at="cov[k].oldest_success" />
             </span>
           </div>
         </template>
@@ -101,6 +105,17 @@ function ago(at: string) {
       repository patrol.
     </StateBlock>
 
+    <!-- No repositories is no denominator: "every repository counted above" would
+         be every one of none. -->
+    <StateBlock
+      v-else-if="data && !data.findings.length && cov && !cov.repositories"
+      kind="never" title="No repositories"
+    >
+      Athena has no repository to search, so nothing has been checked — this is
+      <strong>not a clean result</strong>. Register a repository and it is searched on
+      the next patrol.
+    </StateBlock>
+
     <StateBlock v-else-if="data && !data.findings.length" kind="clean" title="Nothing open">
       Every repository counted above was searched and nothing open was found. Secrets
       in git history are not searched — only the working tree.
@@ -118,7 +133,9 @@ function ago(at: string) {
             <code class="loc"><UntrustedText :text="`${f.path}${f.line ? `:${f.line}` : ''}`" /></code>
           </span>
           <span v-if="!assetId" class="on">{{ f.asset.display_name }}</span>
-          <span class="when" :title="new Date(f.resolved_at || f.first_seen).toLocaleString()">
+          <!-- Stated in UTC: rendered on the server, a local time would be the
+               server's zone with no zone shown. -->
+          <span class="when" :title="utcStamp(f.resolved_at || f.first_seen)">
             {{ f.resolved_at ? `resolved ${ago(f.resolved_at)}` : `since ${ago(f.first_seen)}` }}
           </span>
         </button>

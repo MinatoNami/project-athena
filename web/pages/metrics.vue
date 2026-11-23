@@ -45,16 +45,24 @@ const STATUS: Record<string, 'good' | 'bad' | 'warn' | null> = {
 const measured = computed(() => data.value?.metrics?.filter((m: any) => m.value !== null) ?? [])
 const unanswered = computed(() => data.value?.metrics?.filter((m: any) => m.value === null) ?? [])
 
-/** Open findings per band, with what is overdue said beside each. */
+/**
+ * Open findings per band, with what is overdue said beside each. Not dashed when
+ * late: dashed is the charts' mark for *unknown*, and drew a band with one late
+ * finding in fifty as an empty outline — lighter than a band meeting its target.
+ * "None open" is its own word, as the API's `none_open` is: zero findings is not
+ * compliance with a deadline.
+ */
 const slaRows = computed(() =>
   (data.value?.sla?.bands ?? []).map((b: any) => ({
     label: b.band,
     value: b.open,
     color: severity.value[b.band],
-    dashed: b.status === 'late',
-    hint: b.late ? `${b.late} past ${b.target_days}d` : `within ${b.target_days}d`,
+    hint: b.status === 'none_open'
+      ? 'none open'
+      : b.late ? `${b.late} past ${b.target_days}d` : `within ${b.target_days}d`,
   })),
 )
+const anyOpen = computed(() => slaRows.value.some((r: any) => r.value > 0))
 
 const slaTable = computed(() => ({
   columns: ['Band', 'Target', 'Open', 'Overdue', 'Oldest'],
@@ -141,14 +149,17 @@ const overdue = computed(() =>
               : 'not enough data to say'"
           />
           <p class="desc">{{ m.description }}</p>
+          <!-- How much data there is, and why it is not enough: "not enough" alone
+               does not say whether that is three findings or none. -->
+          <p v-if="m.note" class="note">{{ m.note }}</p>
         </div>
       </div>
 
       <h2 class="section">How long findings have been open</h2>
       <ChartFrame
         title="Open by band"
-        :note="overdue ? `${overdue} past target — drawn dashed` : 'all within target'"
-        :empty="!slaRows.length"
+        :note="overdue ? `${overdue} past target — see each band` : anyOpen ? 'all within target' : undefined"
+        :empty="!anyOpen"
         empty-text="Nothing open."
         :table="slaTable"
       >

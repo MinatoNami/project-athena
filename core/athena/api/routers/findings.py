@@ -60,6 +60,7 @@ def list_findings(
     include_baseline: bool = False,
     q: str | None = None,
     assessed: bool | None = None,
+    fully_assessed: bool | None = None,
     exposure: str | None = None,
     tier: str | None = None,
     has_fix: bool | None = None,
@@ -95,6 +96,7 @@ def list_findings(
             include_baseline=include_baseline,
             q=q,
             assessed=assessed,
+            fully_assessed=fully_assessed,
             # `kev_only` predates the facet set and is kept so existing callers and
             # bookmarks keep working.
             kev=kev_only,
@@ -298,9 +300,17 @@ def _prioritization(
     from athena.risk import deadline, ssvc
 
     vector = vulnerability.cvss_vector
-    computed = cvss.base_score(vector)
+    # The vector the stored score came from. A record publishing v4.0 then v3.1
+    # keeps the v4 one as `cvss_vector`, while the score is computed from the v3.1:
+    # compared with `cvss_vector`, that score read as the advisory's own number.
+    # Rows scored before the column existed fall back to the published vector.
+    scoring = vulnerability.cvss_scoring_vector
+    if scoring is None and vulnerability.cvss_score is not None:
+        if cvss.base_score(vector) == vulnerability.cvss_score:
+            scoring = vector
+    shown = scoring or vector
     try:
-        version = cvss.parse(vector).version
+        version = cvss.parse(shown).version
     except cvss.VectorError:
         version = None
     today = datetime.now(UTC).date()
@@ -346,14 +356,16 @@ def _prioritization(
             "forensic_triage": vulnerability.kev_forensic_triage,
         },
         "cvss": {
-            "vector": vector,
+            "vector": shown,
             "version": version,
             "score": vulnerability.cvss_score,
-            # Whether the stored number is the one this vector computes to. A
-            # mismatch means the advisory published a score of its own, which is
-            # kept — but the page should not imply the vector produced it.
-            "computed_from_vector": computed is not None
-            and vulnerability.cvss_score == computed,
+            # Whether Athena computed the stored number from `vector`. False means
+            # the advisory published a score of its own, which is kept — but the
+            # page should not imply the vector produced it.
+            "computed_from_vector": scoring is not None,
+            # The record's first vector, when it is not the one scored (a v4.0
+            # listed before the v3.1 the score came from).
+            "published_vector": vector if scoring and vector != scoring else None,
             "scored": vulnerability.cvss_score is not None,
         },
         "malicious": vulnerability.malicious,
@@ -499,28 +511,35 @@ def intel_sources(
             Vulnerability.malicious.is_(True), Vulnerability.withdrawn_at.is_(None)
         )
     ).scalar_one()
-    # CISA's own SSVC coverage, over the CVEs that matter here: those with findings.
-    relevant = select(Finding.vulnerability_id).distinct()
-    ssvc_checked, ssvc_published = session.execute(
+    # CISA's own SSVC coverage, over the CVEs that matter here — those with a finding
+    # still open, which is exactly the set the enrichment job looks up. Counting CVEs
+    # whose findings are all resolved set a denominator the job never works towards,
+    # so the figure could not reach its total however long it ran.
+    from athena.intel.feeds import VULNRICHMENT_SKIP_STATES
+
+    relevant = (
+        select(Finding.vulnerability_id)
+        .where(Finding.state.notin_(VULNRICHMENT_SKIP_STATES))
+        .distinct()
+    )
+    relevant_cves, ssvc_checked, ssvc_published = session.execute(
         select(
+            func.count(),
             func.count().filter(Vulnerability.ssvc_checked_at.is_not(None)),
             # Typed rather than IS NOT NULL, so a JSON `null` written by any older
             # path is still read as "none published".
             func.count().filter(func.jsonb_typeof(Vulnerability.ssvc_cisa) == "object"),
-        ).where(Vulnerability.id.in_(relevant), Vulnerability.id.like("CVE-%"))
-    ).one()
-    relevant_cves = session.execute(
-        select(func.count()).select_from(Vulnerability).where(
-            Vulnerability.id.in_(relevant), Vulnerability.id.like("CVE-%")
         )
-    ).scalar_one()
+        .select_from(Vulnerability)
+        .where(Vulnerability.id.in_(relevant), Vulnerability.id.like("CVE-%"))
+    ).one()
     return {
         "sources": sources,
         "advisories": total,
         "kev_advisories": kev,
         "malicious_advisories": malicious,
         "cisa_ssvc": {
-            "cves_with_findings": relevant_cves,
+            "cves_with_open_findings": relevant_cves,
             "checked": ssvc_checked,
             "published": ssvc_published,
         },

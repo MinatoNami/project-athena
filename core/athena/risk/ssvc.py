@@ -201,10 +201,14 @@ def mission_wellbeing(*, tier: str | None, criticality: int | None) -> DecisionP
         return DecisionPoint("high", f"{tier} tier, criticality {criticality}")
     if tier == "unknown" and criticality is None:
         return DecisionPoint("medium", "the asset has no tier or criticality; assumed medium", True)
+    # Half-classified is still partly assumed: with criticality unset, "production"
+    # stands in for a 3 and "development" for a 2, and the page must not present a
+    # value resting on that as one the operator stated.
+    partial = criticality is None or tier == "unknown"
     if tier in ("production", "staging", "unknown") or (criticality or 0) >= 3:
         detail = f"criticality {criticality}" if criticality else "criticality unset"
-        return DecisionPoint("medium", f"{tier} tier, {detail}")
-    return DecisionPoint("low", f"{tier} tier, criticality {criticality or 'unset'}")
+        return DecisionPoint("medium", f"{tier} tier, {detail}", partial)
+    return DecisionPoint("low", f"{tier} tier, criticality {criticality or 'unset'}", partial)
 
 
 def decide(

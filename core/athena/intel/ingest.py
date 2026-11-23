@@ -46,17 +46,29 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
         text("SELECT 1 FROM vulnerability WHERE id = :id"), {"id": advisory.id}
     ).first() is None
 
+    # Computed here rather than by the parser so the content hash is untouched (see
+    # `NormalisedAdvisory.scoring_vector`). A published number wins over a computed
+    # one; a v4-only record computes to None and the risk function falls back to the
+    # published label. The vector is kept only when it produced the number.
+    scoring_vector: str | None = None
+    if advisory.cvss_score is not None:
+        score = advisory.cvss_score
+    else:
+        candidate = advisory.scoring_vector or advisory.cvss_vector
+        score = cvss.base_score(candidate)
+        scoring_vector = candidate if score is not None else None
+
     session.execute(
         text(
             """
             INSERT INTO vulnerability (
                 id, aliases, summary, details, cwe, cvss_vector, cvss_score, severity,
                 published_at, modified_at, withdrawn_at, "references",
-                revision, revised_at, content_hash, malicious
+                revision, revised_at, content_hash, malicious, cvss_scoring_vector
             ) VALUES (
                 :id, :aliases, :summary, :details, :cwe, :vector, :score, :severity,
                 :published, :modified, :withdrawn, CAST(:refs AS jsonb),
-                1, NULL, :hash, :malicious
+                1, NULL, :hash, :malicious, :scoring_vector
             )
             ON CONFLICT (id) DO UPDATE SET
                 aliases     = ARRAY(SELECT DISTINCT unnest(
@@ -69,6 +81,11 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
                 -- word, so it is never overwritten by one.
                 cvss_vector = COALESCE(vulnerability.cvss_vector, EXCLUDED.cvss_vector),
                 cvss_score  = COALESCE(vulnerability.cvss_score, EXCLUDED.cvss_score),
+                -- Follows the score it explains: kept while the score is kept, taken
+                -- with the score when the score is.
+                cvss_scoring_vector = CASE WHEN vulnerability.cvss_score IS NULL
+                                           THEN EXCLUDED.cvss_scoring_vector
+                                           ELSE vulnerability.cvss_scoring_vector END,
                 severity    = COALESCE(vulnerability.severity, EXCLUDED.severity),
                 modified_at = GREATEST(vulnerability.modified_at, EXCLUDED.modified_at),
                 withdrawn_at = COALESCE(EXCLUDED.withdrawn_at, vulnerability.withdrawn_at),
@@ -91,15 +108,8 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
             "details": advisory.details,
             "cwe": advisory.cwe,
             "vector": advisory.cvss_vector,
-            # Computed here rather than by the parser so the content hash is
-            # untouched (see `NormalisedAdvisory.scoring_vector`). A published number
-            # wins over a computed one; a v4-only record computes to None and the
-            # risk function falls back to the published label.
-            "score": (
-                advisory.cvss_score
-                if advisory.cvss_score is not None
-                else cvss.base_score(advisory.scoring_vector or advisory.cvss_vector)
-            ),
+            "score": score,
+            "scoring_vector": scoring_vector,
             "severity": advisory.severity,
             "published": advisory.published_at,
             "modified": advisory.modified_at,
@@ -143,7 +153,12 @@ def is_malicious(advisory: NormalisedAdvisory) -> bool:
     OSV publishes those as `MAL-YYYY-N`, sometimes aliased to a GHSA. The id is the
     signal rather than any wording in the summary, which is attacker-adjacent text.
     """
-    ids = [advisory.id, advisory.source_record, *advisory.aliases]
+    if advisory.malicious:
+        return True
+    # Not `aliases`: the OSV adapter folds `related` ids into them for merging, and
+    # a record that only relates to a MAL- report is not malware. The adapter reads
+    # the record's true aliases and sets `malicious` itself.
+    ids = [advisory.id, advisory.source_record]
     return any(isinstance(i, str) and i.upper().startswith("MAL-") for i in ids)
 
 
