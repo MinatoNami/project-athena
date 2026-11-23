@@ -77,7 +77,7 @@ def investigate_finding(payload: dict[str, Any]) -> dict[str, Any]:
     if (cached := _lookup_cache(context["fingerprint"])) is not None:
         verdict, investigation_id, model = cached
         _apply(finding_id, verdict, model=model, investigation_id=investigation_id,
-               tokens=0, from_cache=True)
+               tokens=0, from_cache=True, advisory_revision=context["advisory_revision"])
         log.info("investigation.cache_hit", finding=finding_id,
                  fingerprint=context["fingerprint"][:12])
         return {"status": "cached", "verdict": verdict.verdict}
@@ -103,10 +103,11 @@ def investigate_finding(payload: dict[str, Any]) -> dict[str, Any]:
     outcome = _apply(
         finding_id, result.verdict, model=result.model,
         investigation_id=investigation_id,
+        advisory_revision=context["advisory_revision"],
         tokens=result.prompt_tokens + result.completion_tokens,
         from_cache=False,
     )
-    return {"status": "investigated", **outcome}
+    return {"status": "discarded" if outcome.get("discarded") else "investigated", **outcome}
 
 
 # ── context ──────────────────────────────────────────────────────────────────
@@ -295,11 +296,30 @@ def _apply(
     investigation_id: Any,
     tokens: int,
     from_cache: bool,
+    advisory_revision: int,
 ) -> dict[str, Any]:
     with session_scope() as session:
-        finding = session.get(Finding, finding_id)
+        # Locked, and re-checked under the lock: the model can take minutes, and in
+        # that time correlation may have closed the finding (`unmatched`), a person
+        # may have moved it on, or the advisory may have been revised. A verdict for
+        # a question that no longer stands is recorded, not applied — and nobody is
+        # notified about it. Unchecked, a late "applicable" turned an `unmatched`
+        # finding back into `confirmed`.
+        finding = session.execute(
+            select(Finding)
+            .where(Finding.id == finding_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).scalar_one_or_none()
         if finding is None:
             return {}
+        vulnerability = session.get(Vulnerability, finding.vulnerability_id)
+        current = vulnerability.revision if vulnerability is not None else None
+        if finding.state != "investigating" or current != advisory_revision:
+            return _discard(
+                session, finding, verdict, model=model,
+                revised=current != advisory_revision, advisory_revision=advisory_revision,
+            )
 
         asset = session.get(Asset, finding.asset_id)
         risk = score(signals_for(session, finding, verdict))
@@ -339,6 +359,43 @@ def _apply(
             "score": risk.value,
             "corrections": len(verdict.corrections),
         }
+
+
+def _discard(
+    session: Any,
+    finding: Finding,
+    verdict: Verdict,
+    *,
+    model: str,
+    revised: bool,
+    advisory_revision: int,
+) -> dict[str, Any]:
+    """A verdict that arrived after its question changed.
+
+    Still `investigating` means only the advisory moved: the finding goes back to
+    `discovered` and is asked again against the current revision. Any other state
+    was set by something with more standing than a stale verdict — correlation
+    closing it, a person — and is left exactly as it is.
+    """
+    reset = finding.state == "investigating"
+    if reset:
+        finding.state = "discovered"
+        finding.state_changed_at = datetime.now(UTC)
+    record(
+        session,
+        actor=f"model:{model}",
+        action="INVESTIGATION_DISCARDED",
+        subject=f"finding:{finding.id}",
+        detail={
+            "verdict": verdict.verdict,
+            "reason": "advisory revised" if revised else f"finding is now {finding.state}",
+            "investigated_revision": advisory_revision,
+            "returned_to_discovered": reset,
+        },
+    )
+    if reset:
+        publish(session, topic="findings", subject_id=str(finding.id))
+    return {"verdict": verdict.verdict, "discarded": True}
 
 
 # Bands that are worth interrupting somebody about. Below this an investigation is
