@@ -511,17 +511,12 @@ def intel_sources(
             Vulnerability.malicious.is_(True), Vulnerability.withdrawn_at.is_(None)
         )
     ).scalar_one()
-    # CISA's own SSVC coverage, over the CVEs that matter here — those with a finding
-    # still open, which is exactly the set the enrichment job looks up. Counting CVEs
-    # whose findings are all resolved set a denominator the job never works towards,
-    # so the figure could not reach its total however long it ran.
-    from athena.intel.feeds import VULNRICHMENT_SKIP_STATES
+    # CISA's own SSVC coverage, over exactly the CVEs the enrichment job looks up —
+    # the same predicate, not a second copy of it. A denominator the job never works
+    # through (resolved findings, withdrawn CVEs) kept the figure below its total
+    # however long the job ran.
+    from athena.intel.enrichment import eligible
 
-    relevant = (
-        select(Finding.vulnerability_id)
-        .where(Finding.state.notin_(VULNRICHMENT_SKIP_STATES))
-        .distinct()
-    )
     relevant_cves, ssvc_checked, ssvc_published = session.execute(
         select(
             func.count(),
@@ -531,7 +526,7 @@ def intel_sources(
             func.count().filter(func.jsonb_typeof(Vulnerability.ssvc_cisa) == "object"),
         )
         .select_from(Vulnerability)
-        .where(Vulnerability.id.in_(relevant), Vulnerability.id.like("CVE-%"))
+        .where(*eligible())
     ).one()
     return {
         "sources": sources,

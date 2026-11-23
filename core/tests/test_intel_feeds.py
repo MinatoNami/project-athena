@@ -149,9 +149,15 @@ def test_ssvc_coverage_counts_exactly_the_cves_the_enrichment_job_looks_up(sessi
     session.flush()
     now = datetime.now(UTC)
     ids = {}
-    for state in ("discovered", "resolved", "false_positive"):
+    for state in ("discovered", "resolved", "false_positive", "withdrawn"):
         vid = f"CVE-2099-{uuid.uuid4().int % 10**9}"
-        session.add(Vulnerability(id=vid, content_hash=f"h{vid}"))
+        session.add(
+            Vulnerability(
+                id=vid,
+                content_hash=f"h{vid}",
+                withdrawn_at=datetime.now(UTC) if state == "withdrawn" else None,
+            )
+        )
         session.flush()
         session.add(
             Finding(
@@ -159,7 +165,7 @@ def test_ssvc_coverage_counts_exactly_the_cves_the_enrichment_job_looks_up(sessi
                 vulnerability_id=vid,
                 asset_id=asset.id,
                 component_id=component.id,
-                state=state,
+                state="discovered" if state == "withdrawn" else state,
                 match_method="purl_exact_range",
                 match_confidence=0.95,
                 advisory_revision=1,
@@ -173,6 +179,7 @@ def test_ssvc_coverage_counts_exactly_the_cves_the_enrichment_job_looks_up(sessi
     due = set(vulnrichment_due(session, limit=100_000))
     assert ids["discovered"] in due
     assert ids["resolved"] not in due and ids["false_positive"] not in due
+    assert ids["withdrawn"] not in due, "a withdrawn CVE with an open finding is not asked about"
     assert coverage() - before == 1, "the denominator is the set the job works through"
 
 

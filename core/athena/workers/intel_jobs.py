@@ -151,37 +151,37 @@ VULNRICHMENT_BATCH = 200
 
 
 def vulnrichment_due(session: Any, *, limit: int) -> list[str]:
-    """CVEs to ask CISA about: an open finding here, and no answer or a stale one.
+    """CVEs to ask CISA about: eligible, and with no answer or a stale one.
 
-    Unchecked first, then known-exploited. Shares its notion of "open" with the
-    coverage figure on /intel/sources (`VULNRICHMENT_SKIP_STATES`).
+    Eligibility is shared with the coverage figure on /intel/sources
+    (`athena.intel.enrichment`); the recheck window is this job's alone. Unchecked
+    first, then known-exploited.
     """
-    from sqlalchemy import bindparam, text
+    from datetime import timedelta
 
-    return [
-        row[0]
-        for row in session.execute(
-            text(
-                """
-                SELECT v.id FROM vulnerability v
-                 WHERE v.id LIKE 'CVE-%'
-                   AND v.withdrawn_at IS NULL
-                   AND (v.ssvc_checked_at IS NULL
-                        OR v.ssvc_checked_at < now() - make_interval(days => :days))
-                   AND EXISTS (SELECT 1 FROM finding f
-                                WHERE f.vulnerability_id = v.id
-                                  AND f.state NOT IN :skip)
-                 ORDER BY v.ssvc_checked_at NULLS FIRST, v.kev DESC, v.id
-                 LIMIT :limit
-                """
-            ).bindparams(bindparam("skip", expanding=True)),
-            {
-                "days": VULNRICHMENT_RECHECK_DAYS,
-                "limit": limit,
-                "skip": list(feeds.VULNRICHMENT_SKIP_STATES),
-            },
-        )
-    ]
+    from sqlalchemy import or_, select
+
+    from athena.intel.enrichment import eligible
+
+    cutoff = datetime.now(UTC) - timedelta(days=VULNRICHMENT_RECHECK_DAYS)
+    return list(
+        session.execute(
+            select(Vulnerability.id)
+            .where(
+                *eligible(),
+                or_(
+                    Vulnerability.ssvc_checked_at.is_(None),
+                    Vulnerability.ssvc_checked_at < cutoff,
+                ),
+            )
+            .order_by(
+                Vulnerability.ssvc_checked_at.asc().nulls_first(),
+                Vulnerability.kev.desc(),
+                Vulnerability.id,
+            )
+            .limit(limit)
+        ).scalars()
+    )
 
 
 @handler("intel.enrich.vulnrichment")
