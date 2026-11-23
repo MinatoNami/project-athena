@@ -66,10 +66,14 @@ def estate(session):
         )
         return c
 
-    def finding(component_, *, verdict=None, malicious=False, state="discovered"):
+    def finding(component_, *, verdict=None, malicious=False, state="discovered", withdrawn=False):
         vid = f"{'MAL' if malicious else 'CVE'}-2099-{uuid.uuid4().hex[:6]}"
         v = Vulnerability(
-            id=vid, content_hash=f"h{vid}", malicious=malicious, aliases=["GHSA-xxxx-yyyy-zzzz"]
+            id=vid,
+            content_hash=f"h{vid}",
+            malicious=malicious,
+            aliases=["GHSA-xxxx-yyyy-zzzz"],
+            withdrawn_at=datetime.now(UTC) if withdrawn else None,
         )
         session.add(v)
         session.flush()
@@ -114,6 +118,12 @@ def estate(session):
         "accepted": finding(component("urllib3", "1.0")),
         "malware": finding(component("colourama", "0.1"), malicious=True),
         "resolved": finding(component("idna", "2.0"), state="resolved"),
+        # A malware report its publisher later retracted. The finding row outlives
+        # the retraction; the export must not.
+        "withdrawn_malware": finding(
+            component("colorama-lookalike", "0.2"), malicious=True, withdrawn=True
+        ),
+        "withdrawn_cve": finding(component("certifi", "1.0"), verdict="applicable", withdrawn=True),
     }
     for key, code, reason, expires in (
         (
@@ -180,6 +190,26 @@ def test_vex_statuses_follow_who_decided(session, estate):
     assert _statement(doc, found["resolved"])["status"] == "fixed"
 
 
+def test_withdrawn_advisories_are_not_exported(session, estate):
+    """A retracted report makes no claim, so the VEX makes none on its behalf —
+    least of all `affected` with compromise guidance for a withdrawn malware record.
+    Neither is it turned into `not_affected`: only a person may assert that."""
+    image, found = estate
+    withdrawn = {
+        found["withdrawn_malware"].vulnerability_id,
+        found["withdrawn_cve"].vulnerability_id,
+    }
+    for doc in (
+        vex_document(session, asset_id=str(image.id)),
+        vex_document(session),
+        vex_document(session, vulnerability_id=found["withdrawn_malware"].vulnerability_id),
+    ):
+        assert not {s["vulnerability"]["name"] for s in doc["statements"]} & withdrawn
+    # The live malware record beside it still leaves as affected.
+    live = _statement(vex_document(session, asset_id=str(image.id)), found["malware"])
+    assert live["status"] == "affected"
+
+
 def test_every_not_affected_carries_a_justification_or_impact_statement(session, estate):
     image, _ = estate
     for s in vex_document(session, asset_id=str(image.id))["statements"]:
@@ -199,10 +229,12 @@ def test_image_products_are_oci_purls_on_the_digest(session, estate):
 
 
 def test_sbom_lists_components_and_admits_a_partial_scan(session, estate):
-    image, _ = estate
+    image, found = estate
     bom = sbom_for(session, image)
     assert bom["bomFormat"] == "CycloneDX" and bom["specVersion"] == "1.6"
-    assert len(bom["components"]) == 7
+    # One component per fixture finding. Inventory, not advisories: a component
+    # whose only advisory was withdrawn is still installed, and still listed.
+    assert len(bom["components"]) == len(found)
     assert all(c["purl"].startswith("pkg:pypi/") for c in bom["components"])
     props = {p["name"]: p["value"] for p in bom["metadata"]["properties"]}
     assert props["athena:scan_status"] == "partial"

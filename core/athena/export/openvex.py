@@ -173,6 +173,13 @@ def vex_document(
         .join(Component, Component.id == Finding.component_id)
         .outerjoin(InvestigationRecord, InvestigationRecord.id == Finding.investigation_id)
         .where(Asset.tombstoned_at.is_(None))
+        # A withdrawn advisory is its publisher retracting it, and the findings
+        # queue already stops ranking one. Exporting it anyway would publish the
+        # retraction's opposite — a withdrawn malware report still carries
+        # `malicious`, so it would leave as `affected`, "treat the asset as
+        # compromised", for other scanners to act on. It is left out, not marked
+        # `not_affected`: that status belongs to a person's decision (rule 2).
+        .where(Vulnerability.withdrawn_at.is_(None))
         .order_by(Finding.vulnerability_id, Asset.display_name, Component.name)
     )
     if asset_id:
