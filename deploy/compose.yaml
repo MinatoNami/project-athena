@@ -101,6 +101,12 @@ services:
       ATHENA_WORK_VOLUME: athena-work
       ATHENA_SANDBOX_NETWORK: athena-nodechannel
       ATHENA_DOCKER_PROXY_HOST: tcp://docker-proxy:2375
+      # Secrets (Gitleaks) and misconfiguration (Trivy) scans of each repository
+      # checkout. Image references default to a pinned version *and* digest in
+      # athena/config.py; override only with a reference you have verified.
+      ATHENA_CODE_SCANS_ENABLED: ${ATHENA_CODE_SCANS_ENABLED:-true}
+      ATHENA_GITLEAKS_IMAGE: ${ATHENA_GITLEAKS_IMAGE:-}
+      ATHENA_TRIVY_IMAGE: ${ATHENA_TRIVY_IMAGE:-}
     # Group that owns the Docker socket. 0 on Docker Desktop, usually the `docker`
     # group's gid on a Linux host — `stat -c %g /var/run/docker.sock` to find it.
     # The worker still runs as an unprivileged user; only socket access is granted.

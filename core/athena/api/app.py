@@ -15,7 +15,9 @@ from athena.api.routers import (
     assets,
     audit,
     auth,
+    code,
     events,
+    exports,
     findings,
     health,
     jobs,
@@ -81,7 +83,7 @@ def create_app() -> FastAPI:
     for r in (
         auth.router, assets.router, findings.router, nodes.router,
         jobs.router, audit.router, events.router, suppressions.router,
-        notifications.router, metrics.router,
+        notifications.router, metrics.router, exports.router, code.router,
     ):
         app.include_router(r, prefix="/api/v1")
 

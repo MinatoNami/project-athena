@@ -34,6 +34,7 @@ from sqlalchemy import Integer, Select, case, func, literal, or_, select, tuple_
 from sqlalchemy.orm import Session
 
 from athena.db.models import Asset, Component, Finding, Suppression, Vulnerability
+from athena.risk import deadline, ssvc
 from athena.suppression import active_predicate
 
 MAX_LIMIT = 200
@@ -91,6 +92,9 @@ class FindingQuery:
     q: str | None = None
     assessed: bool | None = None
     kev: bool = False
+    # OpenSSF malicious-packages records. A facet of its own because the response is
+    # incident handling, not patching, and it is a different person's morning.
+    malicious: bool = False
     exposure: str | None = None
     tier: str | None = None
     has_fix: bool | None = None
@@ -100,7 +104,10 @@ class FindingQuery:
     # assessment. The second half matters — a known-exploited flaw nobody has looked
     # at is the strongest reason to look at something, and a queue defined purely on
     # measured band would rank it nowhere.
-    needs_attention: bool = False
+    # True: the triage queue. False: everything outside it — which is what "cleared"
+    # and "waiting" mean on Today, so the three tabs partition the estate instead of
+    # overlapping (a known-exploited critical was in both "needs you" and "cleared").
+    needs_attention: bool | None = None
 
     sort: str = "risk"
     cursor: str | None = None
@@ -112,11 +119,12 @@ class FindingQuery:
                 self.q,
                 self.assessed is not None,
                 self.kev,
+                self.malicious,
                 self.exposure,
                 self.tier,
                 self.has_fix is not None,
                 self.min_band,
-                self.needs_attention,
+                self.needs_attention is not None,
             )
         )
 
@@ -153,6 +161,12 @@ def _base(query: FindingQuery) -> Select:
         stmt = stmt.where(Finding.state != "no_fix_available")
     if query.asset_id:
         stmt = stmt.where(Finding.asset_id == query.asset_id)
+    # A withdrawn advisory is its publisher saying it was wrong — in May 2026 OSV
+    # withdrew 157 malware reports that an automated detector had raised in error.
+    # Correlation already stops creating findings from one; this stops the ones it
+    # created earlier from going on ranking, which for a malware record meant a
+    # retracted accusation holding the top of the queue at critical.
+    stmt = stmt.where(Vulnerability.withdrawn_at.is_(None))
     if not query.include_suppressed:
         stmt = stmt.where(~_suppressed_exists())
     if not query.include_baseline:
@@ -172,6 +186,7 @@ def _is_new() -> Any:
         Asset.baseline_at.is_(None),
         Finding.first_seen > Asset.baseline_at,
         Vulnerability.kev.is_(True),
+        Vulnerability.malicious.is_(True),
         _BAND_RANK >= 3,
     )
 
@@ -205,6 +220,8 @@ def _facet_predicates(query: FindingQuery) -> list[Any]:
         )
     if query.kev:
         preds.append(Vulnerability.kev.is_(True))
+    if query.malicious:
+        preds.append(Vulnerability.malicious.is_(True))
     if query.exposure:
         preds.append(Asset.exposure == query.exposure)
     if query.tier:
@@ -220,6 +237,8 @@ def _needs_attention_having() -> Any:
     return or_(
         func.max(_BAND_RANK) >= 2,
         func.max(func.cast(Vulnerability.kev, Integer)) > 0,
+        # Malware needs a person whether or not anything has assessed it yet.
+        func.max(func.cast(Vulnerability.malicious, Integer)) > 0,
     )
 
 
@@ -235,6 +254,7 @@ _AGG = (
     func.count(Finding.investigation_id).label("investigated_count"),
     func.count(Finding.fixed_version).label("fixed_count"),
     func.max(func.cast(Vulnerability.kev, Integer)).label("kev"),
+    func.max(func.cast(Vulnerability.malicious, Integer)).label("malicious"),
     func.max(_SEVERITY_RANK).label("severity_rank"),
     func.max(func.coalesce(Vulnerability.cvss_score, 0.0)).label("cvss"),
     func.max(func.coalesce(Vulnerability.epss_score, 0.0)).label("epss"),
@@ -268,8 +288,10 @@ def _grouped(query: FindingQuery, *, with_facets: bool) -> Select:
             grouped = grouped.having(func.count(Finding.fixed_version) > 0)
         elif query.has_fix is False:
             grouped = grouped.having(func.count(Finding.fixed_version) == 0)
-        if query.needs_attention:
+        if query.needs_attention is True:
             grouped = grouped.having(_needs_attention_having())
+        elif query.needs_attention is False:
+            grouped = grouped.having(~_needs_attention_having())
     return grouped
 
 
@@ -293,7 +315,10 @@ def _sort_columns(sub: Any, sort: str) -> list[Any]:
             func.coalesce(func.extract("epoch", sub.c.published_at), 0) * -1,
             sub.c.group_key,
         ]
+    # Malware leads the risk order whatever its assessment: it is a compromise in
+    # progress, and an unassessed one would otherwise rank below assessed lows.
     return [
+        -sub.c.malicious,
         -sub.c.worst_rank,
         -sub.c.kev,
         -sub.c.severity_rank,
@@ -338,15 +363,40 @@ def _facet_counts(session: Session, query: FindingQuery, *, with_facets: bool) -
             func.count().filter(sub.c.investigated_count > 0).label("assessed"),
             func.count().filter(sub.c.investigated_count == 0).label("unassessed"),
             func.count().filter(sub.c.kev > 0).label("kev"),
+            func.count().filter(sub.c.malicious > 0).label("malicious"),
             func.count().filter(sub.c.fixed_count > 0).label("has_fix"),
             func.count().filter(sub.c.fixed_count == 0).label("no_fix"),
             func.count().filter(sub.c.instance_count > 1).label("spread"),
             func.count()
-            .filter((sub.c.worst_rank >= 2) | (sub.c.kev > 0))
+            .filter((sub.c.worst_rank >= 2) | (sub.c.kev > 0) | (sub.c.malicious > 0))
             .label("needs_attention"),
+            # The other two Today tabs, disjoint from the queue and from each other.
+            func.count()
+            .filter(
+                (sub.c.investigated_count > 0)
+                & ~((sub.c.worst_rank >= 2) | (sub.c.kev > 0) | (sub.c.malicious > 0))
+            )
+            .label("cleared"),
+            func.count()
+            .filter(
+                (sub.c.investigated_count == 0)
+                & ~((sub.c.worst_rank >= 2) | (sub.c.kev > 0) | (sub.c.malicious > 0))
+            )
+            .label("waiting"),
             *[
                 func.count().filter(sub.c[f"exposure_{value}"] > 0).label(f"exposure:{value}")
                 for value in ("internet", "internal", "isolated", "unknown")
+            ],
+            # The worst band each group reached, counted across the estate. `-1` is
+            # its own bucket rather than folded into `informational`: a group nothing
+            # has assessed has no band, and charting it as the mildest one would be
+            # the "unknown rendered as clean" this product exists to refuse.
+            *[
+                func.count().filter(sub.c.worst_rank == rank).label(f"band:{name}")
+                for rank, name in (
+                    (4, "critical"), (3, "high"), (2, "medium"),
+                    (1, "low"), (0, "informational"), (-1, "unassessed"),
+                )
             ],
             func.coalesce(func.sum(sub.c.instance_count), 0).label("instances"),
             func.coalesce(func.sum(sub.c.investigated_count), 0).label("assessed_instances"),
@@ -416,9 +466,12 @@ def query_findings(session: Session, query: FindingQuery) -> Page:
     facets = {
         name: {"total": totals.get(name, 0), "matching": matching.get(name, 0)}
         for name in (
-            "assessed", "unassessed", "kev", "has_fix", "no_fix", "spread",
-            "needs_attention", "exposure:internet", "exposure:internal",
+            "assessed", "unassessed", "kev", "malicious", "has_fix", "no_fix", "spread",
+            "needs_attention", "cleared", "waiting",
+            "exposure:internet", "exposure:internal",
             "exposure:isolated", "exposure:unknown",
+            "band:critical", "band:high", "band:medium", "band:low",
+            "band:informational", "band:unassessed",
         )
     }
 
@@ -437,6 +490,20 @@ def query_findings(session: Session, query: FindingQuery) -> Page:
         unbaselined_asset_count=unbaselined,
         facets=facets,
     )
+
+
+def _benchmark_due(finding: Finding, vulnerability: Vulnerability, asset: Asset) -> dict:
+    """The BOD 26-04 benchmark date for one instance, for the list's due column."""
+    if vulnerability.malicious:
+        # Outside the directive's model: malware is removed now, not on a timeline.
+        return {"due": None, "due_on_upgrade": False, "forensic_triage": True}
+    d = deadline.deadline(
+        exposure=asset.exposure, kev=vulnerability.kev,
+        kev_date_added=vulnerability.kev_date_added, vector=vulnerability.cvss_vector,
+        cisa_ssvc=vulnerability.ssvc_cisa, first_seen=finding.first_seen.date(),
+    )
+    return {"due": d.due, "due_on_upgrade": d.days is None,
+            "forensic_triage": d.forensic_triage}
 
 
 def _hydrate(
@@ -488,6 +555,18 @@ def _hydrate(
                 "state": finding.state,
                 "match_method": finding.match_method,
                 "match_confidence": finding.match_confidence,
+                # When the facts this rests on were last read (rule 2: freshness is
+                # always visible). Inherited image scans count, as in coverage.
+                "observed_at": asset.last_inventoried_at,
+                # Computed per instance, like the score: the same flaw is "Act" on a
+                # critical production host and "Track" on a laptop.
+                "ssvc": ssvc.decide(
+                    kev=vulnerability.kev, exploit_public=vulnerability.exploit_public,
+                    vector=vulnerability.cvss_vector, tier=asset.tier,
+                    criticality=asset.criticality, malicious=vulnerability.malicious,
+                    cisa=vulnerability.ssvc_cisa,
+                ).outcome,
+                **_benchmark_due(finding, vulnerability, asset),
             }
         )
 
@@ -502,7 +581,10 @@ def _hydrate(
                 "summary": vulnerability.summary if vulnerability else None,
                 "cvss_score": vulnerability.cvss_score if vulnerability else None,
                 "epss_score": vulnerability.epss_score if vulnerability else None,
+                "epss_percentile": vulnerability.epss_percentile if vulnerability else None,
                 "kev": bool(row.kev),
+                "kev_due_date": vulnerability.kev_due_date if vulnerability else None,
+                "malicious": bool(row.malicious),
                 "kev_ransomware": bool(vulnerability.kev_ransomware) if vulnerability else False,
                 "published_at": row.published_at,
                 "worst_band": band_of.get(row.worst_rank),

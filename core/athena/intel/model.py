@@ -47,6 +47,12 @@ class NormalisedAdvisory:
     # The originating record id (UBUNTU-CVE-…, GHSA-…). Several records converge on
     # one CVE, and each owns its own ranges — this is what keeps them apart.
     source_record: str = ""
+    # The vector the base score is computed from, when the record publishes several
+    # (v3.1 and v4.0 side by side is common). Deliberately outside `content_hash`:
+    # the score is a function of a vector already hashed, and adding a field to the
+    # hash would mark every advisory in the corpus revised on the next poll — which
+    # re-correlates the estate and breaks every suppression's premise at once.
+    scoring_vector: str | None = None
 
 
 # Only fields that could change a verdict. A reworded summary must not re-correlate

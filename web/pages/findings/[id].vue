@@ -12,11 +12,26 @@ const route = useRoute()
 const { data: me } = await useMe()
 if (!me.value) await navigateTo('/login')
 
-const tab = ref<'verdict' | 'fix' | 'risk' | 'evidence' | 'advisory'>('verdict')
+type Tab = 'verdict' | 'priority' | 'fix' | 'risk' | 'evidence' | 'advisory'
+const TAB_IDS: Tab[] = ['verdict', 'priority', 'fix', 'risk', 'evidence', 'advisory']
 
 const { data, pending, error, refresh } = await useAsyncData(`finding-${route.params.id}`, () =>
   api<any>(`findings/${route.params.id}`),
 )
+
+/**
+ * The open tab lives in the URL, so a link to "the fix for this" opens on the fix.
+ * With none given, the case opens where its most useful answer is: malware on Fix
+ * (removal is the whole story), an uninvestigated finding on Exploitability (there
+ * is no verdict to show), everything else on the Verdict.
+ */
+const requested = TAB_IDS.find(t => t === route.query.tab)
+const tab = ref<Tab>(
+  requested
+    ?? (data.value?.vulnerability?.malicious ? 'fix'
+      : data.value?.not_yet_investigated ? 'priority' : 'verdict'),
+)
+watch(tab, t => navigateTo({ query: { ...route.query, tab: t } }, { replace: true }))
 
 useHead({ title: () => data.value?.vulnerability?.id ?? 'Finding' })
 
@@ -39,6 +54,31 @@ async function revoke() {
 }
 
 const inv = computed(() => data.value?.investigation)
+
+const deadlineBadge = computed(() => {
+  const d = data.value?.prioritization?.deadline
+  if (!d) return null
+  const kevDue = data.value?.prioritization?.kev?.due_date
+  const fed = kevDue ? ` CISA's KEV due date for federal agencies is ${kevDue}.` : ''
+  if (d.on_upgrade) {
+    return { text: 'next upgrade · BOD 26-04', bad: false,
+             title: `No calendar deadline under BOD 26-04 for this asset.${fed}` }
+  }
+  return {
+    text: `${dueText(d.due)} · BOD 26-04`,
+    bad: d.days_left != null && d.days_left <= 0,
+    title: `BOD 26-04 deadline ${d.due} (${d.days} days from ${d.clock_start}).${fed}`,
+  }
+})
+const forensic = computed(() =>
+  !!(data.value?.prioritization?.deadline?.forensic_triage
+    || (data.value?.prioritization?.kev?.listed && data.value?.prioritization?.kev?.forensic_triage)),
+)
+/** EPSS as a probability, never shown as a certainty. */
+function epssText(score: number) {
+  if (score >= 0.995) return '>99%'
+  return `${(score * 100).toFixed(score >= 0.1 ? 0 : 1)}%`
+}
 const risk = computed(() => data.value?.risk_explained)
 
 const allSignals = computed(() =>
@@ -72,9 +112,25 @@ const FIX_KIND: Record<string, string> = {
   dependency: 'This is a change to a manifest',
   transitive: 'Something else has to move first',
   no_fix: 'There is nothing to install yet',
+  malicious: 'This is malware: remove it, then respond',
   entitlement: 'The fix is behind a subscription',
   unknown: 'Not enough is recorded to say',
 }
+
+/**
+ * The scoring arithmetic as bars. Weights are small numbers whose *relative* size
+ * is the point — which is precisely what a column of two-decimal figures hides and
+ * a bar shows. The exact values stay one click away in the table view.
+ */
+const riskFactors = computed(() =>
+  Object.entries(risk.value?.factors ?? {})
+    .map(([name, v]) => ({
+      label: pretty(String(name)),
+      value: Math.round(Number(v) * 100) / 100,
+      exact: Number(v).toFixed(2),
+    }))
+    .sort((a, b) => b.value - a.value),
+)
 
 const fix = computed(() => data.value?.remediation ?? null)
 
@@ -93,6 +149,7 @@ async function copyCommand() {
 
 const tabs = [
   { id: 'verdict', label: 'Verdict' },
+  { id: 'priority', label: 'Exploitability' },
   { id: 'fix', label: 'Fix' },
   { id: 'risk', label: 'Why this score' },
   { id: 'evidence', label: 'Raw evidence' },
@@ -131,6 +188,24 @@ const tabs = [
             </span>
             <h1><UntrustedText :text="data.vulnerability.summary || data.vulnerability.id" /></h1>
           </div>
+          <div class="badges">
+            <span v-if="data.vulnerability.malicious" class="tag bad strong caps">malware</span>
+            <SsvcChip v-else :outcome="data.prioritization?.ssvc?.outcome" />
+            <!-- One deadline, worded once. CISA's federal KEV date is a different
+                 deadline and goes in the tooltip, not beside it as a second date. -->
+            <span v-if="deadlineBadge" class="tag" :class="{ bad: deadlineBadge.bad }"
+                  :title="deadlineBadge.title">
+              {{ deadlineBadge.text }}
+            </span>
+            <span v-if="forensic" class="tag bad caps"
+                  title="Establish whether the asset was compromised before the fix, not only that it is patched">
+              forensic triage
+            </span>
+            <span v-if="!data.vulnerability.malicious && data.prioritization?.epss?.scored" class="tag"
+                  title="Probability of exploitation activity in the next 30 days (FIRST EPSS)">
+              EPSS {{ epssText(data.prioritization.epss.score) }}
+            </span>
+          </div>
           <div class="subline">
             <code>{{ data.component.ecosystem }}:{{ data.component.name }}
               {{ data.component.version }}</code>
@@ -138,9 +213,12 @@ const tabs = [
             <span>on <NuxtLink :to="`/assets/${data.asset.id}`">
               <strong>{{ data.asset.display_name }}</strong></NuxtLink></span>
             <span class="sep">·</span>
-            <span>{{ data.asset.tier }}, {{ data.asset.exposure }}</span>
+            <span v-if="data.asset.tier === 'unknown' && data.asset.exposure === 'unknown'"
+                  class="gap">not classified</span>
+            <span v-else>{{ data.asset.tier }}, {{ data.asset.exposure }}</span>
             <span class="sep">·</span>
-            <span>
+            <span v-if="data.vulnerability.malicious" class="gap">nothing to upgrade to — remove it</span>
+            <span v-else>
               fixed in
               <code v-if="data.fixed_version">{{ data.fixed_version }}</code>
               <span v-else class="gap">nothing published yet</span>
@@ -169,7 +247,16 @@ const tabs = [
            turn" is not the same as "the floor will never select it" — a page that
            says the first while the second is true is telling the operator something
            is coming that is not. -->
-      <div v-if="data.deferred" class="banner">
+      <!-- Malware first and loudest: the generic "not investigated" banner below would
+           read as a routine version match, which is the opposite of the truth. -->
+      <div v-if="data.vulnerability.malicious" class="banner bad">
+        <strong>Malware installed on {{ data.asset.display_name }}.</strong> <code>{{ data.component.name }} {{ data.component.version }}</code> is a published
+        malicious package, not a flawed release. Remove it and treat the asset — and
+        anything that installed it — as compromised: rotate every credential it could
+        read. The steps are under <strong>Fix</strong>.
+      </div>
+
+      <div v-else-if="data.deferred" class="banner">
         <strong>This has not been investigated, and will not be at the current
           setting.</strong>
         <UntrustedText :text="data.deferred.reason" />
@@ -185,6 +272,14 @@ const tabs = [
         It is a version match against a published advisory. Nothing has checked whether
         the component runs here, is reachable, or is exploitable — so it has no score,
         rather than a low one.
+      </div>
+
+      <div v-if="data.vulnerability.withdrawn_at" class="banner warn">
+        <strong>The publisher withdrew this advisory on
+          {{ new Date(data.vulnerability.withdrawn_at).toLocaleDateString() }}.</strong>
+        It no longer ranks in any list. It is kept here, with its history, because a
+        withdrawal is the publisher's statement — confirm it applies to you before
+        closing anything.
       </div>
 
       <div v-if="data.triage?.disposition === 'deprioritise'" class="banner">
@@ -226,9 +321,10 @@ const tabs = [
         describes the current function.
       </div>
 
-      <div class="tabs">
+      <div class="tabs" role="tablist" aria-label="Case file">
         <button
           v-for="t in tabs" :key="t.id" class="tab" :class="{ on: tab === t.id }"
+          role="tab" :aria-selected="tab === t.id"
           @click="tab = t.id as any"
         >{{ t.label }}</button>
       </div>
@@ -249,7 +345,35 @@ const tabs = [
                   inv.verdict === 'applicable' ? 'Applies to this asset'
                   : inv.verdict === 'not_applicable' ? 'Does not apply here'
                   : 'Could not be settled' }}</span>
-                <span class="conf">confidence {{ (inv.confidence * 100).toFixed(0) }}%</span>
+              </div>
+              <div class="vstats">
+                <StatTile
+                  label="Confidence"
+                  :value="`${(inv.confidence * 100).toFixed(0)}%`"
+                  :progress="inv.confidence"
+                  :status="inv.confidence < 0.5 ? 'warn' : 'good'"
+                  :target="inv.confidence < 0.5 ? 'inconclusive' : undefined"
+                />
+                <StatTile
+                  label="Signals settled"
+                  :value="settled.length"
+                  :of="`of ${allSignals.length} checked`"
+                  :progress="allSignals.length ? settled.length / allSignals.length : null"
+                />
+                <StatTile
+                  v-if="unsettled.length"
+                  label="Left open"
+                  :value="unsettled.length"
+                  of="could not be determined"
+                  status="warn"
+                />
+                <StatTile
+                  v-if="inv.corrections?.length"
+                  label="Self-corrections"
+                  :value="inv.corrections.length"
+                  of="model overruled by code"
+                  status="warn"
+                />
               </div>
               <p class="rationale"><UntrustedText :text="inv.rationale || ''" /></p>
             </div>
@@ -332,6 +456,11 @@ const tabs = [
         </aside>
       </div>
 
+      <!-- ══ Exploitability ══ -->
+      <div v-else-if="tab === 'priority'" class="wide">
+        <PriorityPanel :p="data.prioritization" />
+      </div>
+
       <!-- ══ Why this score ══ -->
       <!-- ══ Fix ══ -->
       <div v-else-if="tab === 'fix'" class="narrow">
@@ -352,13 +481,31 @@ const tabs = [
               <code class="cmd">{{ fix.command }}</code>
               <button class="btn" @click="copyCommand">{{ copied ? 'Copied' : 'Copy' }}</button>
             </div>
-            <p v-else-if="fix.actionable" class="fine">
+            <p v-else-if="fix.actionable && fix.class !== 'malicious'" class="fine">
               This ecosystem has no single command worth pretending to; the change is
               made by editing the manifest.
             </p>
 
             <div class="kv"><span>Change it at</span>
               <span class="muted"><UntrustedText :text="fix.change_at" /></span></div>
+          </div>
+
+          <!-- Malware is an incident, so its fix is a response checklist rather than a
+               command. Nothing here is executed by Athena. -->
+          <div v-if="fix.class === 'malicious'" class="card">
+            <div class="lbl">Respond, in this order</div>
+            <ol class="respond">
+              <li><strong>Remove it</strong> from the lockfile or manifest, the image, and any
+                global install — wherever the inventory shows it.</li>
+              <li><strong>Rotate every credential</strong> the installing user could read:
+                environment variables, <code>~/.npmrc</code> / <code>~/.pypirc</code>, cloud
+                credentials, CI secrets.</li>
+              <li><strong>Look for use</strong> of those credentials, and for outbound
+                connections, since this was first seen
+                ({{ new Date(data.first_seen).toLocaleDateString() }}).</li>
+              <li><strong>Rebuild</strong> the asset from a known-good state rather than
+                cleaning it in place.</li>
+            </ol>
           </div>
 
           <!-- Why it cannot be done now sits on its own, above the unknowns: it is a
@@ -390,18 +537,16 @@ const tabs = [
           Nothing has been scored for this finding yet.
         </StateBlock>
         <template v-else>
-          <div class="card">
-            <div class="lbl">How {{ risk.score }} was reached</div>
-            <table class="sig">
-              <thead><tr><th>Factor</th><th>Weight</th></tr></thead>
-              <tbody>
-                <tr v-for="(v, k) in risk.factors" :key="k">
-                  <td class="sname">{{ pretty(String(k)) }}</td>
-                  <td class="mono tnum sval">{{ Number(v).toFixed(2) }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          <ChartFrame
+            :title="`How ${risk.score} was reached`"
+            note="weight each factor contributed"
+            :table="{
+              columns: ['Factor', 'Weight'],
+              rows: riskFactors.map(f => [f.label, f.exact]),
+            }"
+          >
+            <ChartBars :rows="riskFactors" summary="Risk score contribution by factor" />
+          </ChartFrame>
           <div v-if="risk.overrides?.length" class="card">
             <div class="lbl">Overrides applied, in order</div>
             <ol class="overrides">
@@ -510,6 +655,9 @@ const tabs = [
   color: var(--ink-2); margin-bottom: .8rem;
 }
 .banner.warn { border-left-color: var(--warn); }
+.banner.bad { border-left-color: var(--bad); border-left-width: 4px; }
+.respond { margin: .5rem 0 0; padding-left: 1.2rem; font-size: var(--fs-sm); line-height: 1.6; color: var(--ink-2); }
+.respond strong { color: var(--ink); }
 .banner strong { color: var(--ink); }
 
 .tabs { display: flex; gap: 1.3rem; border-bottom: 1px solid var(--rule); margin-bottom: 1rem; }
@@ -530,6 +678,7 @@ const tabs = [
         padding: .85rem 1rem; }
 .card.overruled { border-left: 3px solid var(--warn); }
 .lbl.warn { color: var(--warn-ink); }
+.vstats { display: flex; flex-wrap: wrap; gap: 1.6rem; margin: .6rem 0 .2rem; }
 .verdicthead { display: flex; align-items: baseline; gap: .65rem; margin-bottom: .45rem; flex-wrap: wrap; }
 .verdict { font-size: .95rem; font-weight: 640; }
 .conf { font-size: .76rem; color: var(--ink-muted); }
@@ -575,7 +724,7 @@ const tabs = [
   font-size: .66rem; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-muted);
   border: 1px dashed var(--rule); border-radius: 4px; padding: .15rem .38rem; white-space: nowrap;
 }
-.kevflag { background: var(--sev-critical); color: var(--sev-on-dark);
+.kevflag { border: 1px solid var(--bad); color: var(--ink); font-weight: 600;
            padding: 0 .22rem; border-radius: 3px; margin-left: .22rem; }
 
 @media (max-width: 1080px) {
@@ -583,4 +732,6 @@ const tabs = [
   .side { width: 100%; flex-direction: row; flex-wrap: wrap; }
   .side .card { flex: 1 1 240px; }
 }
+.badges { display: flex; flex-wrap: wrap; gap: .35rem; margin: .45rem 0 .1rem; }
+.wide { max-width: 1100px; }
 </style>

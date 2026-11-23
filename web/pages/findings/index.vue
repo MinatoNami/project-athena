@@ -41,6 +41,7 @@ const FACET_PARAM: Record<string, string> = {
   assessed: 'assessed=true',
   unassessed: 'assessed=false',
   kev: 'kev_only=true',
+  malicious: 'malicious=true',
   has_fix: 'has_fix=true',
   no_fix: 'has_fix=false',
   'exposure:internet': 'exposure=internet',
@@ -88,6 +89,45 @@ async function loadMore() {
   }
 }
 
+const exportingVex = ref(false)
+const exportNote = ref<string | null>(null)
+async function exportVex() {
+  exportingVex.value = true
+  exportNote.value = null
+  try {
+    await downloadJson('export/openvex', 'athena.openvex.json')
+  } catch (e: any) {
+    exportNote.value = e?.data?.detail || 'The VEX document could not be produced.'
+  } finally {
+    exportingVex.value = false
+  }
+}
+
+/** The benchmark date, in words relative to today. */
+function dueLabel(i: any) {
+  if (i.due_on_upgrade) return 'next upgrade'
+  return dueText(i.due)
+}
+
+/** The group's most urgent SSVC outcome and soonest deadline, for the collapsed row:
+    a reader scanning the list should not have to open every row to find the
+    overdue one. Malware is left out of both — it is removed now, not scheduled. */
+const SSVC_RANK: Record<string, number> = { track: 0, 'track*': 1, attend: 2, act: 3 }
+function worstSsvc(g: any): string | null {
+  if (g.malicious) return null
+  let best: string | null = null
+  for (const i of g.instances ?? []) {
+    if (i.ssvc && (best === null || (SSVC_RANK[i.ssvc] ?? -1) > (SSVC_RANK[best] ?? -1))) best = i.ssvc
+  }
+  return best
+}
+function earliestDue(g: any): any | null {
+  if (g.malicious) return null
+  const dated = (g.instances ?? []).filter((i: any) => i.due)
+  if (dated.length) return dated.reduce((a: any, b: any) => (a.due <= b.due ? a : b))
+  return (g.instances ?? []).find((i: any) => i.due_on_upgrade) ?? null
+}
+
 async function refreshIntel() {
   refreshing.value = true
   try {
@@ -116,6 +156,7 @@ const facetGroups = computed(() => [
     label: 'Exploitation',
     options: [
       { id: 'kev', label: 'Known-exploited' },
+      { id: 'malicious', label: 'Malicious package' },
       { id: 'exposure:internet', label: 'Internet-facing' },
     ],
   },
@@ -148,6 +189,28 @@ function clearAll() {
   query.value = ''
   debounced.value = ''
 }
+
+const { severity } = useChartTheme()
+
+/**
+ * The shape of what the current filters actually select.
+ *
+ * Read from `matching` rather than from the loaded rows: the list is paged, so
+ * counting what is on screen would draw the first fifty and call it the estate.
+ * Unassessed groups have no band at all and are stated in the caption instead of
+ * being folded into the mildest one.
+ */
+const bands = computed(() =>
+  (['critical', 'high', 'medium', 'low', 'informational'] as const)
+    .map(name => ({
+      label: name,
+      value: facetCount(`band:${name}`).matching,
+      color: severity.value[name],
+    }))
+    .filter(r => r.value > 0),
+)
+
+const unbanded = computed(() => facetCount('band:unassessed').matching)
 
 function ageLabel(seconds: number | null) {
   if (seconds === null) return 'never'
@@ -184,19 +247,67 @@ function instanceLines(g: any) {
         </p>
       </div>
       <div class="actions">
+        <button class="btn" :disabled="exportingVex" @click="exportVex"
+                title="OpenVEX for every finding: not_affected only where a person decided it">
+          {{ exportingVex ? 'Exporting…' : 'Export VEX' }}
+        </button>
         <button class="btn" :disabled="refreshing" @click="refreshIntel">
           {{ refreshing ? 'Queued…' : 'Refresh intelligence' }}
         </button>
       </div>
     </div>
 
-    <!-- The two populations, stated once and compactly rather than as a wall of text. -->
-    <div v-if="data" class="mix">
-      <strong>{{ (data.assessed_count ?? 0).toLocaleString() }}</strong> of
-      <strong>{{ (data.instance_count ?? 0).toLocaleString() }}</strong> findings have been
-      investigated on the asset that carries them. The rest are version matches only —
-      nothing has checked whether they run, are reachable, or are exploitable here.
+    <p v-if="exportNote" class="err">{{ exportNote }}</p>
+
+    <!-- The two populations, as figures rather than a paragraph. The caveat stays:
+         an un-investigated finding is a version match, not a confirmed one. -->
+    <div v-if="data" class="statstrip">
+      <StatTile
+        label="Investigated"
+        :value="(data.assessed_count ?? 0).toLocaleString()"
+        :of="`of ${(data.instance_count ?? 0).toLocaleString()} findings`"
+        :progress="data.instance_count ? data.assessed_count / data.instance_count : null"
+        hint="the rest are version matches only"
+      />
+      <StatTile
+        label="Known-exploited"
+        :value="facetCount('kev').matching"
+        :of="`of ${facetCount('kev').total} in the estate`"
+        :status="facetCount('kev').matching ? 'bad' : null"
+      />
+      <StatTile
+        v-if="facetCount('malicious').total"
+        label="Malicious packages"
+        :value="facetCount('malicious').matching"
+        :of="`of ${facetCount('malicious').total} in the estate`"
+        status="bad"
+      />
+      <StatTile
+        label="No fix published"
+        :value="facetCount('no_fix').matching"
+        of="clock has not started"
+      />
+      <p class="caveat">
+        A finding nobody has investigated is a version match — nothing has checked
+        whether it runs, is reachable, or is exploitable here.
+      </p>
     </div>
+
+    <ChartFrame
+      v-if="data"
+      title="Worst band reached"
+      :note="unbanded
+        ? `${unbanded.toLocaleString()} more match but have no band — nothing has assessed them`
+        : 'across everything the current filters select'"
+      :empty="!bands.length"
+      :empty-text="unbanded
+        ? `All ${unbanded.toLocaleString()} matching groups are unassessed, so none has a band yet.`
+        : 'Nothing matches the current filters.'"
+      :table="{ columns: ['Band', 'Groups'], rows: bands.map(b => [b.label, b.value]) }"
+      class="distribution"
+    >
+      <ChartBars :rows="bands" unit="groups" summary="Matching finding groups by worst band" />
+    </ChartFrame>
 
     <div v-if="intel && !intel.sources.length" class="mix warn">
       <strong>No intelligence has been fetched.</strong>
@@ -270,9 +381,9 @@ function instanceLines(g: any) {
               : `of ${(data?.group_count ?? 0).toLocaleString()}` }}
           </span>
           <div class="seg">
-            <button :class="{ on: sort === 'risk' }" @click="sort = 'risk'">Risk</button>
-            <button :class="{ on: sort === 'spread' }" @click="sort = 'spread'">Spread</button>
-            <button :class="{ on: sort === 'recent' }" @click="sort = 'recent'">Newest</button>
+            <button :class="{ on: sort === 'risk' }" :aria-pressed="sort === 'risk'" @click="sort = 'risk'">Risk</button>
+            <button :class="{ on: sort === 'spread' }" :aria-pressed="sort === 'spread'" @click="sort = 'spread'">Spread</button>
+            <button :class="{ on: sort === 'recent' }" :aria-pressed="sort === 'recent'" @click="sort = 'recent'">Newest</button>
           </div>
         </div>
 
@@ -304,16 +415,27 @@ function instanceLines(g: any) {
         >
           <div
             class="grow" role="button" tabindex="0"
+            :aria-expanded="expanded === g.group_key"
             @click="expanded = expanded === g.group_key ? null : g.group_key"
-            @keydown.enter="expanded = expanded === g.group_key ? null : g.group_key"
+            @keydown.enter.prevent="expanded = expanded === g.group_key ? null : g.group_key"
+            @keydown.space.prevent="expanded = expanded === g.group_key ? null : g.group_key"
           >
             <SeverityChip v-if="g.worst_band" :severity="g.worst_band" :kev="g.kev" />
             <span v-else class="unassessed" title="Version match only — not investigated">
               unassessed
               <span v-if="g.kev" class="kevflag">KEV</span>
             </span>
-            <code class="cve">{{ g.vulnerability_id }}</code>
-            <span class="summary">{{ g.summary || '—' }}</span>
+            <!-- One grid cell: the row is a fixed five-column grid, and a sixth child
+                 would push every later cell one column over. -->
+            <span class="idcell">
+              <code class="cve">{{ g.vulnerability_id }}</code>
+              <span v-if="g.malicious" class="tag bad strong caps">malware</span>
+            </span>
+            <span class="summary"><UntrustedText :text="g.summary || '—'" /></span>
+            <span class="gssvc"><SsvcChip :outcome="worstSsvc(g)" compact /></span>
+            <span
+              class="gdue" :class="{ overdue: (dueLabel(earliestDue(g) ?? {}) ?? '').startsWith('overdue') }"
+            >{{ earliestDue(g) ? dueLabel(earliestDue(g)) : '' }}</span>
             <span class="spread">
               {{ g.instance_count }} {{ g.instance_count === 1 ? 'asset' : 'assets' }}
               <template v-if="g.investigated_count">· {{ g.investigated_count }} assessed</template>
@@ -327,6 +449,10 @@ function instanceLines(g: any) {
               <span v-if="g.epss_score != null">EPSS {{ (g.epss_score * 100).toFixed(1) }}%</span>
               <span v-else class="gap">EPSS not published — unrated, not harmless</span>
               <span v-if="g.kev_ransomware" class="bad">used in ransomware campaigns</span>
+              <span v-if="g.epss_percentile != null">
+                {{ (g.epss_percentile * 100).toFixed(0) }}th EPSS percentile
+              </span>
+              <span v-if="g.kev_due_date">CISA due {{ g.kev_due_date }}</span>
               <span v-if="g.published_at">
                 published {{ new Date(g.published_at).toLocaleDateString() }}
               </span>
@@ -334,7 +460,11 @@ function instanceLines(g: any) {
 
             <table>
               <thead>
-                <tr><th>Asset</th><th>Component</th><th>Fixed in</th><th>Assessment</th></tr>
+                <tr>
+                  <th>Asset</th><th>Component</th><th>Fixed in</th><th>Assessment</th>
+                  <th title="CISA SSVC outcome for this asset">SSVC</th>
+                  <th title="CISA BOD 26-04 deadline, as a benchmark">Due</th>
+                </tr>
               </thead>
               <tbody>
                 <tr v-for="line in instanceLines(g)" :key="line.key">
@@ -365,6 +495,12 @@ function instanceLines(g: any) {
                       <span class="muted">not investigated</span>
                     </template>
                   </td>
+                  <td><SsvcChip v-if="!g.malicious" :outcome="line.first.ssvc" compact /></td>
+                  <td class="due" :class="{ overdue: dueLabel(line.first)?.startsWith('overdue') }">
+                    {{ dueLabel(line.first) ?? '—' }}
+                    <span v-if="line.first.forensic_triage" class="tag bad caps"
+                          title="Check for prior compromise, not only the patch">+ triage</span>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -386,6 +522,18 @@ function instanceLines(g: any) {
 </template>
 
 <style scoped>
+.idcell { display: flex; flex-direction: column; align-items: flex-start; gap: .15rem; min-width: 0; }
+.due { white-space: nowrap; font-size: .76rem; color: var(--ink-2); }
+/* Not `.summary`: that is the row's summary text, and sharing the name drew a
+   bordered box around every row's summary and hid this strip below 1000px. */
+.statstrip {
+  display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: flex-start;
+  border: 1px solid var(--rule); border-radius: 9px; background: var(--surface);
+  padding: .72rem .95rem; margin-bottom: .7rem;
+}
+.caveat { margin: 0 0 0 auto; max-width: 20rem; font-size: .71rem; line-height: 1.45;
+          color: var(--ink-muted); }
+.distribution { margin-bottom: .9rem; }
 .mix {
   border: 1px solid var(--rule); border-left: 3px solid var(--rule);
   border-radius: 7px; background: var(--surface); padding: .6rem .8rem;
@@ -417,7 +565,7 @@ function instanceLines(g: any) {
 .facet.on .box { background: var(--ink); border-color: var(--ink); color: var(--surface); }
 .fname { flex-grow: 1; }
 .fn { font-size: .7rem; color: var(--ink-muted); }
-.denom { opacity: .6; }
+.denom { color: var(--ink-muted); font-weight: 400; }
 .more { padding: .7rem .85rem; border-top: 1px solid var(--rule);
         display: flex; align-items: center; gap: .8rem; }
 .moremeta { font-size: .74rem; color: var(--ink-muted); }
@@ -444,7 +592,7 @@ function instanceLines(g: any) {
 .group { border-top: 1px solid var(--rule); }
 .group:first-of-type { border-top: 0; }
 .grow {
-  display: grid; grid-template-columns: 6.6rem 8.6rem 1fr 10rem 1rem;
+  display: grid; grid-template-columns: 6.6rem 8.6rem 1fr 4.6rem 6.4rem 9rem 1rem;
   gap: .7rem; align-items: center; padding: .55rem .85rem; cursor: pointer;
 }
 .grow:hover { background: var(--plane); }
@@ -469,13 +617,32 @@ function instanceLines(g: any) {
   border: 1px dashed var(--rule); border-radius: 4px; padding: .15rem .38rem;
   white-space: nowrap; justify-self: start;
 }
-.kevflag { background: var(--sev-critical); color: var(--sev-on-dark);
+.kevflag { border: 1px solid var(--bad); color: var(--ink); font-weight: 600;
            padding: 0 .22rem; border-radius: 3px; margin-left: .22rem; }
+.gdue { font-size: var(--fs-xs); color: var(--ink-2); white-space: nowrap; }
+.gdue.overdue, .due.overdue { color: var(--ink); font-weight: 600;
+  text-decoration: underline; text-decoration-color: var(--bad); text-decoration-thickness: 2px;
+  text-underline-offset: 3px; }
 
+/* At 1024 the summary column measured 27px wide — present, but unreadable. Below
+   1180 it takes a line of its own under the id instead of being squeezed or hidden:
+   the summary is what tells a reader whether to open the row at all. */
+@media (max-width: 1180px) {
+  .grow {
+    grid-template-columns: 6.6rem 1fr auto auto;
+    grid-template-areas: "band id ssvc chev" "band sum due chev";
+    row-gap: .2rem;
+  }
+  .gssvc { grid-area: ssvc; justify-self: end; }
+  .gdue { grid-area: due; justify-self: end; }
+  .grow > :first-child { grid-area: band; align-self: start; }
+  .idcell { grid-area: id; flex-direction: row; align-items: center; gap: .4rem; }
+  .summary { grid-area: sum; white-space: normal; color: var(--ink-2); }
+  .spread { display: none; }
+  .chev { grid-area: chev; }
+}
 @media (max-width: 1000px) {
   .cols { flex-direction: column; }
   .facets { width: 100%; flex-direction: row; flex-wrap: wrap; gap: 1.2rem; }
-  .grow { grid-template-columns: 6.6rem 1fr 1rem; }
-  .summary, .spread { display: none; }
 }
 </style>

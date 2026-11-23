@@ -25,22 +25,43 @@ const { data: intel } = await useAsyncData('shell-intel', () =>
   api<any>('intel/sources').catch(() => null),
 )
 
-const connected = ref(true)
-const eventsUrl = apiUrl('events?topics=findings,jobs')
-onMounted(() => {
-  const source = new EventSource(eventsUrl)
-  source.onopen = () => (connected.value = true)
-  source.onerror = () => (connected.value = false)
-  onBeforeUnmount(() => source.close())
-})
+// The tab's one shared event stream (see useEvents): the shell reports on it rather
+// than opening a second connection of its own.
+const connected = useEventStatus()
 
 const items = computed(() => [
   { to: '/', label: 'Today', glyph: 'today' },
   { to: '/findings', label: 'Findings', glyph: 'findings', count: nav.value?.findings?.group_count },
   { to: '/assets', label: 'Assets', glyph: 'assets', count: nav.value?.coverage?.assets_total },
+  { to: '/code', label: 'Secrets & config', glyph: 'code' },
+  { to: '/intel', label: 'Intelligence', glyph: 'intel' },
   { to: '/metrics', label: 'Metrics', glyph: 'metrics' },
   { to: '/activity', label: 'Activity', glyph: 'activity' },
 ])
+
+// ⌘K / Ctrl+K from anywhere. "/" too, unless the reader is typing into a field —
+// stealing a keystroke from a reason someone is writing would be worse than no
+// shortcut at all.
+const paletteOpen = ref(false)
+const isMac = ref(true)
+onMounted(() => {
+  isMac.value = /Mac|iPhone|iPad/.test(navigator.platform)
+  const onKey = (e: KeyboardEvent) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault()
+      paletteOpen.value = !paletteOpen.value
+      return
+    }
+    const t = e.target as HTMLElement | null
+    const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
+    if (e.key === '/' && !typing && !paletteOpen.value) {
+      e.preventDefault()
+      paletteOpen.value = true
+    }
+  }
+  window.addEventListener('keydown', onKey)
+  onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
+})
 
 function isActive(to: string) {
   return to === '/' ? route.path === '/' : route.path.startsWith(to)
@@ -63,8 +84,14 @@ const intelLabel = computed(() => {
   return `${Math.round(age / 86400)}d old`
 })
 
-/** Ubuntu ships advisories daily; beyond two days the view is stale, not reassuring. */
-const intelStale = computed(() => intelAge.value === null || intelAge.value > 172800)
+/** Staleness is the API's call, per source, so the rail and /intel can never disagree
+    (they used 48h and 6h respectively, and the API a third rule). */
+const intelStale = computed(() => (intel.value ? !!intel.value.any_source_stale : true))
+
+/** Three states, not two: a check that could not be run is not a broken chain. */
+const audit = computed<'intact' | 'broken' | 'unknown'>(() =>
+  nav.value?.audit == null ? 'unknown' : nav.value.audit.intact ? 'intact' : 'broken',
+)
 
 async function logout() {
   await api('auth/logout', { method: 'POST' })
@@ -74,7 +101,8 @@ async function logout() {
 
 <template>
   <div class="shell">
-    <nav class="rail">
+    <a class="skip" href="#main">Skip to content</a>
+    <nav class="rail" aria-label="Primary">
       <NuxtLink to="/" class="brand">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -84,9 +112,17 @@ async function logout() {
         <span>{{ $config.public.appName }}</span>
       </NuxtLink>
 
+      <button class="search" aria-label="Search and commands" aria-keyshortcuts="Meta+K Control+K"
+              @click="paletteOpen = true">
+        <NavGlyph name="search" />
+        <span class="navlabel">Search</span>
+        <kbd>{{ isMac ? '⌘' : 'Ctrl' }} K</kbd>
+      </button>
+
       <ul class="navlist">
         <li v-for="item in items" :key="item.to">
-          <NuxtLink :to="item.to" class="navitem" :class="{ on: isActive(item.to) }">
+          <NuxtLink :to="item.to" class="navitem" :class="{ on: isActive(item.to) }"
+                    :aria-current="isActive(item.to) ? 'page' : undefined">
             <NavGlyph :name="item.glyph" />
             <span class="navlabel">{{ item.label }}</span>
             <span v-if="item.count != null" class="navcount">{{ item.count.toLocaleString() }}</span>
@@ -97,15 +133,15 @@ async function logout() {
       <div class="railfoot">
         <NotificationBell />
 
-        <NuxtLink to="/findings" class="status" :class="{ warn: intelStale }">
+        <NuxtLink to="/intel" class="status intel" :class="{ warn: intelStale }">
           <span class="dot" :class="intelStale ? 'down' : 'live'" />
           Intelligence {{ intelLabel }}
         </NuxtLink>
-        <div class="status">
-          <span class="dot" :class="nav?.audit?.intact ? 'live' : 'down'" />
-          Audit chain {{ nav?.audit?.intact ? 'intact' : 'BROKEN' }}
-        </div>
-        <div class="status">
+        <NuxtLink to="/activity" class="status audit" :class="audit">
+          <span class="dot" :class="audit === 'intact' ? 'live' : audit === 'broken' ? 'broken' : 'idle hatch'" />
+          Audit chain {{ audit === 'intact' ? 'intact' : audit === 'broken' ? 'BROKEN' : 'not verified' }}
+        </NuxtLink>
+        <div class="status conn" :class="{ warn: !connected }" role="status">
           <span class="dot" :class="connected ? 'live' : 'down'" />
           {{ connected ? 'Live' : 'Reconnecting' }}
         </div>
@@ -123,7 +159,8 @@ async function logout() {
       </div>
     </nav>
 
-    <main class="main"><slot /></main>
+    <main id="main" class="main" tabindex="-1"><slot /></main>
+    <CommandPalette v-model:open="paletteOpen" />
   </div>
 </template>
 
@@ -138,6 +175,14 @@ async function logout() {
   display: flex; align-items: center; gap: .55rem; padding: 0 .5rem;
   font-weight: 640; letter-spacing: -0.01em; color: var(--ink); text-decoration: none;
 }
+.search {
+  display: flex; align-items: center; gap: .6rem; padding: .4rem .62rem; margin: -.6rem 0 -.4rem;
+  border: 1px solid var(--rule); border-radius: 7px; background: var(--plane); color: var(--ink-muted);
+  font-size: .82rem; font-weight: 400; cursor: pointer; text-align: left;
+}
+.search:hover { color: var(--ink); border-color: var(--ink-muted); }
+.search kbd { font: 600 .62rem ui-monospace, SFMono-Regular, Menlo, monospace; border: 1px solid var(--rule);
+              border-radius: 4px; padding: 0 .25rem; background: var(--surface); }
 .navlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .navitem {
   display: flex; align-items: center; gap: .6rem; padding: .44rem .62rem;
@@ -174,6 +219,10 @@ async function logout() {
 }
 .signout:hover { color: var(--ink); background: var(--plane); }
 .main { flex-grow: 1; min-width: 0; }
+.main:focus { outline: none; }
+.dot.broken { background: var(--bad); }
+.dot.idle { border: 1px dashed var(--line-strong); background-color: transparent; }
+.status.audit.broken { color: var(--ink); font-weight: 600; }
 
 @media (max-width: 860px) {
   .shell { flex-direction: column; }
@@ -186,6 +235,20 @@ async function logout() {
   .navcount { display: none; }
   .railfoot { margin: 0 0 0 auto; border: 0; padding: 0; flex-direction: row; align-items: center; }
   .status, .who { display: none; }
-  .status:first-child { display: flex; }
+  .search { margin: 0; }
+  .search .navlabel, .search kbd { display: none; }
+  /* Wrap rather than force the page wider than the screen (WCAG 1.4.10 reflow):
+     the nav takes its own full-width row and scrolls sideways within it. */
+  .rail { flex-wrap: wrap; }
+  .navlist { order: 3; flex-basis: 100%; overflow-x: auto; padding-bottom: .15rem;
+             scrollbar-width: none; }
+  .navlist::-webkit-scrollbar { display: none; }
+  .navitem { white-space: nowrap; }
+  /* Stale intelligence invalidates everything on screen, so it stays visible even
+     when the rest of the footer folds away. (`:first-child` never matched: the
+     inbox bell comes first.) */
+  .status.intel { display: flex; }
+  /* A broken chain or a dropped live connection is never folded away (rule 6). */
+  .status.audit.broken, .status.conn.warn { display: flex; }
 }
 </style>

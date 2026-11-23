@@ -59,7 +59,7 @@ defineProps<{
   background: repeating-linear-gradient(45deg, transparent, transparent 4px,
               var(--never-hatch) 4px, var(--never-hatch) 5px);
 }
-.mark.clean { color: var(--good); }
+.mark.clean { color: var(--good-ink); }
 .mark.error { color: var(--crit); }
 .title { font-size: 1.05rem; font-weight: 640; letter-spacing: -0.01em; }
 .body { margin: 0; font-size: .87rem; line-height: 1.6; color: var(--ink-2); max-width: 48ch; }

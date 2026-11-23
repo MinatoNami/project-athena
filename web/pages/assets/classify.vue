@@ -46,6 +46,27 @@ function why(g: any, field: 'tier' | 'exposure'): string {
   const w = settled(g, field)
   return w === 'operator' ? 'you set this' : (w ?? '')
 }
+const { theme } = useChartTheme()
+
+/**
+ * What each pending decision is worth, in findings currently scored against a
+ * placeholder. Groups already answered drop out — the chart is a worklist, so a
+ * decision already taken is not still waiting on anybody.
+ */
+const atStake = computed(() =>
+  (data.value?.groups ?? [])
+    .filter((g: any) => !answered(g))
+    .map((g: any) => ({
+      label: g.label,
+      value: g.finding_count ?? 0,
+      assets: g.asset_count ?? 0,
+      color: theme.value.ink2,
+    }))
+    .filter((g: any) => g.value > 0)
+    .sort((a: any, b: any) => b.value - a.value)
+    .slice(0, 8),
+)
+
 const applying = ref(false)
 const applied = ref<{ assets: number; rescore: boolean } | null>(null)
 const failed = ref<string | null>(null)
@@ -151,14 +172,26 @@ async function apply() {
         <circle cx="12" cy="12" r="9" /><path d="M12 8v5" /><path d="M12 16.5v.01" />
       </svg>
       <span>
-        Grouped by what they appear to be — {{ groups.length }}
-        {{ groups.length === 1 ? 'decision' : 'decisions' }} instead of
-        {{ (data?.asset_count ?? 0).toLocaleString() }} assets. Setting a group applies to
-        every asset in it. Where a value was worked out from the estate itself it is
-        shown rather than asked for; answering over it makes it yours, and no later
-        pass will change it.
+        {{ groups.length }} {{ groups.length === 1 ? 'decision' : 'decisions' }} instead of
+        {{ (data?.asset_count ?? 0).toLocaleString() }} assets. A value Athena worked out
+        is shown rather than asked for; answering over it makes it yours for good.
       </span>
     </div>
+
+    <!-- Which group to do first. The leverage is the findings behind it, and a
+         column of counts does not rank itself the way a bar does. -->
+    <ChartFrame
+      v-if="atStake.length"
+      title="Findings waiting on each decision"
+      note="scored against a placeholder importance until the group is set"
+      :table="{
+        columns: ['Group', 'Assets', 'Findings'],
+        rows: atStake.map(s => [s.label, s.assets, s.value]),
+      }"
+      class="stakes"
+    >
+      <ChartBars :rows="atStake" unit="findings" summary="Findings affected by each pending decision" />
+    </ChartFrame>
 
     <RowSkeleton v-if="pending" :rows="5" />
 
@@ -216,6 +249,7 @@ async function apply() {
           <div v-else class="seg">
             <button
               v-for="t in TIERS" :key="t" :class="{ on: picks[g.key]?.tier === t }"
+              :aria-pressed="picks[g.key]?.tier === t"
               @click="set(g.key, 'tier', t)"
             >{{ t }}</button>
           </div>
@@ -230,6 +264,7 @@ async function apply() {
           <div v-else class="seg">
             <button
               v-for="e in EXPOSURES" :key="e" :class="{ on: picks[g.key]?.exposure === e }"
+              :aria-pressed="picks[g.key]?.exposure === e"
               @click="set(g.key, 'exposure', e)"
             >{{ e }}</button>
           </div>
@@ -267,6 +302,7 @@ async function apply() {
 .bar { width: 190px; height: 5px; border-radius: 3px; background: var(--rule); overflow: hidden; }
 .fill { height: 100%; background: var(--ink); transition: width .25s ease; }
 
+.stakes { margin-bottom: .9rem; }
 .banner {
   border: 1px solid var(--rule); border-radius: 8px; padding: .6rem .8rem;
   font-size: .82rem; color: var(--ink-2); margin-bottom: .8rem; background: var(--surface);

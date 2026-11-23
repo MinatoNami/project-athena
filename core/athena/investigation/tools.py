@@ -133,6 +133,7 @@ def get_advisory(session: Session, *, vulnerability_id: str) -> dict[str, Any]:
         "severity": vulnerability.severity,
         "cwe": vulnerability.cwe,
         "known_exploited": vulnerability.kev,
+        **({"malicious_package": True} if vulnerability.malicious else {}),
         "epss": vulnerability.epss_score,
         "published_at": (
             vulnerability.published_at.isoformat() if vulnerability.published_at else None

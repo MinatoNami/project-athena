@@ -71,6 +71,34 @@ function when(at: string) {
 function loadMore() {
   if (data.value?.next_before_seq) before.value = data.value.next_before_seq
 }
+
+const { theme } = useChartTheme()
+
+/**
+ * What has been happening, over the entries actually loaded.
+ *
+ * The audit API pages backwards and has no aggregate, so this counts what is on
+ * screen. Said in the caption rather than left for the reader to assume it covers
+ * the whole trail — an audit page that overstates its own scope is the wrong page
+ * to be loose on.
+ */
+const byAction = computed(() => {
+  const counts = new Map<string, { n: number; failure: boolean }>()
+  for (const e of collected.value) {
+    const key = verb(e.action)
+    const entry = counts.get(key) ?? { n: 0, failure: isFailure(e.action) }
+    entry.n += 1
+    counts.set(key, entry)
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1].n - a[1].n)
+    .slice(0, 8)
+    .map(([label, { n, failure }]) => ({
+      label,
+      value: n,
+      color: failure ? theme.value.crit : theme.value.ink2,
+    }))
+})
 </script>
 
 <template>
@@ -78,11 +106,7 @@ function loadMore() {
     <div class="page-head">
       <div class="page-title">
         <h1>Activity</h1>
-        <p>
-          Every consequential action, in the order it happened. Each entry is chained to
-          the one before it, so the record cannot be edited after the fact without the
-          chain failing to verify.
-        </p>
+        <p>Every consequential action, hash-chained so it cannot be edited after the fact.</p>
       </div>
       <div class="actions">
         <button class="btn" @click="refresh()">Refresh</button>
@@ -114,14 +138,28 @@ function loadMore() {
       No consequential action has been recorded. That is an empty trail, not a clean one.
     </StateBlock>
 
-    <div v-else class="trail">
+    <ChartFrame
+      v-else-if="byAction.length"
+      title="What has been happening"
+      :note="`across the ${collected.length.toLocaleString()} entries loaded, not the whole trail`"
+      :table="{ columns: ['Action', 'Entries'], rows: byAction.map(a => [a.label, a.value]) }"
+      class="actions-chart"
+    >
+      <ChartBars :rows="byAction" unit="entries" summary="Audit entries by action" />
+    </ChartFrame>
+
+    <div v-if="collected.length" class="trail">
       <div v-for="e in collected" :key="e.seq" class="entry">
         <div class="seq mono tnum">{{ e.seq }}</div>
         <div class="line">
           <div class="what">
-            <span class="actor">{{ e.actor }}</span>
+            <span class="actor" :title="e.actor">{{ e.actor_label || e.actor }}</span>
             <span class="verb" :class="{ bad: isFailure(e.action) }">{{ verb(e.action) }}</span>
-            <code v-if="e.subject" class="subject">{{ subjectLabel(e.subject).kind }}
+            <NuxtLink
+              v-if="e.subject && subjectLabel(e.subject).kind === 'asset'"
+              :to="`/assets/${subjectLabel(e.subject).id}`" class="subject"
+            ><code>asset <span class="sid">{{ subjectLabel(e.subject).id.slice(0, 12) }}</span></code></NuxtLink>
+            <code v-else-if="e.subject" class="subject">{{ subjectLabel(e.subject).kind }}
               <span class="sid">{{ subjectLabel(e.subject).id.slice(0, 12) }}</span></code>
           </div>
           <div class="meta">
@@ -131,7 +169,7 @@ function loadMore() {
         </div>
       </div>
 
-      <div v-if="data?.next_before_seq" class="more">
+      <div v-if="data?.next_before_seq && data.next_before_seq > 1" class="more">
         <button class="btn" :disabled="pending" @click="loadMore">
           {{ pending ? 'Loading…' : 'Load older' }}
         </button>
@@ -150,6 +188,7 @@ function loadMore() {
 .chain strong { color: var(--ink); }
 .warnmsg { color: var(--crit); font-weight: 600; }
 
+.actions-chart { margin-bottom: .9rem; max-width: 66rem; }
 .trail {
   border: 1px solid var(--rule); border-radius: 10px; background: var(--surface);
   overflow: hidden; max-width: 66rem;
@@ -165,8 +204,8 @@ function loadMore() {
 .verb { font-size: .81rem; color: var(--ink-2); }
 .verb.bad { color: var(--crit); font-weight: 600; }
 .subject { font-size: .73rem; color: var(--ink-muted); }
-.sid { opacity: .75; }
+.sid { color: var(--ink-muted); }
 .meta { display: flex; gap: .7rem; align-items: baseline; font-size: .72rem; color: var(--ink-muted); }
-.hash { font-size: .68rem; opacity: .7; }
+.hash { font-size: var(--fs-2xs); color: var(--ink-muted); }
 .more { padding: .7rem .85rem; border-top: 1px solid var(--rule); }
 </style>

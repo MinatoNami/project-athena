@@ -34,6 +34,7 @@ def test_every_scheduled_kind_has_a_handler():
         "intel.poll.osv",
         "intel.poll.kev",
         "intel.poll.epss",
+        "intel.enrich.vulnrichment",
         "correlate.advisory",
         "correlate.asset",
         "correlate.stale",

@@ -50,6 +50,7 @@ class RemediationClass(StrEnum):
     TRANSITIVE = "transitive"      # something else's manifest
     NO_FIX = "no_fix"              # nothing published yet
     ENTITLEMENT = "entitlement"    # a fix exists, behind a subscription
+    MALICIOUS = "malicious"        # the package is the attack: remove, then respond
     UNKNOWN = "unknown"            # not enough recorded to say
 
 
@@ -92,6 +93,7 @@ def plan_for(
     scope: str | None,
     fix_channel: str | None,
     source: SourceRef | None = None,
+    malicious: bool = False,
 ) -> RemediationPlan:
     """Classify one finding and describe the route to fixing it.
 
@@ -100,6 +102,16 @@ def plan_for(
     nobody can install is not a plan.
     """
     ecosystem = (ecosystem or "").lower()
+
+    # Before everything else, because every other branch assumes a flaw awaiting a
+    # patch. Malware has no fixed version — the record says "introduced 0" and stops
+    # — so without this it fell through to NO_FIX and told the operator to wait for
+    # maintainers who are, in this case, the attacker.
+    if malicious:
+        return _malware_plan(
+            ecosystem=ecosystem, package=package, installed_version=installed_version,
+            asset_kind=asset_kind, asset_name=asset_name, source=source,
+        )
 
     if not fixed_version:
         return RemediationPlan(
@@ -158,6 +170,48 @@ def plan_for(
         command=_manifest_command(ecosystem, package, fixed_version),
         change_at=change_at,
         unknowns=unknowns,
+    )
+
+
+def _malware_plan(
+    *, ecosystem: str, package: str, installed_version: str, asset_kind: str,
+    asset_name: str, source: SourceRef | None,
+) -> RemediationPlan:
+    """A malicious package: removal first, then incident response.
+
+    Removing it is necessary and nowhere near sufficient. Install hooks run with the
+    installing user's access — npm `postinstall`, Python `setup.py` — and the
+    recurring payload is credential theft: tokens in the environment, `~/.npmrc`,
+    cloud credentials, CI secrets. Deleting the package leaves every stolen
+    credential valid, so the plan says so rather than letting a clean rescan read as
+    the end of it.
+
+    No command is offered. The right removal differs by where it came from — a
+    lockfile, a base layer, a developer's global install — and a one-liner that
+    removes it from one place reads as if that settles it.
+    """
+    if asset_kind == "image":
+        change_at, site_unknowns = _change_site(
+            asset_kind=asset_kind, asset_name=asset_name, artefact="manifest", source=source
+        )
+    else:
+        change_at, site_unknowns = asset_name, []
+    return RemediationPlan(
+        klass=RemediationClass.MALICIOUS,
+        summary=(
+            f"{package} {installed_version} is published malware, not a vulnerable "
+            f"release. Remove it, then treat {asset_name} — and anything that "
+            "installed it — as compromised: rotate every credential the install "
+            "could read, and rebuild from a known-good state."
+        ),
+        change_at=change_at,
+        unknowns=[
+            *site_unknowns,
+            "Whether the package's install-time code ran here, and as which user",
+            "Which credentials were readable when it did — environment, dotfiles, "
+            "CI secrets, cloud metadata",
+            f"Which dependency, if any, pulled {package} in",
+        ],
     )
 
 

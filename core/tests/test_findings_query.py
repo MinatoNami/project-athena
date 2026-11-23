@@ -173,6 +173,23 @@ def test_facets_report_both_what_exists_and_what_survives(session, estate):
     assert filtered.facets["assessed"]["matching"] <= filtered.facets["assessed"]["total"]
 
 
+def test_band_facets_keep_the_unassessed_in_their_own_bucket(session, estate):
+    """The distribution chart reads these directly.
+
+    A group nothing has assessed has no band at all. Folding it into
+    `informational` would draw the estate's unknown portion as its mildest, which is
+    the one thing rule 1 forbids — so it is counted separately and charted
+    separately.
+    """
+    facets = query_findings(session, FindingQuery(limit=100)).facets
+    bands = {name: facets[f"band:{name}"]["total"] for name in
+             ("critical", "high", "medium", "low", "informational", "unassessed")}
+    assert bands == {"critical": 1, "high": 0, "medium": 1, "low": 1,
+                     "informational": 0, "unassessed": 1}
+    # Every group lands in exactly one bucket, so the chart's total is the estate.
+    assert sum(bands.values()) == query_findings(session, FindingQuery(limit=100)).group_count
+
+
 def test_instances_obey_the_same_filters_as_the_groups(session, estate):
     """Filtering to internet-facing assets and then listing every asset in the group
     would answer a different question from the one asked."""
@@ -235,3 +252,61 @@ def test_every_facet_respects_group_level_filters(session, estate):
             f"facet {name} claims more matches than the query returned"
         )
         assert counts["matching"] <= counts["total"], name
+
+
+def test_unassessed_malware_leads_the_queue_and_has_its_own_facet(session, estate):
+    """A malicious package nothing has assessed yet has no band, and would otherwise
+    rank below every assessed low. It is a compromise in progress, so it leads."""
+    laptop = _asset(session, "dev-box", tier="development", exposure="isolated")
+    mal = Vulnerability(
+        id=f"MAL-2099-{uuid.uuid4().hex[:6]}", summary="Malicious code in colourama",
+        content_hash="h-mal", malicious=True, published_at=datetime.now(UTC),
+    )
+    session.add(mal)
+    session.flush()
+    _finding(session, mal, laptop, _component(session, "colourama"), fix=None)
+
+    queue = query_findings(session, FindingQuery(needs_attention=True, limit=100))
+    assert queue.groups[0]["vulnerability_id"] == mal.id
+    assert queue.groups[0]["malicious"] is True
+    assert queue.groups[0]["instances"][0]["ssvc"] == "attend"
+
+    only = query_findings(session, FindingQuery(malicious=True, limit=100))
+    assert [g["vulnerability_id"] for g in only.groups] == [mal.id]
+    assert only.facets["malicious"]["matching"] == 1
+
+
+def test_a_withdrawn_advisory_stops_ranking(session, estate):
+    """Its publisher retracted it. A withdrawn malware report must not go on holding
+    the top of the queue at critical."""
+    host = _asset(session, "ci-runner")
+    retracted = Vulnerability(
+        id=f"MAL-2099-{uuid.uuid4().hex[:6]}", summary="Malicious code in fastapi",
+        content_hash="h-w", malicious=True, withdrawn_at=datetime.now(UTC),
+    )
+    session.add(retracted)
+    session.flush()
+    _finding(session, retracted, host, _component(session, "fastapi"), fix=None)
+
+    page = query_findings(session, FindingQuery(limit=200))
+    assert retracted.id not in {g["vulnerability_id"] for g in page.groups}
+    assert query_findings(session, FindingQuery(malicious=True, limit=10)).groups == []
+
+
+def test_the_three_today_tabs_partition_the_estate(session, estate):
+    """Needs-you, waiting and cleared must not overlap: a known-exploited critical
+    listed under "cleared" tells a reader the opposite of the truth."""
+    def ids(**kw):
+        return {g["vulnerability_id"] for g in query_findings(
+            session, FindingQuery(limit=200, **kw)).groups}
+
+    needs = ids(needs_attention=True)
+    cleared = ids(assessed=True, needs_attention=False)
+    waiting = ids(assessed=False, needs_attention=False)
+    assert not (needs & cleared) and not (needs & waiting) and not (cleared & waiting)
+    assert needs | cleared | waiting == ids()
+
+    facets = query_findings(session, FindingQuery(limit=1)).facets
+    assert facets["needs_attention"]["total"] == len(needs)
+    assert facets["cleared"]["total"] == len(cleared)
+    assert facets["waiting"]["total"] == len(waiting)

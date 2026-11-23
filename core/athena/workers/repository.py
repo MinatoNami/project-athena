@@ -12,6 +12,7 @@ from typing import Any
 import structlog
 
 from athena.audit import record
+from athena.codefindings import record_code_scan
 from athena.config import get_settings
 from athena.db.base import session_scope
 from athena.db.models import Asset
@@ -22,7 +23,7 @@ from athena.inventory.service import (
 )
 from athena.queue import publish
 from athena.queue.registry import handler
-from athena.scanners import manifests, syft
+from athena.scanners import manifests, misconfig, secrets, syft
 from athena.scanners.git import CheckoutError, clone, remove_checkout
 from athena.scanners.sandbox import SandboxError
 
@@ -54,6 +55,10 @@ def scan_repository(payload: dict[str, Any]) -> dict[str, Any]:
     checkout: str | None = None
     try:
         checkout, commit = clone(url, work_volume=work_volume, ref=ref)
+        # Before the SBOM, and recorded independently of it: a repository whose
+        # Syft run keeps failing still deserves to know it has a key committed.
+        if get_settings().code_scans_enabled:
+            _scan_code(asset_id, checkout, work_volume=work_volume, commit=commit)
         result, tool_version = syft.scan_directory(checkout, work_volume=work_volume)
 
         if not result.ok:
@@ -135,6 +140,67 @@ def scan_repository(payload: dict[str, Any]) -> dict[str, Any]:
         "warnings": len(warnings),
         "notes": len(set(notes)),
     }
+
+
+def _image_version(image: str) -> str | None:
+    """`ghcr.io/x/gitleaks:v8.30.1@sha256:…` → `v8.30.1`."""
+    reference = image.split("@", 1)[0]
+    tail = reference.rsplit("/", 1)[-1]
+    return tail.split(":", 1)[1] if ":" in tail else None
+
+
+def _scan_code(asset_id: str, checkout: str, *, work_volume: str, commit: str) -> None:
+    """Secrets (Gitleaks) and misconfigurations (Trivy) over the same checkout.
+
+    Each scanner's outcome is its own scan run in its own transaction. One failing —
+    an image that cannot be pulled on an air-gapped host, a timeout on a huge tree —
+    is recorded as that scanner's inconclusive run and leaves the other, and the
+    SBOM, untouched.
+    """
+    settings = get_settings()
+    scanners = (
+        ("secrets", "gitleaks", settings.gitleaks_image),
+        ("misconfiguration", "trivy", settings.trivy_image),
+    )
+    for scan_kind, tool, image in scanners:
+        observations = None
+        stats: dict[str, Any] = {"commit": commit[:12]}
+        version = _image_version(image)
+        error = None
+        try:
+            if scan_kind == "secrets":
+                result = secrets.scan(checkout, work_volume=work_volume)
+            else:
+                result = misconfig.scan(checkout, work_volume=work_volume)
+            if not result.ok:
+                status = "timeout" if result.timed_out else "failed"
+                error = f"{tool} failed: {result.diagnosis}: {result.stderr.strip()[-300:]}"
+            elif scan_kind == "secrets":
+                observations = secrets.parse(result.stdout, checkout=checkout)
+                status = "succeeded"
+                # Said on every run, because it is the scan's honest edge: the
+                # checkout is shallow, so history is not searched.
+                stats["scope"] = "working tree only; history not searched"
+            else:
+                observations, summary = misconfig.parse(result.stdout)
+                version = misconfig.version_of(result.stdout) or version
+                status = "succeeded"
+                stats.update(summary)
+        except (SandboxError, ValueError) as exc:
+            status, error = "failed", f"{tool}: {exc}"[:500]
+
+        kind = "secret" if scan_kind == "secrets" else "misconfiguration"
+        with session_scope() as session:
+            asset = session.get(Asset, asset_id)
+            if asset is None:
+                return
+            counts = record_code_scan(
+                session, asset=asset, kind=kind, tool=tool, tool_version=version,
+                status=status, observations=observations, error=error, stats=stats,
+            )
+            publish(session, topic="assets", subject_id=str(asset_id))
+        log.info("repository.code_scanned", asset=asset_id, tool=tool, status=status,
+                 **counts)
 
 
 def _gap_summary(warnings: list[str], *, gap_count: int) -> str | None:
