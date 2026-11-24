@@ -76,11 +76,18 @@ def investigate_finding(payload: dict[str, Any]) -> dict[str, Any]:
     # question; without this, investigating a fleet costs a model call per host.
     if (cached := _lookup_cache(context["fingerprint"])) is not None:
         verdict, investigation_id, model = cached
-        _apply(finding_id, verdict, model=model, investigation_id=investigation_id,
-               tokens=0, from_cache=True, advisory_revision=context["advisory_revision"])
+        outcome = _apply(
+            finding_id, verdict, model=model, investigation_id=investigation_id,
+            tokens=0, from_cache=True, advisory_revision=context["advisory_revision"],
+        )
         log.info("investigation.cache_hit", finding=finding_id,
                  fingerprint=context["fingerprint"][:12])
-        return {"status": "cached", "verdict": verdict.verdict}
+        # A cached answer is discarded on the same terms as a fresh one, and the job
+        # result must say so rather than report it applied.
+        return {
+            "status": "discarded" if outcome.get("discarded") else "cached",
+            "verdict": verdict.verdict,
+        }
 
     with session_scope() as session:
         result = investigate(

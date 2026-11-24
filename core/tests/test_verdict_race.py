@@ -222,3 +222,19 @@ def test_closing_and_reopening_findings_publishes_an_update(worker_session):
     assert published == [("findings", cve)]
     finding = session.query(Finding).filter_by(vulnerability_id=cve).one()
     assert _events(session, finding, "FINDING_REMATCHED") == 1
+
+
+def test_a_discarded_cached_verdict_is_reported_as_discarded(worker_session, monkeypatch):
+    import athena.workers.investigate as investigate
+
+    session, _, notified = worker_session
+    finding = _finding(session, state="unmatched")
+    monkeypatch.setattr(
+        investigate, "_load", lambda _id: {"fingerprint": "f" * 64, "advisory_revision": 2}
+    )
+    monkeypatch.setattr(investigate, "_lookup_cache", lambda _fp: (APPLICABLE, None, "test"))
+
+    result = investigate.investigate_finding({"finding_id": str(finding.id)})
+
+    assert result["status"] == "discarded"
+    assert notified == []

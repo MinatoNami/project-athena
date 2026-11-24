@@ -497,6 +497,10 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
 
     matched = created = candidates = reopened = 0
     matched_pairs: set[tuple[Any, Any]] = set()
+    # Not affected only for want of an answer — a version that could not be ordered
+    # against a range, a release-specific range on an asset whose release is not
+    # known. Left as they are: closing them would report an unknown as a retraction.
+    undecided: set[tuple[Any, Any]] = set()
     for (ecosystem, package), package_ranges in by_package.items():
         installed = session.execute(
             select(Component, AssetComponent.asset_id)
@@ -515,6 +519,8 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
                 distro_release=release_of(asset) if asset else None,
             )
             if not affected:
+                if _undecided(method, conflicts):
+                    undecided.add((asset_id, component.id))
                 continue
 
             matched += 1
@@ -537,7 +543,7 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
             created += int(outcome == "created")
             reopened += int(outcome == "reopened")
 
-    unmatched = _close_unmatched(session, vulnerability, matched_pairs)
+    unmatched = _close_unmatched(session, vulnerability, matched_pairs | undecided)
     _mark_evaluated(session, vulnerability)
 
     return {
@@ -574,8 +580,21 @@ def _mark_evaluated(session: Session, vulnerability: Vulnerability) -> None:
 OPEN_STATES = ("discovered", "investigating", "confirmed", "no_fix_available", "regressed")
 
 
+def _undecided(method: str, conflicts: list[dict[str, Any]]) -> bool:
+    """Whether a not-affected evaluation is really "could not say".
+
+    `evaluate` answers not-affected both when every range excludes the version and
+    when it could not order the version against one (`uncomparable`) or could not
+    apply a release-specific range because the asset's release is unknown. Only the
+    first is a retraction.
+    """
+    return method == "uncomparable" or any(
+        c.get("says") in ("uncomparable", "unknown") for c in conflicts
+    )
+
+
 def _close_unmatched(
-    session: Session, vulnerability: Vulnerability, matched_pairs: set[tuple[Any, Any]]
+    session: Session, vulnerability: Vulnerability, keep: set[tuple[Any, Any]]
 ) -> int:
     """Close open findings that no remaining range supports.
 
@@ -583,7 +602,8 @@ def _close_unmatched(
     retracted — a withdrawn duplicate GHSA, a corrected bound — left behind every
     finding it had produced, matching nothing and listed forever. Only findings on
     packages still installed are closed here: one whose package has gone is
-    inventory's to resolve, for a different reason.
+    inventory's to resolve, for a different reason. `keep` holds the (asset,
+    component) pairs this run matched, or could not decide.
     """
     from athena.audit import record
 
@@ -596,7 +616,7 @@ def _close_unmatched(
     now = datetime.now(UTC)
     closed = 0
     for finding in open_findings:
-        if (finding.asset_id, finding.component_id) in matched_pairs:
+        if (finding.asset_id, finding.component_id) in keep:
             continue
         installed = session.execute(
             select(AssetComponent.asset_id).where(

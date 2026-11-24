@@ -34,6 +34,11 @@ router = APIRouter(tags=["inventory"])
 # over all of them regardless.
 COMPONENT_LIST_LIMIT = 1000
 
+# Findings the list can show at all: not from a withdrawn advisory, and still
+# supported by a published range. Counts set beside the list (the baseline preview
+# is subtracted from its total) or ranked by it must leave out what it leaves out.
+_LISTED = (Vulnerability.withdrawn_at.is_(None), Finding.state != "unmatched")
+
 TIERS = {"production", "staging", "development", "personal", "unknown"}
 EXPOSURES = {"internet", "internal", "isolated", "unknown"}
 
@@ -217,7 +222,8 @@ def unclassified(
     finding_counts = dict(
         session.execute(
             select(Finding.asset_id, func.count())
-            .where(Finding.state != "unmatched")
+            .join(Vulnerability, Vulnerability.id == Finding.vulnerability_id)
+            .where(*_LISTED)
             .group_by(Finding.asset_id)
         ).all()
     )
@@ -706,12 +712,6 @@ class BaselineRequest(BaseModel):
     # forward accepts everything found since, which is a different decision from
     # drawing one for the first time and should be asked for on purpose.
     move_existing: bool = False
-
-
-# Findings the list can show at all. The preview is subtracted from the list's own
-# count, so it must leave out what the list leaves out: withdrawn advisories and
-# findings no published range supports.
-_LISTED = (Vulnerability.withdrawn_at.is_(None), Finding.state != "unmatched")
 
 
 def _baseline_preview(session: Session, asset_id: str | None) -> dict[str, Any]:

@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from athena.api.deps import Principal, current_principal, db
+from athena.api.routers.exports import is_uuid
 from athena.audit import record
 from athena.config import get_settings
 from athena.db.models import (
@@ -85,6 +86,8 @@ def list_findings(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"Unknown sort {sort!r} — expected one of {', '.join(SORTS)}",
         )
+    if asset_id is not None and not is_uuid(asset_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such asset")
 
     page = query_findings(
         session,
@@ -112,10 +115,17 @@ def list_findings(
         ),
     )
 
-    no_fix_count = session.execute(
+    # Over the population the list draws from — a withdrawn advisory's findings
+    # are in no list, with or without `include_no_fix` — and the asset it is scoped
+    # to, if any: this number is shown as what the list is holding back.
+    no_fix = (
         select(func.count(func.distinct(Finding.vulnerability_id)))
-        .where(Finding.state == "no_fix_available")
-    ).scalar_one()
+        .join(Vulnerability, Vulnerability.id == Finding.vulnerability_id)
+        .where(Finding.state == "no_fix_available", Vulnerability.withdrawn_at.is_(None))
+    )
+    if asset_id:
+        no_fix = no_fix.where(Finding.asset_id == asset_id)
+    no_fix_count = session.execute(no_fix).scalar_one()
     total_assets = session.execute(
         select(func.count()).select_from(Asset).where(Asset.tombstoned_at.is_(None))
     ).scalar_one()

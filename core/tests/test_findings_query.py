@@ -330,3 +330,40 @@ def test_a_partly_assessed_group_is_waiting_not_cleared(session, estate):
     assert partial.id not in ids(fully_assessed=True, needs_attention=False)
     # `assessed` keeps its own meaning — any instance — for the findings filter.
     assert partial.id in ids(assessed=True)
+
+
+# ── the list endpoint's own figures ──────────────────────────────────────────
+
+
+def _list(session, **params):
+    from athena.api.routers.findings import list_findings
+
+    return list_findings(**params, limit=50, _=None, session=session)
+
+
+def test_no_fix_count_is_over_what_the_list_could_show(session):
+    """Shown as what the list holds back, so it leaves out what no filter can list —
+    a withdrawn advisory's findings — and follows the list's asset scope."""
+    host, other = _asset(session, "nofix-a"), _asset(session, "nofix-b")
+    live = _advisory(session, f"CVE-2099-{uuid.uuid4().hex[:8]}")
+    retracted = _advisory(session, f"CVE-2099-{uuid.uuid4().hex[:8]}")
+    retracted.withdrawn_at = datetime.now(UTC)
+    for vulnerability, asset in ((live, host), (retracted, host), (live, other)):
+        _finding(session, vulnerability, asset, _component(session, "lib"), fix=None)
+    for f in session.query(Finding).filter(
+        Finding.vulnerability_id.in_((live.id, retracted.id))
+    ):
+        f.state = "no_fix_available"
+    session.flush()
+
+    scoped = _list(session, asset_id=str(host.id))
+    assert scoped["no_fix_available_count"] == 1, "the live one, not the withdrawn one"
+    assert _list(session, asset_id=str(other.id))["no_fix_available_count"] == 1
+
+
+def test_a_malformed_asset_id_is_a_missing_asset(session):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as raised:
+        _list(session, asset_id="not-a-uuid")
+    assert raised.value.status_code == 404

@@ -211,6 +211,35 @@ def test_an_unknown_release_is_a_gap_not_a_guess():
     assert any(c.get("says") == "unknown" for c in conflicts)
 
 
+def test_only_a_decided_miss_can_close_a_finding():
+    """Re-correlation closes findings no range covers. An unknown release and a
+    version that cannot be ordered are "could not say", and must not close one."""
+    from athena.correlation.engine import _undecided
+
+    release_specific = FakeRange(source="ubuntu", authority=Authority.DISTRO_TRACKER,
+                                 introduced="0", fixed="3.0.13-0ubuntu3.12")
+    release_specific.distro_release = "24.04"
+    _, method, _, _, _, conflicts = evaluate(
+        ecosystem="deb", package="openssl", version="3.0.13-0ubuntu3.11",
+        ranges=[release_specific], distro_release=None,
+    )
+    assert _undecided(method, conflicts), "unknown release"
+
+    _, method, _, _, _, conflicts = evaluate(
+        ecosystem="PyPI", package="x", version="1.0",
+        ranges=[FakeRange(source="ghsa", authority=Authority.UPSTREAM_ADVISORY,
+                          introduced="0", fixed="not a version")],
+    )
+    assert _undecided(method, conflicts), "uncomparable bound"
+
+    _, method, _, _, _, conflicts = evaluate(
+        ecosystem="PyPI", package="x", version="2.0",
+        ranges=[FakeRange(source="ghsa", authority=Authority.UPSTREAM_ADVISORY,
+                          introduced="0", fixed="2.0")],
+    )
+    assert not _undecided(method, conflicts), "fixed is a decided miss"
+
+
 def test_release_agnostic_ranges_still_apply():
     ranges = [
         FakeRange(source="ubuntu", authority=Authority.DISTRO_TRACKER,

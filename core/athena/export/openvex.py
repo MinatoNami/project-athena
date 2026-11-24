@@ -97,7 +97,9 @@ def public_repository_url(url: str) -> str | None:
         return None
     if not parts.scheme or not parts.hostname:
         return None
-    netloc = parts.hostname + (f":{port}" if port else "")
+    # `hostname` drops an IPv6 literal's brackets, which the netloc needs back.
+    host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
+    netloc = host + (f":{port}" if port else "")
     return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
 
 

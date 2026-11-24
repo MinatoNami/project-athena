@@ -264,6 +264,11 @@ def test_sbom_for_a_never_scanned_asset_says_so(session):
             "https://git.example.com:8443/team/svc",
         ),
         ("git@github.com:acme/api.git", "ssh://github.com/acme/api.git"),
+        # An IPv6 literal keeps the brackets `hostname` strips.
+        (
+            "https://bot:TOKEN@[fd00::5]:3000/acme/api.git",
+            "https://[fd00::5]:3000/acme/api.git",
+        ),
     ],
 )
 def test_a_repository_product_id_never_carries_credentials(clone_url, published):

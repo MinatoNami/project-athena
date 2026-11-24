@@ -190,6 +190,25 @@ def _retract_source(
             ),
             {"id": advisory.id, "now": now},
         )
+        # A withdrawn malware report merged under a CVE (by alias, upstream or
+        # related id) was the reason the row is flagged malicious, and the upsert
+        # only ever sets the flag. With no malware report's ranges left, nothing
+        # still says the package is the attack — so the flag goes with the report.
+        if source_record.upper().startswith("MAL-"):
+            session.execute(
+                text(
+                    """
+                    UPDATE vulnerability SET malicious = false
+                     WHERE id = :id AND malicious
+                       AND upper(id) NOT LIKE 'MAL-%'
+                       AND NOT EXISTS (
+                           SELECT 1 FROM affected_range r
+                            WHERE r.vulnerability_id = :id
+                              AND upper(r.source_record) LIKE 'MAL-%')
+                    """
+                ),
+                {"id": advisory.id},
+            )
     session.execute(
         text(
             """

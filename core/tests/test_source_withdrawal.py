@@ -182,3 +182,67 @@ def test_a_withdrawn_advisory_leaves_the_stale_sweep_once_looked_at(session):
     assert cve in stale_findings(session, limit=100_000)
     assert correlate_advisory(session, cve)["status"] == "withdrawn"
     assert cve not in stale_findings(session, limit=100_000)
+
+
+def test_a_bound_that_cannot_be_compared_leaves_the_finding_open(session):
+    """A revision Athena cannot order the installed version against is not a
+    retraction. Closing on it would report an unknown as "no range covers this"."""
+    cve = f"CVE-2099-{uuid.uuid4().int % 10**9}"
+    package = f"pkg-{uuid.uuid4().hex[:6]}"
+    ghsa = f"GHSA-{uuid.uuid4().hex[:4]}-3333-4444"
+    upsert_advisory(session, parse(_record(ghsa, cve, package)))
+    host, _ = _installed(session, package)
+    correlate_advisory(session, cve)
+    before = _finding(session, cve, host).state
+    assert before in ("discovered", "no_fix_available")
+
+    revised = _record(ghsa, cve, package)
+    revised["affected"][0]["ranges"][0]["events"] = [
+        {"introduced": "0"},
+        {"fixed": "not a version"},
+    ]
+    revised["modified"] = "2026-11-12T00:00:00Z"
+    assert upsert_advisory(session, parse(revised)) == "revised"
+
+    result = correlate_advisory(session, cve)
+    assert result["unmatched"] == 0
+    assert _finding(session, cve, host).state == before
+
+
+def test_a_withdrawn_malware_report_takes_its_flag_with_it(session):
+    """A MAL- report merged under a CVE (here by a `related` id) flags the CVE as
+    malware. Withdrawn by OpenSSF, the claim goes, while the CVE and the source
+    that still describes it stand."""
+    cve = f"CVE-2099-{uuid.uuid4().int % 10**9}"
+    package = f"pkg-{uuid.uuid4().hex[:6]}"
+    mal = f"MAL-2099-{uuid.uuid4().hex[:6]}"
+    report = _record(mal, cve, package) | {"aliases": [], "related": [cve]}
+    upsert_advisory(session, parse(report))
+    upsert_advisory(session, parse(_record(f"PYSEC-{uuid.uuid4().hex[:8]}", cve, package)))
+    vulnerability = session.get(Vulnerability, cve)
+    assert vulnerability.malicious is True
+
+    withdrawn = _record(mal, cve, package, withdrawn="2026-11-10T00:00:00Z")
+    withdrawn |= {"aliases": [], "related": [cve]}
+    assert upsert_advisory(session, parse(withdrawn)) == "revised"
+
+    session.refresh(vulnerability)
+    assert vulnerability.malicious is False
+    assert vulnerability.withdrawn_at is None, "the CVE itself was not withdrawn"
+
+
+def test_a_withdrawn_duplicate_leaves_a_malware_flag_another_report_still_holds(session):
+    cve = f"CVE-2099-{uuid.uuid4().int % 10**9}"
+    package = f"pkg-{uuid.uuid4().hex[:6]}"
+    first, second = (f"MAL-2099-{uuid.uuid4().hex[:6]}" for _ in range(2))
+    for mal in (first, second):
+        upsert_advisory(
+            session, parse(_record(mal, cve, package) | {"aliases": [], "related": [cve]})
+        )
+
+    withdrawn = _record(first, cve, package, withdrawn="2026-11-10T00:00:00Z")
+    upsert_advisory(session, parse(withdrawn | {"aliases": [], "related": [cve]}))
+
+    vulnerability = session.get(Vulnerability, cve)
+    session.refresh(vulnerability)
+    assert vulnerability.malicious is True, f"{second} still says it is malware"

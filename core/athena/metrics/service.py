@@ -397,6 +397,7 @@ def sla_report(session: Session) -> dict[str, Any]:
                 func.min(Finding.first_seen),
             )
             .select_from(Finding)
+            .join(Vulnerability, Vulnerability.id == Finding.vulnerability_id)
             .where(
                 Finding.risk_band == band,
                 # Open means somebody could still act. Dismissed and unfixable
@@ -404,6 +405,9 @@ def sla_report(session: Session) -> dict[str, Any]:
                 Finding.state.notin_(
                     ("resolved", "false_positive", "no_fix_available", "unmatched")
                 ),
+                # Nor is a finding its advisory's publisher retracted: no list shows
+                # it, so nobody could act on the lateness this would report.
+                Vulnerability.withdrawn_at.is_(None),
             )
         ).one()
         bands.append(

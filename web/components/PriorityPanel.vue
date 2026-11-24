@@ -246,7 +246,7 @@ function pct(v: number | null | undefined, digits = 1) {
           <p class="fine">
             {{ cvss.computed_from_vector
               ? cvss.published_vector
-                ? `Base score computed by Athena from the advisory's ${cvss.version ?? ''} vector; the ${cvss.published_vector.split('/')[0].replace('CVSS:', 'v')} vector it also publishes is recorded, not scored.`
+                ? `Base score computed by Athena from the advisory's ${cvss.version ? `v${cvss.version} ` : ''}vector; the ${cvss.published_vector.split('/')[0].replace('CVSS:', 'v')} vector it also publishes is recorded, not scored.`
                 : 'Base score computed by Athena from the published vector.'
               : cvss.score != null ? 'Score as published by the advisory.'
               : 'The severity word published with the advisory is used instead.' }}
