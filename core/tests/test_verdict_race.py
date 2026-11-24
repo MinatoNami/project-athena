@@ -354,3 +354,69 @@ def test_a_rematched_finding_is_assessed_again(worker_session):
     assert finding.investigation_id is None
     assert (finding.risk_band, finding.risk_score, finding.triage_disposition) == (None, None, None)
     assert _load(str(finding.id)) is not None, "eligible to be investigated again"
+
+
+def _install(session, package: str) -> None:
+    asset = Asset(kind="host", identity_key=f"h-{uuid.uuid4().hex}", display_name="h")
+    component = Component(ecosystem="pypi", name=package, version="1.0")
+    session.add_all([asset, component])
+    session.flush()
+    run = ScanRun(
+        asset_id=asset.id, kind="host", tool="t", status="succeeded", finished_at=datetime.now(UTC)
+    )
+    session.add(run)
+    session.flush()
+    session.add(
+        AssetComponent(
+            asset_id=asset.id,
+            component_id=component.id,
+            scope="direct",
+            observed_at=datetime.now(UTC),
+            scan_run_id=run.id,
+        )
+    )
+    session.flush()
+
+
+def test_a_match_becoming_undecided_or_decided_again_publishes_an_update(worker_session):
+    """Either way the fix a connected page shows has changed — withdrawn, or back —
+    though nothing was created, closed or reopened."""
+    from athena.workers.intel_jobs import correlate_one_advisory
+
+    session, published, _ = worker_session
+    cve = f"CVE-2099-{uuid.uuid4().int % 10**9}"
+    package = f"pkg-{uuid.uuid4().hex[:6]}"
+    ghsa = f"GHSA-{uuid.uuid4().hex[:4]}-bbbb-cccc"
+    upsert_advisory(session, parse(_record(ghsa, cve, package)))
+    _install(session, package)
+    assert correlate_one_advisory({"vulnerability_id": cve})["created"] == 1
+
+    # Revised to a bound the installed version cannot be ordered against.
+    undecidable = _record(ghsa, cve, package)
+    undecidable["affected"][0]["ranges"][0]["events"] = [
+        {"introduced": "0"},
+        {"fixed": "not a version"},
+    ]
+    undecidable["modified"] = "2026-11-12T00:00:00Z"
+    upsert_advisory(session, parse(undecidable))
+    published.clear()
+    result = correlate_one_advisory({"vulnerability_id": cve})
+    assert result["undecided"] == 1
+    assert result["created"] == result["unmatched"] == result["reopened"] == 0
+    assert published == [("findings", cve)]
+
+    # Still undecided on the next run: nothing changed, nothing to say.
+    published.clear()
+    assert correlate_one_advisory({"vulnerability_id": cve})["undecided"] == 0
+    assert published == []
+
+    # Corrected: a match again, with its fix back.
+    corrected = _record(ghsa, cve, package)
+    corrected["modified"] = "2026-11-13T00:00:00Z"
+    upsert_advisory(session, parse(corrected))
+    published.clear()
+    assert correlate_one_advisory({"vulnerability_id": cve})["decided"] == 1
+    assert published == [("findings", cve)]
+    finding = session.query(Finding).filter_by(vulnerability_id=cve).one()
+    assert finding.fixed_version == "2.0"
+    assert _events(session, finding, "FINDING_MATCH_DECIDED") == 1

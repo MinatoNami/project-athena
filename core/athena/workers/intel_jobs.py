@@ -263,13 +263,21 @@ def correlate_one_advisory(payload: dict[str, Any]) -> dict[str, Any]:
                 subject=f"advisory:{vulnerability_id}",
                 detail=result,
             )
-        # Any change a page shows, not only new findings: a run that only closes
-        # findings a retracted range supported, or reopens one, otherwise left a
-        # connected page listing what was no longer there. Each closure and reopening
-        # is audited on its own finding.
-        if result.get("created") or result.get("unmatched") or result.get("reopened"):
+        if changed_findings(result):
             publish(session, topic="findings", subject_id=vulnerability_id)
     return result
+
+
+# What a correlation run reports that a connected page shows. Not only new
+# findings: a run that only closed findings a retracted range supported, reopened
+# one, or withdrew or restored a match's fix left a connected page showing what was
+# no longer so. Each of those is audited on its own finding.
+FINDING_CHANGES = ("created", "reopened", "unmatched", "undecided", "decided")
+
+
+def changed_findings(result: dict[str, Any]) -> bool:
+    """Whether a correlation run changed anything a findings page shows."""
+    return any(result.get(change) for change in FINDING_CHANGES)
 
 
 @handler("correlate.asset")
@@ -289,7 +297,7 @@ def correlate_one_asset(payload: dict[str, Any]) -> dict[str, Any]:
                 subject=f"asset:{asset_id}",
                 detail=result,
             )
-        if result.get("created") or result.get("reopened"):
+        if changed_findings(result):
             publish(session, topic="findings", subject_id=str(asset_id))
     return result
 

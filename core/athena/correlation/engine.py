@@ -269,9 +269,10 @@ def _record(
     """Create or refresh a candidate finding. Always `discovered`, never confirmed.
 
     Returns the finding and what happened to it: "created", "reopened" (it had been
-    `unmatched` and a range covers it again) or "refreshed". The callers publish on
-    the first two — a page must hear about a finding coming back as much as about a
-    new one.
+    `unmatched` and a range covers it again), "decided" (its match had been
+    undecided and is a match again, with a fix back on it) or "refreshed". The
+    callers publish on all but the last — a page must hear about a finding coming
+    back, or its fix changing, as much as about a new one.
     """
     existing = session.execute(
         select(Finding).where(
@@ -293,6 +294,8 @@ def _record(
         # Matched again after a source retracted the range behind it: a corrected or
         # re-published range makes it real again (see `_close_unmatched`).
         reopened = existing.state == "unmatched"
+        # Its match had been undecided, and the fix with it (`_close_unmatched`).
+        decided = existing.match_method == "uncomparable"
         if reopened:
             from athena.audit import record
 
@@ -338,7 +341,26 @@ def _record(
         existing.fixed_version = candidate.fixed_version
         existing.advisory_revision = candidate.advisory_revision
         existing.last_evaluated_at = now
-        return existing, "reopened" if reopened else "refreshed"
+        if reopened:
+            return existing, "reopened"
+        if decided:
+            from athena.audit import record
+
+            # The pair to FINDING_MATCH_UNDECIDED: the match, and its fix, are back.
+            record(
+                session,
+                actor="system:correlation",
+                action="FINDING_MATCH_DECIDED",
+                subject=f"finding:{existing.id}",
+                detail={
+                    "vulnerability_id": vulnerability.id,
+                    "advisory_revision": vulnerability.revision,
+                    "match_method": existing.match_method,
+                    "fixed_version": existing.fixed_version,
+                },
+            )
+            return existing, "decided"
+        return existing, "refreshed"
 
     # A distribution routinely publishes an advisory before, or without, a fix.
     # Those are real findings but nothing can be done about them, and mixing them
@@ -440,7 +462,7 @@ def correlate_asset(session: Session, asset: Asset) -> dict[str, Any]:
         .where(AssetComponent.asset_id == asset.id)
     ).scalars().all()
 
-    created = evaluated = matched = reopened = 0
+    created = evaluated = matched = reopened = decided = 0
     for component in rows:
         grouped = _ranges_for(session, component.ecosystem, component.name)
         for vuln_id, ranges in grouped.items():
@@ -477,6 +499,7 @@ def correlate_asset(session: Session, asset: Asset) -> dict[str, Any]:
             )
             created += int(outcome == "created")
             reopened += int(outcome == "reopened")
+            decided += int(outcome == "decided")
 
     return {
         "components": len(rows),
@@ -484,6 +507,7 @@ def correlate_asset(session: Session, asset: Asset) -> dict[str, Any]:
         "matched": matched,
         "created": created,
         "reopened": reopened,
+        "decided": decided,
     }
 
 
@@ -511,7 +535,7 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
     for r in ranges:
         by_package.setdefault((r.ecosystem, r.package), []).append(r)
 
-    matched = created = candidates = reopened = 0
+    matched = created = candidates = reopened = decided = 0
     matched_pairs: set[tuple[Any, Any]] = set()
     # Not affected only for want of an answer — a version that could not be ordered
     # against a range, a release-specific range on an asset whose release is not
@@ -558,8 +582,11 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
             )
             created += int(outcome == "created")
             reopened += int(outcome == "reopened")
+            decided += int(outcome == "decided")
 
-    unmatched = _close_unmatched(session, vulnerability, matched_pairs, undecided)
+    unmatched, became_undecided = _close_unmatched(
+        session, vulnerability, matched_pairs, undecided
+    )
     _mark_evaluated(session, vulnerability)
 
     return {
@@ -570,6 +597,10 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
         "created": created,
         "reopened": reopened,
         "unmatched": unmatched,
+        # Matches that became undecided (their fix withdrawn from the page) or were
+        # decided again (a fix back on it). Counted so the run is published.
+        "undecided": became_undecided,
+        "decided": decided,
     }
 
 
@@ -614,8 +645,11 @@ def _close_unmatched(
     vulnerability: Vulnerability,
     matched: set[tuple[Any, Any]],
     undecided: set[tuple[Any, Any]],
-) -> int:
+) -> tuple[int, int]:
     """Close open findings that no remaining range supports.
+
+    Returns how many were closed, and how many matches became undecided this run —
+    both changes a connected page must hear about.
 
     Correlation used to only add and refresh matches, so a range its source
     retracted — a withdrawn duplicate GHSA, a corrected bound — left behind every
@@ -639,13 +673,14 @@ def _close_unmatched(
         )
     ).scalars().all()
     now = datetime.now(UTC)
-    closed = 0
+    closed = became_undecided = 0
     for finding in open_findings:
         pair = (finding.asset_id, finding.component_id)
         if pair in matched:
             continue
         if pair in undecided:
             if finding.match_method != "uncomparable":
+                became_undecided += 1
                 # What the previous range said, kept as history rather than as the
                 # current match: its fixed version is an upgrade this revision no
                 # longer vouches for, and triage, investigation and the fix page all
@@ -699,7 +734,7 @@ def _close_unmatched(
             },
         )
         closed += 1
-    return closed
+    return closed, became_undecided
 
 
 def stale_findings(session: Session, limit: int = 500) -> list[str]:
