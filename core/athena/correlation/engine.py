@@ -625,9 +625,10 @@ def _close_unmatched(
 
     `matched` and `undecided` are (asset, component) pairs from this run. A matched
     finding was refreshed by `_record`. An undecided one stays open, but its match
-    is restated as what this revision supports — uncertain — rather than left saying
-    what the previous one did: it is about to be marked evaluated against this
-    revision, and investigation trusts a current revision to mean a current match.
+    is restated as what this revision supports — uncertain, with no fixed version
+    it vouches for — rather than left saying what the previous one did: it is about
+    to be marked evaluated against this revision, and investigation trusts a
+    current revision to mean a current match.
     """
     from athena.audit import record
 
@@ -644,11 +645,34 @@ def _close_unmatched(
         if pair in matched:
             continue
         if pair in undecided:
+            if finding.match_method != "uncomparable":
+                # What the previous range said, kept as history rather than as the
+                # current match: its fixed version is an upgrade this revision no
+                # longer vouches for, and triage, investigation and the fix page all
+                # read `fixed_version` as current.
+                record(
+                    session,
+                    actor="system:correlation",
+                    action="FINDING_MATCH_UNDECIDED",
+                    subject=f"finding:{finding.id}",
+                    detail={
+                        "vulnerability_id": vulnerability.id,
+                        "advisory_revision": vulnerability.revision,
+                        "previous": {
+                            "match_method": finding.match_method,
+                            "matched_source": finding.matched_source,
+                            "fixed_version": finding.fixed_version,
+                            "fix_channel": finding.fix_channel,
+                        },
+                    },
+                )
             finding.match_method = "uncomparable"
             finding.match_confidence = MATCH_CONFIDENCE["uncomparable"]
             finding.matched_range_id = None
             finding.matched_source = None
             finding.matched_release = None
+            finding.fixed_version = None
+            finding.fix_channel = None
             finding.last_evaluated_at = now
             continue
         installed = session.execute(
