@@ -58,7 +58,12 @@ def scan_repository(payload: dict[str, Any]) -> dict[str, Any]:
         # Before the SBOM, and recorded independently of it: a repository whose
         # Syft run keeps failing still deserves to know it has a key committed.
         if get_settings().code_scans_enabled:
-            _scan_code(asset_id, checkout, work_volume=work_volume, commit=commit)
+            # A code scan must never cost the SBOM. `_scan_code` records its own
+            # failures; this is for what it could not record.
+            try:
+                _scan_code(asset_id, checkout, work_volume=work_volume, commit=commit)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("repository.code_scan_aborted", asset=asset_id, error=str(exc))
         result, tool_version = syft.scan_directory(checkout, work_volume=work_volume)
 
         if not result.ok:
@@ -188,17 +193,34 @@ def _scan_code(asset_id: str, checkout: str, *, work_volume: str, commit: str) -
                 stats.update(summary)
         except (SandboxError, ValueError) as exc:
             status, error = "failed", f"{tool}: {exc}"[:500]
+        except Exception as exc:  # noqa: BLE001 - e.g. a `docker pull` that hung past its timeout
+            status, error = "failed", f"{tool}: {type(exc).__name__}: {exc}"[:500]
+            observations = None
 
         kind = "secret" if scan_kind == "secrets" else "misconfiguration"
-        with session_scope() as session:
-            asset = session.get(Asset, asset_id)
-            if asset is None:
-                return
-            counts = record_code_scan(
-                session, asset=asset, kind=kind, tool=tool, tool_version=version,
-                status=status, observations=observations, error=error, stats=stats,
-            )
-            publish(session, topic="assets", subject_id=str(asset_id))
+        try:
+            with session_scope() as session:
+                asset = session.get(Asset, asset_id)
+                if asset is None:
+                    return
+                counts = record_code_scan(
+                    session, asset=asset, kind=kind, tool=tool, tool_version=version,
+                    status=status, observations=observations, error=error, stats=stats,
+                )
+                publish(session, topic="assets", subject_id=str(asset_id))
+        except Exception as exc:  # noqa: BLE001 - e.g. a concurrent patrol's identical row
+            # The results could not be stored, so the run is recorded as failed — an
+            # unrecorded scan would leave the last success standing as current.
+            status = "failed"
+            with session_scope() as session:
+                asset = session.get(Asset, asset_id)
+                if asset is None:
+                    return
+                counts = record_code_scan(
+                    session, asset=asset, kind=kind, tool=tool, tool_version=version,
+                    status=status, stats=stats,
+                    error=f"{tool}: results not recorded: {type(exc).__name__}"[:500],
+                )
         log.info("repository.code_scanned", asset=asset_id, tool=tool, status=status,
                  **counts)
 

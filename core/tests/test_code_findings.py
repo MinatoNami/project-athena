@@ -406,3 +406,45 @@ def test_runs_are_recorded_with_their_counts(session, repo):
     run = session.query(ScanRun).filter_by(asset_id=repo.id, kind="secret").one()
     assert run.status == "succeeded" and run.finished_at <= datetime.now(UTC)
     assert run.stats["new"] == 1 and run.stats["scope"].startswith("working tree")
+
+
+def test_coverage_calls_a_scanner_failing_when_its_latest_run_failed(session, repo):
+    """A success last month and failures since is failing — the old count only
+    knew repositories that had never succeeded."""
+    from datetime import datetime as _dt
+
+    from athena.api.routers.code import _coverage
+
+    _scan(session, repo, _gitleaks((1, FIRST)))
+    record_code_scan(
+        session,
+        asset=repo,
+        kind="secret",
+        tool="gitleaks",
+        tool_version=None,
+        status="failed",
+        error="gitleaks: image pull timed out",
+    )
+    coverage = _coverage(session, str(repo.id))["secret"]
+    assert coverage["scanned"] == 1 and coverage["failing"] == 1
+    assert isinstance(coverage["latest_success"], _dt)
+    assert isinstance(coverage["oldest_success"], _dt)
+
+    _scan(session, repo, _gitleaks((1, FIRST)))
+    assert _coverage(session, str(repo.id))["secret"]["failing"] == 0
+
+
+def test_open_counts_cover_every_kind_whatever_the_list_is_filtered_to(session, repo):
+    from athena.api.routers.code import list_code_findings
+
+    _scan(session, repo, _gitleaks((1, FIRST)))
+    only_misconfig = list_code_findings(
+        asset_id=str(repo.id),
+        kind="misconfiguration",
+        include_resolved=False,
+        limit=200,
+        _=None,
+        session=session,
+    )
+    assert only_misconfig["findings"] == []
+    assert only_misconfig["open_counts"]["secret"] == {"critical": 1}

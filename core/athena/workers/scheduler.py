@@ -171,6 +171,13 @@ def _sweep_triage(session, last_run: dict[str, float], now: float) -> None:
               JOIN asset a ON a.id = f.asset_id
              WHERE f.state = 'discovered'
                AND f.investigation_id IS NULL
+               -- Retracted reports are out of the list, so they are out of the
+               -- budget too: a withdrawn malware record would otherwise sort first.
+               AND v.withdrawn_at IS NULL
+               -- Not until correlation has re-matched it against the advisory's
+               -- current revision (`investigate.match_is_current`): queued now, the
+               -- worker would only set it aside, on every pass until then.
+               AND f.advisory_revision >= v.revision
                AND (f.triage_disposition IS NULL OR f.triage_disposition = 'investigate')
              ORDER BY v.malicious DESC,
                       v.kev DESC,

@@ -43,12 +43,16 @@ const option = computed(() => ({
   tooltip: {
     ...chrome.value.tooltip,
     trigger: 'item',
+    // ECharts inserts this string as HTML, and labels include names that arrive
+    // from node agents and registries (asset display names, ecosystems) — so every
+    // piece of text is escaped before it is wrapped in markup.
     formatter: (p: any) => {
       const row = props.rows[p.dataIndex]
       const value = row.value === null
         ? 'never measured'
         : `${row.value.toLocaleString()}${props.unit ? ` ${props.unit}` : ''}`
-      return `<strong>${row.label}</strong><br>${value}${row.hint ? `<br>${row.hint}` : ''}`
+      const hint = row.hint ? `<br>${escapeHtml(row.hint)}` : ''
+      return `<strong>${escapeHtml(row.label)}</strong><br>${escapeHtml(value)}${hint}`
     },
   },
   series: [{

@@ -48,16 +48,12 @@ async function rescan() {
 useEvents(['assets'], refresh)
 
 /** What is actually inside, by ecosystem — the shape of the dependency surface. */
-const ecosystems = computed(() => {
-  const counts = new Map<string, number>()
-  for (const c of asset.value?.components ?? []) {
-    counts.set(c.ecosystem || 'unknown', (counts.get(c.ecosystem || 'unknown') ?? 0) + 1)
-  }
-  return [...counts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
-    .map(([label, value]) => ({ label, value }))
-})
+// Counted by the API over every package, not from the listed ones (which stop at
+// a page limit). The chart draws the top eight; the tile counts them all.
+const allEcosystems = computed(() =>
+  (asset.value?.ecosystems ?? []).map((e: any) => ({ label: e.ecosystem, value: e.count })),
+)
+const ecosystems = computed(() => allEcosystems.value.slice(0, 8))
 
 /** Unknown is not zero: an unread asset gets a dashed row, not an empty chart. */
 const ecosystemRows = computed(() =>
@@ -77,9 +73,11 @@ const lastRun = computed(
 )
 
 const exporting = ref<string | null>(null)
+// What /assets/classify can fix: tier and exposure. An unset importance alone is
+// stated on its own tile; sending it to a page that cannot set it led to
+// "Everything is classified".
 const unclassified = computed(() =>
-  asset.value && (asset.value.tier === 'unknown' || asset.value.exposure === 'unknown'
-    || asset.value.criticality == null),
+  asset.value && (asset.value.tier === 'unknown' || asset.value.exposure === 'unknown'),
 )
 async function exportDoc(kind: 'sbom' | 'vex') {
   exporting.value = kind
@@ -148,7 +146,9 @@ async function exportDoc(kind: 'sbom' | 'vex') {
       <StatTile
         label="Packages"
         :value="asset.never_inventoried ? null : asset.component_count?.toLocaleString()"
-        :of="asset.never_inventoried ? undefined : `in ${ecosystems.length || 1} ecosystems`"
+        :of="asset.never_inventoried || !allEcosystems.length
+          ? undefined
+          : `in ${plural(allEcosystems.length, 'ecosystem')}`"
         hint="unknown, not zero"
       />
       <StatTile
@@ -174,7 +174,9 @@ async function exportDoc(kind: 'sbom' | 'vex') {
         empty-text="Read successfully, and nothing was found inside."
         :table="{
           columns: ['Ecosystem', 'Packages'],
-          rows: ecosystems.map(e => [e.label, e.value]),
+          rows: asset.never_inventoried
+            ? [['contents', 'never read']]
+            : allEcosystems.map((e: any) => [e.label, e.value]),
         }"
       >
         <ChartBars
@@ -235,8 +237,12 @@ async function exportDoc(kind: 'sbom' | 'vex') {
 
     <div class="card">
       <button class="disclose" @click="showPackages = !showPackages">
-        {{ showPackages ? 'Hide' : 'Show' }} all {{ asset.component_count?.toLocaleString() ?? 0 }}
-        packages
+        {{ showPackages ? 'Hide' : 'Show' }}
+        <template v-if="(asset.component_count ?? 0) > (asset.components?.length ?? 0)">
+          the first {{ (asset.components?.length ?? 0).toLocaleString() }} of
+          {{ asset.component_count.toLocaleString() }} packages
+        </template>
+        <template v-else>all {{ plural(asset.component_count, 'package') }}</template>
       </button>
       <table v-if="showPackages && !asset.never_inventoried">
         <thead><tr><th>package</th><th>version</th><th>ecosystem</th><th>scope</th></tr></thead>

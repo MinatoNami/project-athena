@@ -282,10 +282,13 @@ function instanceLines(g: any) {
         :of="`of ${facetCount('malicious').total} in the estate`"
         status="bad"
       />
+      <!-- Findings with no published fix are left out of this list unless asked for,
+           so the facet over the list counted almost nothing (mostly malware, which
+           has no version to wait for). The API's own count is the real figure. -->
       <StatTile
         label="No fix published"
-        :value="facetCount('no_fix').matching"
-        of="clock has not started"
+        :value="includeNoFix ? facetCount('no_fix').matching : (data?.no_fix_available_count ?? null)"
+        :of="includeNoFix ? 'clock has not started' : 'held out of this list · clock has not started'"
       />
       <p class="caveat">
         A finding nobody has investigated is a version match — nothing has checked
@@ -450,7 +453,7 @@ function instanceLines(g: any) {
               <span v-else class="gap">EPSS not published — unrated, not harmless</span>
               <span v-if="g.kev_ransomware" class="bad">used in ransomware campaigns</span>
               <span v-if="g.epss_percentile != null">
-                {{ (g.epss_percentile * 100).toFixed(0) }}th EPSS percentile
+                {{ ordinal(Math.round(g.epss_percentile * 100)) }} EPSS percentile
               </span>
               <span v-if="g.kev_due_date">CISA due {{ g.kev_due_date }}</span>
               <span v-if="g.published_at">

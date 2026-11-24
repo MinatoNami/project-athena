@@ -40,8 +40,31 @@ class _Session:
         return _Result(self._node)
 
 
-def _asset(kind: str) -> Asset:
-    return Asset(kind=kind, identity_key=f"{kind}:1", display_name=kind, attributes={})
+def _asset(kind: str, **attributes: str) -> Asset:
+    if kind == "image" and not attributes:
+        attributes = {"repository": "ghcr.io/acme/api", "tag": "1.4"}
+    return Asset(kind=kind, identity_key=f"{kind}:1", display_name=kind, attributes=attributes)
+
+
+@pytest.mark.parametrize(
+    "attributes",
+    [
+        {"repository": "<none>", "tag": "<none>", "digest": "sha256:abc"},
+        {"repository": "ghcr.io/acme/api", "tag": "<none>"},
+    ],
+)
+def test_an_image_the_worker_would_refuse_is_not_offered(attributes: dict[str, str]) -> None:
+    """Dangling `<none>` images were offered a scan the worker refuses at once."""
+    offer = _scan_offer(_Session(), _asset("image", **attributes))
+    assert offer.action is None
+    assert offer.reason and "cannot locate it" in offer.reason
+
+
+def test_an_image_known_only_by_digest_is_still_offered() -> None:
+    offer = _scan_offer(
+        _Session(), _asset("image", repository="ghcr.io/acme/api", digest="sha256:abc")
+    )
+    assert offer.action == "scan.image"
 
 
 @pytest.mark.parametrize(

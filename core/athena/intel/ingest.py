@@ -31,20 +31,42 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
     source = _dominant_source(advisory)
     now = datetime.now(UTC)
 
-    known = session.execute(
+    stored = session.execute(
         text(
-            "SELECT content_hash FROM advisory_source "
+            "SELECT content_hash, malicious FROM advisory_source "
             " WHERE vulnerability_id = :id AND source_record = :rec"
         ),
         {"id": advisory.id, "rec": source_record},
-    ).scalar_one_or_none()
+    ).first()
+    known = stored.content_hash if stored else None
+    # Recorded before migration 0020 kept each source's malware classification.
+    unclassified = stored is not None and stored.malicious is None
 
     if known == digest:
+        if unclassified:
+            return _classify(session, advisory, source_record=source_record, now=now)
         return "unchanged"
+
+    if advisory.source_withdrawn_at is not None:
+        return _retract_source(
+            session, advisory, source_record=source_record, digest=digest, now=now
+        )
 
     is_new_vulnerability = session.execute(
         text("SELECT 1 FROM vulnerability WHERE id = :id"), {"id": advisory.id}
     ).first() is None
+
+    # Computed here rather than by the parser so the content hash is untouched (see
+    # `NormalisedAdvisory.scoring_vector`). A published number wins over a computed
+    # one; a v4-only record computes to None and the risk function falls back to the
+    # published label. The vector is kept only when it produced the number.
+    scoring_vector: str | None = None
+    if advisory.cvss_score is not None:
+        score = advisory.cvss_score
+    else:
+        candidate = advisory.scoring_vector or advisory.cvss_vector
+        score = cvss.base_score(candidate)
+        scoring_vector = candidate if score is not None else None
 
     session.execute(
         text(
@@ -52,11 +74,11 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
             INSERT INTO vulnerability (
                 id, aliases, summary, details, cwe, cvss_vector, cvss_score, severity,
                 published_at, modified_at, withdrawn_at, "references",
-                revision, revised_at, content_hash, malicious
+                revision, revised_at, content_hash, malicious, cvss_scoring_vector
             ) VALUES (
                 :id, :aliases, :summary, :details, :cwe, :vector, :score, :severity,
                 :published, :modified, :withdrawn, CAST(:refs AS jsonb),
-                1, NULL, :hash, :malicious
+                1, NULL, :hash, :malicious, :scoring_vector
             )
             ON CONFLICT (id) DO UPDATE SET
                 aliases     = ARRAY(SELECT DISTINCT unnest(
@@ -69,6 +91,11 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
                 -- word, so it is never overwritten by one.
                 cvss_vector = COALESCE(vulnerability.cvss_vector, EXCLUDED.cvss_vector),
                 cvss_score  = COALESCE(vulnerability.cvss_score, EXCLUDED.cvss_score),
+                -- Follows the score it explains: kept while the score is kept, taken
+                -- with the score when the score is.
+                cvss_scoring_vector = CASE WHEN vulnerability.cvss_score IS NULL
+                                           THEN EXCLUDED.cvss_scoring_vector
+                                           ELSE vulnerability.cvss_scoring_vector END,
                 severity    = COALESCE(vulnerability.severity, EXCLUDED.severity),
                 modified_at = GREATEST(vulnerability.modified_at, EXCLUDED.modified_at),
                 withdrawn_at = COALESCE(EXCLUDED.withdrawn_at, vulnerability.withdrawn_at),
@@ -91,15 +118,8 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
             "details": advisory.details,
             "cwe": advisory.cwe,
             "vector": advisory.cvss_vector,
-            # Computed here rather than by the parser so the content hash is
-            # untouched (see `NormalisedAdvisory.scoring_vector`). A published number
-            # wins over a computed one; a v4-only record computes to None and the
-            # risk function falls back to the published label.
-            "score": (
-                advisory.cvss_score
-                if advisory.cvss_score is not None
-                else cvss.base_score(advisory.scoring_vector or advisory.cvss_vector)
-            ),
+            "score": score,
+            "scoring_vector": scoring_vector,
             "severity": advisory.severity,
             "published": advisory.published_at,
             "modified": advisory.modified_at,
@@ -112,16 +132,105 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
     )
 
     _replace_ranges(session, advisory, source_record=source_record)
+    _record_source(
+        session,
+        advisory,
+        source_record=source_record,
+        source=source,
+        digest=digest,
+        malicious=is_malicious(advisory),
+    )
+    if unclassified:
+        # The unknown this source was may have been all that held the flag. This
+        # write already revised the advisory, so it is re-correlated either way.
+        _settle_malicious(session, advisory.id)
 
+    return "new" if is_new_vulnerability else "revised"
+
+
+def _classify(
+    session: Session, advisory: NormalisedAdvisory, *, source_record: str, now: datetime
+) -> str:
+    """Fill in an unchanged source's malware classification, recorded before 0020.
+
+    Ingest otherwise stops at an unchanged digest, so a source left unknown by the
+    migration stayed unknown for as long as its record did not change — and an
+    unknown is read as possibly malware, holding the advisory's flag after its only
+    real malware source had withdrawn. A withdrawn record classifies nothing.
+    """
+    malicious = advisory.source_withdrawn_at is None and is_malicious(advisory)
+    session.execute(
+        text(
+            "UPDATE advisory_source SET malicious = :malicious"
+            " WHERE vulnerability_id = :id AND source_record = :rec"
+        ),
+        {"id": advisory.id, "rec": source_record, "malicious": malicious},
+    )
+    if _settle_malicious(session, advisory.id):
+        _revise(session, advisory.id, now)
+        return "revised"
+    return "unchanged"
+
+
+def _settle_malicious(session: Session, vulnerability_id: str) -> bool:
+    """Clear the advisory's malware flag when no source still classifies it as malware.
+
+    The upsert only ever sets `malicious`, so the flag is recomputed from the
+    per-source classifications whenever one could have been the last to hold it: a
+    source retracted, or an unknown one classified. A GHSA with a true MAL- alias
+    counts as much as a MAL- record, and an unknown source counts as possibly
+    malware, never as not. Returns whether the flag was cleared.
+    """
+    cleared = session.execute(
+        text(
+            """
+            UPDATE vulnerability SET malicious = false
+             WHERE id = :id AND malicious
+               AND upper(id) NOT LIKE 'MAL-%'
+               AND NOT EXISTS (
+                   SELECT 1 FROM advisory_source s
+                    WHERE s.vulnerability_id = :id AND s.malicious IS NOT FALSE)
+            """
+        ),
+        {"id": vulnerability_id},
+    ).rowcount
+    return bool(cleared)
+
+
+def _revise(session: Session, vulnerability_id: str, now: datetime) -> None:
+    """A new revision, so the poller and the stale sweep re-correlate the advisory."""
+    session.execute(
+        text(
+            "UPDATE vulnerability SET revision = revision + 1, revised_at = :now"
+            " WHERE id = :id"
+        ),
+        {"id": vulnerability_id, "now": now},
+    )
+
+
+def _record_source(
+    session: Session,
+    advisory: NormalisedAdvisory,
+    *,
+    source_record: str,
+    source: str,
+    digest: str,
+    malicious: bool,
+) -> None:
+    """This source record's ingestion state, and whether it says the advisory is
+    malware — kept per source so the advisory's flag can be recomputed when one is
+    retracted (`_retract_source`)."""
     session.execute(
         text(
             """
             INSERT INTO advisory_source
-                (vulnerability_id, source_record, source, content_hash, modified_at)
-            VALUES (:id, :rec, :source, :hash, :modified)
+                (vulnerability_id, source_record, source, content_hash, modified_at,
+                 malicious)
+            VALUES (:id, :rec, :source, :hash, :modified, :malicious)
             ON CONFLICT (vulnerability_id, source_record) DO UPDATE SET
                 content_hash = EXCLUDED.content_hash,
                 modified_at  = EXCLUDED.modified_at,
+                malicious    = EXCLUDED.malicious,
                 ingested_at  = now()
             """
         ),
@@ -131,10 +240,56 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
             "source": source,
             "hash": digest,
             "modified": advisory.modified_at,
+            "malicious": malicious,
         },
     )
 
-    return "new" if is_new_vulnerability else "revised"
+
+def _retract_source(
+    session: Session,
+    advisory: NormalisedAdvisory,
+    *,
+    source_record: str,
+    digest: str,
+    now: datetime,
+) -> str:
+    """One source record withdrawn; the vulnerability it merged into is not.
+
+    Only that record's ranges go. The row's other fields came from every source and
+    stay, and `withdrawn_at` is left alone — it would hide the CVE from every source.
+    When ranges were removed the vulnerability is revised, so the poller
+    re-correlates it and findings no remaining range supports are closed
+    (`correlate_advisory`).
+    """
+    exists = session.execute(
+        text("SELECT 1 FROM vulnerability WHERE id = :id"), {"id": advisory.id}
+    ).first()
+    if exists is None:
+        # Withdrawn before Athena ever saw it: nothing was contributed, so nothing
+        # is retracted, and no row is created for it.
+        return "unchanged"
+
+    removed = session.execute(
+        delete(AffectedRange).where(
+            AffectedRange.vulnerability_id == advisory.id,
+            AffectedRange.source_record == source_record,
+        )
+    ).rowcount
+    # A withdrawn record classifies nothing any more.
+    _record_source(
+        session,
+        advisory,
+        source_record=source_record,
+        source=advisory.source,
+        digest=digest,
+        malicious=False,
+    )
+    # A withdrawn malware report merged under a CVE (by alias, upstream or related
+    # id) left the flag standing on the sources that never said it.
+    cleared = _settle_malicious(session, advisory.id)
+    if removed or cleared:
+        _revise(session, advisory.id, now)
+    return "revised" if removed or cleared else "unchanged"
 
 
 def is_malicious(advisory: NormalisedAdvisory) -> bool:
@@ -143,7 +298,12 @@ def is_malicious(advisory: NormalisedAdvisory) -> bool:
     OSV publishes those as `MAL-YYYY-N`, sometimes aliased to a GHSA. The id is the
     signal rather than any wording in the summary, which is attacker-adjacent text.
     """
-    ids = [advisory.id, advisory.source_record, *advisory.aliases]
+    if advisory.malicious:
+        return True
+    # Not `aliases`: the OSV adapter folds `related` ids into them for merging, and
+    # a record that only relates to a MAL- report is not malware. The adapter reads
+    # the record's true aliases and sets `malicious` itself.
+    ids = [advisory.id, advisory.source_record]
     return any(isinstance(i, str) and i.upper().startswith("MAL-") for i in ids)
 
 

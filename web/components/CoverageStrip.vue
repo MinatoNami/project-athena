@@ -23,7 +23,7 @@ const read = computed(() => {
       :value="(coverage.assets_fresh ?? 0).toLocaleString()"
       :of="`of ${(coverage.assets_total ?? 0).toLocaleString()}`"
       :progress="read"
-      :status="read !== null && read < 0.9 ? 'warn' : 'good'"
+      :status="read === null ? null : read < 0.9 ? 'warn' : 'good'"
     />
     <StatTile
       label="Never read"
@@ -39,8 +39,9 @@ const read = computed(() => {
     />
     <StatTile
       label="Findings assessed"
-      :value="(findings?.assessed_count ?? 0).toLocaleString()"
-      :of="`of ${(findings?.instance_count ?? 0).toLocaleString()}`"
+      :value="findings ? (findings.assessed_count ?? 0).toLocaleString() : null"
+      :of="findings ? `of ${(findings.instance_count ?? 0).toLocaleString()}` : undefined"
+      hint="could not be counted"
       :progress="findings?.instance_count ? findings.assessed_count / findings.instance_count : null"
     />
     <p class="legend">

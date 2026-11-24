@@ -41,6 +41,38 @@ VERDICT_STATE = {
 }
 
 
+def match_is_current(finding: Finding, vulnerability: Vulnerability) -> bool:
+    """Whether the finding's match facts describe the advisory as it now stands.
+
+    Ingest revises an advisory before correlation re-evaluates its findings, and in
+    between the finding still carries the old range's facts — whether the version
+    is in range, the fixed version. Triaged or investigated then, a verdict about
+    the old range was recorded against the new revision and passed the check
+    meant to catch exactly that. Correlation catches up within the hour (the stale
+    sweep), or at once when the poller queued it; the finding waits until then.
+    """
+    return finding.advisory_revision >= vulnerability.revision
+
+
+def state_for(verdict: str, *, malicious: bool) -> str:
+    """The lifecycle state a verdict moves a finding to.
+
+    Malware is the exception to "not applicable closes it": the score already
+    records that verdict without obeying it (`risk.scoring._malware`), and the state
+    must agree — `false_positive` takes a finding out of every open count, the
+    queue and the CISA lookups. Whether published malware is a false positive is a
+    person's call, so the model's view leaves the finding open for one.
+    """
+    if malicious and verdict == "not_applicable":
+        return "discovered"
+    return VERDICT_STATE.get(verdict, "discovered")
+
+
+def _is_malware(session: Any, finding: Finding) -> bool:
+    vulnerability = session.get(Vulnerability, finding.vulnerability_id)
+    return bool(vulnerability and vulnerability.malicious)
+
+
 @handler("investigate.finding")
 def investigate_finding(payload: dict[str, Any]) -> dict[str, Any]:
     """Investigate one candidate finding.
@@ -57,11 +89,18 @@ def investigate_finding(payload: dict[str, Any]) -> dict[str, Any]:
     # question; without this, investigating a fleet costs a model call per host.
     if (cached := _lookup_cache(context["fingerprint"])) is not None:
         verdict, investigation_id, model = cached
-        _apply(finding_id, verdict, model=model, investigation_id=investigation_id,
-               tokens=0, from_cache=True)
+        outcome = _apply(
+            finding_id, verdict, model=model, investigation_id=investigation_id,
+            tokens=0, from_cache=True, advisory_revision=context["advisory_revision"],
+        )
         log.info("investigation.cache_hit", finding=finding_id,
                  fingerprint=context["fingerprint"][:12])
-        return {"status": "cached", "verdict": verdict.verdict}
+        # A cached answer is discarded on the same terms as a fresh one, and the job
+        # result must say so rather than report it applied.
+        return {
+            "status": "discarded" if outcome.get("discarded") else "cached",
+            "verdict": verdict.verdict,
+        }
 
     with session_scope() as session:
         result = investigate(
@@ -84,10 +123,11 @@ def investigate_finding(payload: dict[str, Any]) -> dict[str, Any]:
     outcome = _apply(
         finding_id, result.verdict, model=result.model,
         investigation_id=investigation_id,
+        advisory_revision=context["advisory_revision"],
         tokens=result.prompt_tokens + result.completion_tokens,
         from_cache=False,
     )
-    return {"status": "investigated", **outcome}
+    return {"status": "discarded" if outcome.get("discarded") else "investigated", **outcome}
 
 
 # ── context ──────────────────────────────────────────────────────────────────
@@ -99,17 +139,20 @@ def _load(finding_id: str) -> dict[str, Any] | None:
         if finding is None or finding.state not in ("discovered", "investigating"):
             return None
 
+        vuln_for_guard = session.get(Vulnerability, finding.vulnerability_id)
+        if vuln_for_guard is not None and not match_is_current(finding, vuln_for_guard):
+            return None
+
         # An uncertain verdict returns the finding to `discovered`, which is correct —
         # it has not been settled. But without this guard a sweep would investigate it
         # again on every pass, forever, at 40 seconds a time. Re-investigation happens
-        # when the advisory changes, not because the answer was inconclusive.
-        vuln_for_guard = session.get(Vulnerability, finding.vulnerability_id)
-        if (
-            finding.investigation_id is not None
-            and vuln_for_guard is not None
-            and finding.advisory_revision >= vuln_for_guard.revision
-        ):
-            return None
+        # when the advisory changes, not because the answer was inconclusive — so the
+        # question is which revision the investigation answered, not which one the
+        # finding was last matched against.
+        if finding.investigation_id is not None and vuln_for_guard is not None:
+            answered = session.get(InvestigationRecord, finding.investigation_id)
+            if answered is None or answered.advisory_revision >= vuln_for_guard.revision:
+                return None
 
         asset = session.get(Asset, finding.asset_id)
         component = session.get(Component, finding.component_id)
@@ -276,11 +319,33 @@ def _apply(
     investigation_id: Any,
     tokens: int,
     from_cache: bool,
+    advisory_revision: int,
 ) -> dict[str, Any]:
     with session_scope() as session:
-        finding = session.get(Finding, finding_id)
+        # Locked, and re-checked under the lock: the model can take minutes, and in
+        # that time correlation may have closed the finding (`unmatched`), a person
+        # may have moved it on, or the advisory may have been revised. A verdict for
+        # a question that no longer stands is recorded, not applied — and nobody is
+        # notified about it. Unchecked, a late "applicable" turned an `unmatched`
+        # finding back into `confirmed`.
+        finding = session.execute(
+            select(Finding)
+            .where(Finding.id == finding_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).scalar_one_or_none()
         if finding is None:
             return {}
+        vulnerability = session.get(Vulnerability, finding.vulnerability_id)
+        current = vulnerability.revision if vulnerability is not None else None
+        # Both the advisory and the finding's match must still be at the revision
+        # the question was asked about: `_load` asks only once they agree.
+        revised = current != advisory_revision or finding.advisory_revision != advisory_revision
+        if finding.state != "investigating" or revised:
+            return _discard(
+                session, finding, verdict, model=model,
+                revised=revised, advisory_revision=advisory_revision,
+            )
 
         risk = score(signals_for(session, finding, verdict))
 
@@ -290,7 +355,7 @@ def _apply(
         finding.risk_band = str(risk.band)
         finding.confidence = verdict.verdict_confidence
         finding.investigation_id = investigation_id
-        finding.state = VERDICT_STATE.get(verdict.verdict, "discovered")
+        finding.state = state_for(verdict.verdict, malicious=_is_malware(session, finding))
         finding.state_changed_at = datetime.now(UTC)
         finding.last_evaluated_at = datetime.now(UTC)
 
@@ -319,6 +384,43 @@ def _apply(
             "score": risk.value,
             "corrections": len(verdict.corrections),
         }
+
+
+def _discard(
+    session: Any,
+    finding: Finding,
+    verdict: Verdict,
+    *,
+    model: str,
+    revised: bool,
+    advisory_revision: int,
+) -> dict[str, Any]:
+    """A verdict that arrived after its question changed.
+
+    Still `investigating` means only the advisory moved: the finding goes back to
+    `discovered` and is asked again against the current revision. Any other state
+    was set by something with more standing than a stale verdict — correlation
+    closing it, a person — and is left exactly as it is.
+    """
+    reset = finding.state == "investigating"
+    if reset:
+        finding.state = "discovered"
+        finding.state_changed_at = datetime.now(UTC)
+    record(
+        session,
+        actor=f"model:{model}",
+        action="INVESTIGATION_DISCARDED",
+        subject=f"finding:{finding.id}",
+        detail={
+            "verdict": verdict.verdict,
+            "reason": "advisory revised" if revised else f"finding is now {finding.state}",
+            "investigated_revision": advisory_revision,
+            "returned_to_discovered": reset,
+        },
+    )
+    if reset:
+        publish(session, topic="findings", subject_id=str(finding.id))
+    return {"verdict": verdict.verdict, "discarded": True}
 
 
 # Bands that are worth interrupting somebody about. Below this an investigation is
@@ -602,6 +704,9 @@ def _load_for_triage(finding_id: str) -> dict[str, Any] | None:
         component = session.get(Component, finding.component_id)
         vulnerability = session.get(Vulnerability, finding.vulnerability_id)
         if not (asset and component and vulnerability):
+            return None
+        # Triage reads the fixed version off the match; an old range's is no basis.
+        if not match_is_current(finding, vulnerability):
             return None
 
         return {

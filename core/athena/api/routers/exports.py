@@ -7,6 +7,7 @@ report, so "who exported which statements, and when" must be answerable the same
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -19,6 +20,15 @@ from athena.db.models import Asset
 from athena.export import sbom_for, vex_document
 
 router = APIRouter(tags=["exports"])
+
+
+def is_uuid(value: str) -> bool:
+    """A malformed id is a missing asset, not a database error answered with a 500."""
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
 
 
 def _download(document: dict[str, Any], filename: str, media_type: str) -> JSONResponse:
@@ -36,7 +46,7 @@ def asset_sbom(
     session: Session = Depends(db),
 ) -> JSONResponse:
     """CycloneDX SBOM of what was last observed on one asset."""
-    asset = session.get(Asset, asset_id)
+    asset = session.get(Asset, asset_id) if is_uuid(asset_id) else None
     if asset is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such asset")
     document = sbom_for(session, asset)
@@ -47,7 +57,11 @@ def asset_sbom(
         subject=f"asset:{asset.id}",
         detail={"components": len(document["components"]), "format": "cyclonedx-1.6"},
     )
-    safe = "".join(c if c.isalnum() or c in "-_." else "-" for c in asset.display_name)[:60]
+    # ASCII only: headers are encoded as latin-1, and a name like "服务-api" kept as is
+    # turned the download into a 500 (and rolled back its audit record).
+    safe = "".join(
+        c if (c.isascii() and c.isalnum()) or c in "-_." else "-" for c in asset.display_name
+    )[:60]
     return _download(document, f"{safe or 'asset'}.cdx.json", "application/vnd.cyclonedx+json")
 
 
@@ -62,7 +76,7 @@ def export_openvex(
 
     `not_affected` is only ever a person's recorded decision; see athena.export.
     """
-    if asset_id is not None and session.get(Asset, asset_id) is None:
+    if asset_id is not None and (not is_uuid(asset_id) or session.get(Asset, asset_id) is None):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such asset")
     # The author is the deployment, not the person: the document travels, and who
     # exported it is recorded in the audit chain rather than published with it.

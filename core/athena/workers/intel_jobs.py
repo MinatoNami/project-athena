@@ -135,8 +135,10 @@ def poll_epss(payload: dict[str, Any]) -> dict[str, Any]:
         record_source_result(
             session, name="epss", succeeded=True, advisories=len(scores),
             # The cursor carries the model, so the intel page can say which EPSS the
-            # scores on every finding came from.
-            cursor=f"{model}@{meta.get('score_date', '')}" if model else None,
+            # scores on every finding came from. Written even when the file did not
+            # name one: an empty cursor is not stored, and the page then credited
+            # these scores to whichever model the previous fetch named.
+            cursor=f"{model or 'unknown'}@{meta.get('score_date', '')}",
         )
     log.info("intel.epss", scored=len(scores), matched=updated, model=model)
     return {"status": "ok", "scored": len(scores), "matched": updated, "model": model}
@@ -146,6 +148,40 @@ def poll_epss(payload: dict[str, Any]) -> dict[str, Any]:
 # twice a day, but an assessment, once written, rarely moves.
 VULNRICHMENT_RECHECK_DAYS = 7
 VULNRICHMENT_BATCH = 200
+
+
+def vulnrichment_due(session: Any, *, limit: int) -> list[str]:
+    """CVEs to ask CISA about: eligible, and with no answer or a stale one.
+
+    Eligibility is shared with the coverage figure on /intel/sources
+    (`athena.intel.enrichment`); the recheck window is this job's alone. Unchecked
+    first, then known-exploited.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import or_, select
+
+    from athena.intel.enrichment import eligible
+
+    cutoff = datetime.now(UTC) - timedelta(days=VULNRICHMENT_RECHECK_DAYS)
+    return list(
+        session.execute(
+            select(Vulnerability.id)
+            .where(
+                *eligible(),
+                or_(
+                    Vulnerability.ssvc_checked_at.is_(None),
+                    Vulnerability.ssvc_checked_at < cutoff,
+                ),
+            )
+            .order_by(
+                Vulnerability.ssvc_checked_at.asc().nulls_first(),
+                Vulnerability.kev.desc(),
+                Vulnerability.id,
+            )
+            .limit(limit)
+        ).scalars()
+    )
 
 
 @handler("intel.enrich.vulnrichment")
@@ -160,28 +196,9 @@ def enrich_vulnrichment(payload: dict[str, Any]) -> dict[str, Any]:
     in Athena could establish — and a rescore follows, because that input moves the
     exploitation factor.
     """
-    from sqlalchemy import text
-
     batch = int(payload.get("limit") or VULNRICHMENT_BATCH)
     with session_scope() as session:
-        ids = [
-            row[0] for row in session.execute(
-                text(
-                    """
-                    SELECT v.id FROM vulnerability v
-                     WHERE v.id LIKE 'CVE-%'
-                       AND (v.ssvc_checked_at IS NULL
-                            OR v.ssvc_checked_at < now() - make_interval(days => :days))
-                       AND EXISTS (SELECT 1 FROM finding f
-                                    WHERE f.vulnerability_id = v.id
-                                      AND f.state NOT IN ('resolved', 'false_positive'))
-                     ORDER BY v.ssvc_checked_at NULLS FIRST, v.kev DESC, v.id
-                     LIMIT :limit
-                    """
-                ),
-                {"days": VULNRICHMENT_RECHECK_DAYS, "limit": batch},
-            )
-        ]
+        ids = vulnrichment_due(session, limit=batch)
 
     found = absent = failed = moved = 0
     errors: list[str] = []
@@ -246,8 +263,21 @@ def correlate_one_advisory(payload: dict[str, Any]) -> dict[str, Any]:
                 subject=f"advisory:{vulnerability_id}",
                 detail=result,
             )
+        if changed_findings(result):
             publish(session, topic="findings", subject_id=vulnerability_id)
     return result
+
+
+# What a correlation run reports that a connected page shows. Not only new
+# findings: a run that only closed findings a retracted range supported, reopened
+# one, or withdrew or restored a match's fix left a connected page showing what was
+# no longer so. Each of those is audited on its own finding.
+FINDING_CHANGES = ("created", "reopened", "unmatched", "undecided", "decided")
+
+
+def changed_findings(result: dict[str, Any]) -> bool:
+    """Whether a correlation run changed anything a findings page shows."""
+    return any(result.get(change) for change in FINDING_CHANGES)
 
 
 @handler("correlate.asset")
@@ -267,6 +297,7 @@ def correlate_one_asset(payload: dict[str, Any]) -> dict[str, Any]:
                 subject=f"asset:{asset_id}",
                 detail=result,
             )
+        if changed_findings(result):
             publish(session, topic="findings", subject_id=str(asset_id))
     return result
 

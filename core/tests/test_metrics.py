@@ -206,3 +206,32 @@ def test_dismissed_and_unfixable_findings_are_not_late(session):
     session.flush()
     after = next(b for b in sla_report(session)["bands"] if b["band"] == "critical")["late"]
     assert after == before
+
+
+def test_a_withdrawn_advisory_is_not_late(session):
+    """Its publisher retracted it, so no list shows the finding and nobody could act
+    on its lateness — a retracted malware record would otherwise stay overdue."""
+    asset = Asset(
+        kind="host", identity_key=f"m:{uuid.uuid4()}", display_name="withdrawn-host",
+        tier="production", exposure="internal", last_inventoried_at=datetime.now(UTC),
+    )
+    vulnerability = Vulnerability(
+        id=f"CVE-W-{uuid.uuid4().hex[:6]}", summary="s", content_hash="h",
+        published_at=datetime.now(UTC), withdrawn_at=datetime.now(UTC),
+    )
+    from athena.db.models import Component
+
+    component = Component(ecosystem="deb", name=f"p{uuid.uuid4().hex[:6]}", version="1")
+    session.add_all([asset, vulnerability, component])
+    session.flush()
+    before = next(b for b in sla_report(session)["bands"] if b["band"] == "critical")
+    old = datetime.now(UTC) - timedelta(days=400)
+    session.add(Finding(
+        group_key=vulnerability.id, vulnerability_id=vulnerability.id, asset_id=asset.id,
+        component_id=component.id, state="confirmed", match_method="distro_advisory",
+        match_confidence=0.95, advisory_revision=1, first_seen=old, state_changed_at=old,
+        risk_band="critical", risk_score=90, investigation_id=uuid.uuid4(),
+    ))
+    session.flush()
+    after = next(b for b in sla_report(session)["bands"] if b["band"] == "critical")
+    assert (after["open"], after["late"]) == (before["open"], before["late"])

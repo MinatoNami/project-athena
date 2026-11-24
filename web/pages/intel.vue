@@ -95,9 +95,9 @@ const ssvc = computed(() => data.value?.cisa_ssvc)
                   of="OpenSSF MAL- records, not withdrawn" />
         <StatTile
           label="CISA SSVC"
-          :value="ssvc ? ssvc.published : null"
-          :of="ssvc ? `of ${plural(ssvc.cves_with_findings, 'CVE')} with findings` : undefined"
-          :progress="ssvc?.cves_with_findings ? ssvc.published / ssvc.cves_with_findings : null"
+          :value="ssvc?.checked ? ssvc.published : null"
+          :of="ssvc ? `of ${plural(ssvc.cves_with_open_findings, 'CVE')} with open findings` : undefined"
+          :progress="ssvc?.cves_with_open_findings ? ssvc.published / ssvc.cves_with_open_findings : null"
           :target="ssvc ? `${ssvc.checked} checked with CISA` : undefined"
           hint="not yet checked"
         />

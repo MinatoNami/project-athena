@@ -403,6 +403,9 @@ class Vulnerability(Base):
     # CVE that was merely checked.
     ssvc_cisa: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
     ssvc_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The vector `cvss_score` was computed from; null when the advisory published
+    # the number itself. Written with the score, never apart from it.
+    cvss_scoring_vector: Mapped[str | None] = mapped_column(Text)
     # An OpenSSF malicious-packages record (`MAL-`): the package is the attack, not
     # a flaw in it. Changes the remediation and the floor; see risk.scoring.
     malicious: Mapped[bool] = mapped_column(
@@ -461,6 +464,11 @@ class AdvisorySource(Base):
     ingested_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    # Whether this record classifies the advisory as malware (its own `MAL-` id, or
+    # a true `MAL-` alias). False once withdrawn; NULL when ingested before this was
+    # recorded (migration 0020), which counts as possibly. `vulnerability.malicious`
+    # is recomputed from these when a source is retracted.
+    malicious: Mapped[bool | None] = mapped_column(Boolean)
 
 
 class IntelSource(Base):
@@ -485,6 +493,8 @@ FINDING_STATES = (
     "awaiting_approval", "remediating", "verifying", "resolved",
     "false_positive", "mitigated", "accepted_risk", "deferred", "no_fix_available",
     "regressed",
+    # Every range that matched it was retracted by its source (migration 0019).
+    "unmatched",
 )
 finding_state_enum = ENUM(*FINDING_STATES, name="finding_state", create_type=False)
 

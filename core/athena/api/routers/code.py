@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from athena.api.deps import Principal, current_principal, db
+from athena.api.routers.exports import is_uuid
 from athena.codefindings import GUIDANCE
 from athena.db.models import Asset, CodeFinding, ScanRun
 
@@ -65,13 +66,27 @@ def _coverage(session: Session, asset_id: str | None) -> dict[str, Any]:
         scanned, oldest, newest = session.execute(
             select(func.count(), func.min(latest.c.at), func.max(latest.c.at)).select_from(latest)
         ).one()
-        failing = session.execute(
-            select(func.count(func.distinct(ScanRun.asset_id))).where(
-                ScanRun.kind == kind,
-                ScanRun.status.in_(("failed", "timeout")),
-                ScanRun.asset_id.in_(repos),
-                ScanRun.asset_id.notin_(select(latest.c.asset_id)),
+        # Failing means the most recent attempt did not succeed — including on a
+        # repository that succeeded once, months ago. Counting only repositories
+        # that never succeeded let a scanner broken since then (a moved digest, a
+        # pull that cannot reach the registry) stand on that one old success.
+        last_attempt = (
+            select(
+                ScanRun.status,
+                func.row_number()
+                .over(
+                    partition_by=ScanRun.asset_id,
+                    order_by=(ScanRun.finished_at.desc().nulls_last(), ScanRun.id.desc()),
+                )
+                .label("n"),
             )
+            .where(ScanRun.kind == kind, ScanRun.asset_id.in_(repos))
+            .subquery()
+        )
+        failing = session.execute(
+            select(func.count())
+            .select_from(last_attempt)
+            .where(last_attempt.c.n == 1, last_attempt.c.status != "succeeded")
         ).scalar_one()
         out[kind] = {
             "scanned": scanned,
@@ -94,6 +109,8 @@ def list_code_findings(
     _: Principal = Depends(current_principal),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
+    if asset_id is not None and not is_uuid(asset_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such asset")
     if kind is not None and kind not in KINDS:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, f"kind must be one of {', '.join(KINDS)}"
@@ -121,11 +138,20 @@ def list_code_findings(
         )
     )
 
+    # Open counts for every kind, whatever `kind` filters the list to: the page
+    # shows a tile per kind beside the list, and counting from the filtered rows
+    # gave the other kind a confident "0 open".
     counts: dict[str, dict[str, int]] = {k: {} for k in KINDS}
-    for finding, _asset in rows:
-        if finding.resolved_at is None:
-            bucket = counts.setdefault(finding.kind, {})
-            bucket[finding.severity] = bucket.get(finding.severity, 0) + 1
+    open_rows = (
+        select(CodeFinding.kind, CodeFinding.severity, func.count())
+        .join(Asset, Asset.id == CodeFinding.asset_id)
+        .where(Asset.tombstoned_at.is_(None), CodeFinding.resolved_at.is_(None))
+        .group_by(CodeFinding.kind, CodeFinding.severity)
+    )
+    if asset_id:
+        open_rows = open_rows.where(CodeFinding.asset_id == asset_id)
+    for finding_kind, severity, n in session.execute(open_rows).all():
+        counts.setdefault(finding_kind, {})[severity] = n
 
     return {
         "findings": [_serialise(f, a) for f, a in rows[:limit]],

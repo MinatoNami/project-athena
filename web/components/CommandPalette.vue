@@ -69,7 +69,12 @@ let searchTimer: ReturnType<typeof setTimeout> | undefined
 let searchSeq = 0
 
 watch(open, async (value) => {
-  if (!value) return
+  // However it closes — Escape, a choice, or the shortcut pressed again in the
+  // shell, which sets the model directly — focus goes back where it came from.
+  if (!value) {
+    nextTick(() => returnFocus?.focus?.())
+    return
+  }
   returnFocus = document.activeElement as HTMLElement | null
   text.value = ''
   note.value = null
@@ -119,7 +124,8 @@ const items = computed<Item[]>(() => {
     out.push({
       id: `f-${g.group_key}`, group: 'Findings',
       label: `${g.vulnerability_id}${g.summary ? ` — ${g.summary}` : ''}`,
-      hint: `${g.instance_count} asset${g.instance_count === 1 ? '' : 's'}${g.malicious ? ' · malware' : g.kev ? ' · KEV' : ''}`,
+      // Instances, not assets: one asset with two affected packages is two.
+      hint: `${g.instance_count} affected${g.malicious ? ' · malware' : g.kev ? ' · KEV' : ''}`,
       tone: g.malicious || g.kev ? 'bad' : undefined,
       run: go(first ? `/findings/${first.finding_id}` : '/findings'),
     })
@@ -149,7 +155,6 @@ const grouped = computed(() => {
 
 function close() {
   open.value = false
-  nextTick(() => returnFocus?.focus?.())
 }
 
 // The highlight follows the item, not the position: finding results arrive after

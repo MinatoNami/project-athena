@@ -47,13 +47,19 @@ const isMac = ref(true)
 onMounted(() => {
   isMac.value = /Mac|iPhone|iPad/.test(navigator.platform)
   const onKey = (e: KeyboardEvent) => {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    // ⌘K on a Mac, Ctrl+K elsewhere — not both: on a Mac, Ctrl+K in a text field is
+    // "delete to end of line", and taking it opened the palette over a half-written
+    // suppression reason.
+    if ((isMac.value ? e.metaKey : e.ctrlKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault()
       paletteOpen.value = !paletteOpen.value
       return
     }
     const t = e.target as HTMLElement | null
-    const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
+    const typing = t && (
+      t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT'
+      || t.isContentEditable
+    )
     if (e.key === '/' && !typing && !paletteOpen.value) {
       e.preventDefault()
       paletteOpen.value = true

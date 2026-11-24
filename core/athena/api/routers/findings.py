@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from athena.api.deps import Principal, current_principal, db
+from athena.api.routers.exports import is_uuid
 from athena.audit import record
 from athena.config import get_settings
 from athena.db.models import (
@@ -60,6 +61,7 @@ def list_findings(
     include_baseline: bool = False,
     q: str | None = None,
     assessed: bool | None = None,
+    fully_assessed: bool | None = None,
     exposure: str | None = None,
     tier: str | None = None,
     has_fix: bool | None = None,
@@ -84,6 +86,8 @@ def list_findings(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"Unknown sort {sort!r} — expected one of {', '.join(SORTS)}",
         )
+    if asset_id is not None and not is_uuid(asset_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such asset")
 
     page = query_findings(
         session,
@@ -95,6 +99,7 @@ def list_findings(
             include_baseline=include_baseline,
             q=q,
             assessed=assessed,
+            fully_assessed=fully_assessed,
             # `kev_only` predates the facet set and is kept so existing callers and
             # bookmarks keep working.
             kev=kev_only,
@@ -110,10 +115,17 @@ def list_findings(
         ),
     )
 
-    no_fix_count = session.execute(
+    # Over the population the list draws from — a withdrawn advisory's findings
+    # are in no list, with or without `include_no_fix` — and the asset it is scoped
+    # to, if any: this number is shown as what the list is holding back.
+    no_fix = (
         select(func.count(func.distinct(Finding.vulnerability_id)))
-        .where(Finding.state == "no_fix_available")
-    ).scalar_one()
+        .join(Vulnerability, Vulnerability.id == Finding.vulnerability_id)
+        .where(Finding.state == "no_fix_available", Vulnerability.withdrawn_at.is_(None))
+    )
+    if asset_id:
+        no_fix = no_fix.where(Finding.asset_id == asset_id)
+    no_fix_count = session.execute(no_fix).scalar_one()
     total_assets = session.execute(
         select(func.count()).select_from(Asset).where(Asset.tombstoned_at.is_(None))
     ).scalar_one()
@@ -298,9 +310,17 @@ def _prioritization(
     from athena.risk import deadline, ssvc
 
     vector = vulnerability.cvss_vector
-    computed = cvss.base_score(vector)
+    # The vector the stored score came from. A record publishing v4.0 then v3.1
+    # keeps the v4 one as `cvss_vector`, while the score is computed from the v3.1:
+    # compared with `cvss_vector`, that score read as the advisory's own number.
+    # Rows scored before the column existed fall back to the published vector.
+    scoring = vulnerability.cvss_scoring_vector
+    if scoring is None and vulnerability.cvss_score is not None:
+        if cvss.base_score(vector) == vulnerability.cvss_score:
+            scoring = vector
+    shown = scoring or vector
     try:
-        version = cvss.parse(vector).version
+        version = cvss.parse(shown).version
     except cvss.VectorError:
         version = None
     today = datetime.now(UTC).date()
@@ -346,14 +366,16 @@ def _prioritization(
             "forensic_triage": vulnerability.kev_forensic_triage,
         },
         "cvss": {
-            "vector": vector,
+            "vector": shown,
             "version": version,
             "score": vulnerability.cvss_score,
-            # Whether the stored number is the one this vector computes to. A
-            # mismatch means the advisory published a score of its own, which is
-            # kept — but the page should not imply the vector produced it.
-            "computed_from_vector": computed is not None
-            and vulnerability.cvss_score == computed,
+            # Whether Athena computed the stored number from `vector`. False means
+            # the advisory published a score of its own, which is kept — but the
+            # page should not imply the vector produced it.
+            "computed_from_vector": scoring is not None,
+            # The record's first vector, when it is not the one scored (a v4.0
+            # listed before the v3.1 the score came from).
+            "published_vector": vector if scoring and vector != scoring else None,
             "scored": vulnerability.cvss_score is not None,
         },
         "malicious": vulnerability.malicious,
@@ -499,28 +521,30 @@ def intel_sources(
             Vulnerability.malicious.is_(True), Vulnerability.withdrawn_at.is_(None)
         )
     ).scalar_one()
-    # CISA's own SSVC coverage, over the CVEs that matter here: those with findings.
-    relevant = select(Finding.vulnerability_id).distinct()
-    ssvc_checked, ssvc_published = session.execute(
+    # CISA's own SSVC coverage, over exactly the CVEs the enrichment job looks up —
+    # the same predicate, not a second copy of it. A denominator the job never works
+    # through (resolved findings, withdrawn CVEs) kept the figure below its total
+    # however long the job ran.
+    from athena.intel.enrichment import eligible
+
+    relevant_cves, ssvc_checked, ssvc_published = session.execute(
         select(
+            func.count(),
             func.count().filter(Vulnerability.ssvc_checked_at.is_not(None)),
             # Typed rather than IS NOT NULL, so a JSON `null` written by any older
             # path is still read as "none published".
             func.count().filter(func.jsonb_typeof(Vulnerability.ssvc_cisa) == "object"),
-        ).where(Vulnerability.id.in_(relevant), Vulnerability.id.like("CVE-%"))
-    ).one()
-    relevant_cves = session.execute(
-        select(func.count()).select_from(Vulnerability).where(
-            Vulnerability.id.in_(relevant), Vulnerability.id.like("CVE-%")
         )
-    ).scalar_one()
+        .select_from(Vulnerability)
+        .where(*eligible())
+    ).one()
     return {
         "sources": sources,
         "advisories": total,
         "kev_advisories": kev,
         "malicious_advisories": malicious,
         "cisa_ssvc": {
-            "cves_with_findings": relevant_cves,
+            "cves_with_open_findings": relevant_cves,
             "checked": ssvc_checked,
             "published": ssvc_published,
         },

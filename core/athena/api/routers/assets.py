@@ -30,6 +30,15 @@ from athena.remediation import link_built_images
 
 router = APIRouter(tags=["inventory"])
 
+# How many of an asset's packages its detail response lists. Totals are counted
+# over all of them regardless.
+COMPONENT_LIST_LIMIT = 1000
+
+# Findings the list can show at all: not from a withdrawn advisory, and still
+# supported by a published range. Counts set beside the list (the baseline preview
+# is subtracted from its total) or ranked by it must leave out what it leaves out.
+_LISTED = (Vulnerability.withdrawn_at.is_(None), Finding.state != "unmatched")
+
 TIERS = {"production", "staging", "development", "personal", "unknown"}
 EXPOSURES = {"internet", "internal", "isolated", "unknown"}
 
@@ -212,7 +221,10 @@ def unclassified(
 
     finding_counts = dict(
         session.execute(
-            select(Finding.asset_id, func.count()).group_by(Finding.asset_id)
+            select(Finding.asset_id, func.count())
+            .join(Vulnerability, Vulnerability.id == Finding.vulnerability_id)
+            .where(*_LISTED)
+            .group_by(Finding.asset_id)
         ).all()
     )
 
@@ -353,7 +365,17 @@ def get_asset(
         .join(AssetComponent, AssetComponent.component_id == Component.id)
         .where(AssetComponent.asset_id == asset.id)
         .order_by(Component.ecosystem, Component.name)
-        .limit(1000)
+        .limit(COMPONENT_LIST_LIMIT)
+    ).all()
+    # Totals over everything installed, not over the listed page: the package tile
+    # and the ecosystem chart are totals, and a total that stops at the page size
+    # (and, sorted by ecosystem, drops whole ecosystems past it) undercounts quietly.
+    by_ecosystem = session.execute(
+        select(Component.ecosystem, func.count())
+        .join(AssetComponent, AssetComponent.component_id == Component.id)
+        .where(AssetComponent.asset_id == asset.id)
+        .group_by(Component.ecosystem)
+        .order_by(func.count().desc(), Component.ecosystem)
     ).all()
 
     runs = session.execute(
@@ -371,7 +393,8 @@ def get_asset(
     ).scalars().all()
 
     return {
-        **_serialise(asset, component_count=len(components)),
+        **_serialise(asset, component_count=sum(n for _, n in by_ecosystem)),
+        "ecosystems": [{"ecosystem": e or "unknown", "count": n} for e, n in by_ecosystem],
         "components": [
             {
                 "id": str(c.id),
@@ -480,6 +503,20 @@ NOT_SCANNED_DIRECTLY = {
 
 NO_NODE = "No node is enrolled for this host, so there is nothing to collect from."
 
+UNREFERENCABLE_IMAGE = (
+    "This image has no repository name and no usable tag or digest, so the scanner "
+    "cannot locate it. Scan the image it was tagged as, or the container's image."
+)
+
+
+def _image_is_referencable(asset: Asset) -> bool:
+    """The worker's own test (`workers.image`): a repository, and a tag or digest."""
+    attrs = asset.attributes or {}
+    repository, tag, digest = attrs.get("repository"), attrs.get("tag"), attrs.get("digest")
+    if not repository or repository == "<none>":
+        return False
+    return bool((tag and tag != "<none>") or (digest and str(digest).startswith("sha256:")))
+
 
 class ScanOffer(NamedTuple):
     """What asking for a scan right now would do, and when it would do nothing, why.
@@ -508,6 +545,10 @@ def _scan_offer(session: Session, asset: Asset) -> ScanOffer:
             select(Node).where(Node.asset_id == asset.id, Node.revoked_at.is_(None))
         ).scalars().first()
         return ScanOffer(COLLECT, node=node) if node is not None else ScanOffer(None, NO_NODE)
+    if asset.kind == AssetKind.IMAGE and not _image_is_referencable(asset):
+        # Offered, it was the button that fails when pressed: the worker refuses
+        # dangling `<none>` images before it starts.
+        return ScanOffer(None, UNREFERENCABLE_IMAGE)
     if (job_kind := SCAN_JOBS.get(asset.kind)) is not None:
         return ScanOffer(job_kind)
     return ScanOffer(
@@ -682,7 +723,7 @@ def _baseline_preview(session: Session, asset_id: str | None) -> dict[str, Any]:
         .select_from(Finding)
         .join(Asset, Asset.id == Finding.asset_id)
         .join(Vulnerability, Vulnerability.id == Finding.vulnerability_id)
-        .where(Asset.tombstoned_at.is_(None), _is_new())
+        .where(Asset.tombstoned_at.is_(None), _is_new(), *_LISTED)
     )
     if asset_id:
         stmt = stmt.where(Finding.asset_id == asset_id)
@@ -729,6 +770,7 @@ def _exempt_count(session: Session, asset_id: str | None) -> int:
             Asset.tombstoned_at.is_(None),
             Finding.state != "no_fix_available",
             (Vulnerability.kev.is_(True)) | (_BAND_RANK >= 3),
+            *_LISTED,
         )
     )
     if asset_id:

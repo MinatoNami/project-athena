@@ -265,8 +265,15 @@ def _ranges_for(session: Session, ecosystem: str, package: str) -> dict[str, lis
 
 def _record(
     session: Session, candidate: CandidateFinding, *, vulnerability: Vulnerability
-) -> tuple[Finding, bool]:
-    """Create or refresh a candidate finding. Always `discovered`, never confirmed."""
+) -> tuple[Finding, str]:
+    """Create or refresh a candidate finding. Always `discovered`, never confirmed.
+
+    Returns the finding and what happened to it: "created", "reopened" (it had been
+    `unmatched` and a range covers it again), "decided" (its match had been
+    undecided and is a match again, with a fix back on it) or "refreshed". The
+    callers publish on all but the last — a page must hear about a finding coming
+    back, or its fix changing, as much as about a new one.
+    """
     existing = session.execute(
         select(Finding).where(
             Finding.vulnerability_id == candidate.vulnerability_id,
@@ -284,6 +291,47 @@ def _record(
         ):
             existing.state = "discovered"
             existing.state_changed_at = datetime.now(UTC)
+        # Matched again after a source retracted the range behind it: a corrected or
+        # re-published range makes it real again (see `_close_unmatched`).
+        reopened = existing.state == "unmatched"
+        # Its match had been undecided, and the fix with it (`_close_unmatched`).
+        decided = existing.match_method == "uncomparable"
+        if reopened:
+            from athena.audit import record
+
+            existing.state = (
+                "discovered"
+                if candidate.fixed_version or vulnerability.malicious
+                else "no_fix_available"
+            )
+            existing.state_changed_at = now
+            # Whatever was concluded about it answered a match that was since
+            # retracted; this is a different one. Kept, the old verdict stood as an
+            # assessment of the new range, and the triage sweep (which wants no
+            # investigation) and `_load` (which wants an older revision) both passed
+            # the finding by — so it was never looked at again. Cleared, it is queued
+            # like any new finding. The investigation itself stays on record.
+            previous = existing.investigation_id
+            existing.investigation_id = None
+            existing.risk_score = None
+            existing.risk_band = None
+            existing.confidence = None
+            existing.triage_disposition = None
+            existing.triage_reason = None
+            existing.triage_confidence = None
+            existing.triaged_at = None
+            record(
+                session,
+                actor="system:correlation",
+                action="FINDING_REMATCHED",
+                subject=f"finding:{existing.id}",
+                detail={
+                    "vulnerability_id": vulnerability.id,
+                    "advisory_revision": vulnerability.revision,
+                    "state": existing.state,
+                    "assessment_cleared": str(previous) if previous else None,
+                },
+            )
         existing.match_method = candidate.match_method
         existing.match_confidence = candidate.match_confidence
         existing.matched_range_id = candidate.matched_range_id
@@ -293,7 +341,26 @@ def _record(
         existing.fixed_version = candidate.fixed_version
         existing.advisory_revision = candidate.advisory_revision
         existing.last_evaluated_at = now
-        return existing, False
+        if reopened:
+            return existing, "reopened"
+        if decided:
+            from athena.audit import record
+
+            # The pair to FINDING_MATCH_UNDECIDED: the match, and its fix, are back.
+            record(
+                session,
+                actor="system:correlation",
+                action="FINDING_MATCH_DECIDED",
+                subject=f"finding:{existing.id}",
+                detail={
+                    "vulnerability_id": vulnerability.id,
+                    "advisory_revision": vulnerability.revision,
+                    "match_method": existing.match_method,
+                    "fixed_version": existing.fixed_version,
+                },
+            )
+            return existing, "decided"
+        return existing, "refreshed"
 
     # A distribution routinely publishes an advisory before, or without, a fix.
     # Those are real findings but nothing can be done about them, and mixing them
@@ -326,7 +393,7 @@ def _record(
     session.flush()
 
     _attach_evidence(session, finding, candidate, vulnerability)
-    return finding, True
+    return finding, "created"
 
 
 def _attach_evidence(
@@ -395,7 +462,7 @@ def correlate_asset(session: Session, asset: Asset) -> dict[str, Any]:
         .where(AssetComponent.asset_id == asset.id)
     ).scalars().all()
 
-    created = evaluated = matched = 0
+    created = evaluated = matched = reopened = decided = 0
     for component in rows:
         grouped = _ranges_for(session, component.ecosystem, component.name)
         for vuln_id, ranges in grouped.items():
@@ -415,7 +482,7 @@ def correlate_asset(session: Session, asset: Asset) -> dict[str, Any]:
                 continue
 
             matched += 1
-            _, is_new = _record(
+            _, outcome = _record(
                 session,
                 _candidate(
                     vulnerability_id=vuln_id,
@@ -430,9 +497,18 @@ def correlate_asset(session: Session, asset: Asset) -> dict[str, Any]:
                 ),
                 vulnerability=vulnerability,
             )
-            created += int(is_new)
+            created += int(outcome == "created")
+            reopened += int(outcome == "reopened")
+            decided += int(outcome == "decided")
 
-    return {"components": len(rows), "evaluated": evaluated, "matched": matched, "created": created}
+    return {
+        "components": len(rows),
+        "evaluated": evaluated,
+        "matched": matched,
+        "created": created,
+        "reopened": reopened,
+        "decided": decided,
+    }
 
 
 def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any]:
@@ -445,6 +521,10 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
     if vulnerability is None:
         return {"status": "unknown_advisory"}
     if vulnerability.withdrawn_at is not None:
+        # Nothing to match, but its findings have now been looked at against this
+        # revision — withdrawal itself is a revision, and leaving them behind it kept
+        # the advisory in the hourly stale sweep for good.
+        _mark_evaluated(session, vulnerability)
         return {"status": "withdrawn", "matched": 0}
 
     ranges = session.execute(
@@ -455,7 +535,12 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
     for r in ranges:
         by_package.setdefault((r.ecosystem, r.package), []).append(r)
 
-    matched = created = candidates = 0
+    matched = created = candidates = reopened = decided = 0
+    matched_pairs: set[tuple[Any, Any]] = set()
+    # Not affected only for want of an answer — a version that could not be ordered
+    # against a range, a release-specific range on an asset whose release is not
+    # known. Left open: closing them would report an unknown as a retraction.
+    undecided: set[tuple[Any, Any]] = set()
     for (ecosystem, package), package_ranges in by_package.items():
         installed = session.execute(
             select(Component, AssetComponent.asset_id)
@@ -474,10 +559,13 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
                 distro_release=release_of(asset) if asset else None,
             )
             if not affected:
+                if _undecided(method, conflicts):
+                    undecided.add((asset_id, component.id))
                 continue
 
             matched += 1
-            _, is_new = _record(
+            matched_pairs.add((asset_id, component.id))
+            _, outcome = _record(
                 session,
                 _candidate(
                     vulnerability_id=vulnerability_id,
@@ -492,7 +580,14 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
                 ),
                 vulnerability=vulnerability,
             )
-            created += int(is_new)
+            created += int(outcome == "created")
+            reopened += int(outcome == "reopened")
+            decided += int(outcome == "decided")
+
+    unmatched, became_undecided = _close_unmatched(
+        session, vulnerability, matched_pairs, undecided
+    )
+    _mark_evaluated(session, vulnerability)
 
     return {
         "status": "ok",
@@ -500,7 +595,146 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
         "candidates": candidates,
         "matched": matched,
         "created": created,
+        "reopened": reopened,
+        "unmatched": unmatched,
+        # Matches that became undecided (their fix withdrawn from the page) or were
+        # decided again (a fix back on it). Counted so the run is published.
+        "undecided": became_undecided,
+        "decided": decided,
     }
+
+
+def _mark_evaluated(session: Session, vulnerability: Vulnerability) -> None:
+    """Every finding of this advisory has now been weighed against its revision.
+
+    `_record` brings matched findings up to date, but a finding that did not match —
+    unmatched, resolved, a package since removed — kept its old revision, and
+    `stale_findings` re-queued the advisory every hour, indefinitely. The revision
+    marks what a finding was last evaluated against, and this run evaluated all of
+    them.
+    """
+    session.execute(
+        text(
+            "UPDATE finding SET advisory_revision = :rev"
+            " WHERE vulnerability_id = :id AND advisory_revision < :rev"
+        ),
+        {"rev": vulnerability.revision, "id": vulnerability.id},
+    )
+
+
+# States a finding can be in while its match is still the reason it exists. Later
+# states (a fix under way, a decision taken) are left to their own owners.
+OPEN_STATES = ("discovered", "investigating", "confirmed", "no_fix_available", "regressed")
+
+
+def _undecided(method: str, conflicts: list[dict[str, Any]]) -> bool:
+    """Whether a not-affected evaluation is really "could not say".
+
+    `evaluate` answers not-affected both when every range excludes the version and
+    when it could not order the version against one (`uncomparable`) or could not
+    apply a release-specific range because the asset's release is unknown. Only the
+    first is a retraction.
+    """
+    return method == "uncomparable" or any(
+        c.get("says") in ("uncomparable", "unknown") for c in conflicts
+    )
+
+
+def _close_unmatched(
+    session: Session,
+    vulnerability: Vulnerability,
+    matched: set[tuple[Any, Any]],
+    undecided: set[tuple[Any, Any]],
+) -> tuple[int, int]:
+    """Close open findings that no remaining range supports.
+
+    Returns how many were closed, and how many matches became undecided this run —
+    both changes a connected page must hear about.
+
+    Correlation used to only add and refresh matches, so a range its source
+    retracted — a withdrawn duplicate GHSA, a corrected bound — left behind every
+    finding it had produced, matching nothing and listed forever. Only findings on
+    packages still installed are closed here: one whose package has gone is
+    inventory's to resolve, for a different reason.
+
+    `matched` and `undecided` are (asset, component) pairs from this run. A matched
+    finding was refreshed by `_record`. An undecided one stays open, but its match
+    is restated as what this revision supports — uncertain, with no fixed version
+    it vouches for — rather than left saying what the previous one did: it is about
+    to be marked evaluated against this revision, and investigation trusts a
+    current revision to mean a current match.
+    """
+    from athena.audit import record
+
+    open_findings = session.execute(
+        select(Finding).where(
+            Finding.vulnerability_id == vulnerability.id,
+            Finding.state.in_(OPEN_STATES),
+        )
+    ).scalars().all()
+    now = datetime.now(UTC)
+    closed = became_undecided = 0
+    for finding in open_findings:
+        pair = (finding.asset_id, finding.component_id)
+        if pair in matched:
+            continue
+        if pair in undecided:
+            if finding.match_method != "uncomparable":
+                became_undecided += 1
+                # What the previous range said, kept as history rather than as the
+                # current match: its fixed version is an upgrade this revision no
+                # longer vouches for, and triage, investigation and the fix page all
+                # read `fixed_version` as current.
+                record(
+                    session,
+                    actor="system:correlation",
+                    action="FINDING_MATCH_UNDECIDED",
+                    subject=f"finding:{finding.id}",
+                    detail={
+                        "vulnerability_id": vulnerability.id,
+                        "advisory_revision": vulnerability.revision,
+                        "previous": {
+                            "match_method": finding.match_method,
+                            "matched_source": finding.matched_source,
+                            "fixed_version": finding.fixed_version,
+                            "fix_channel": finding.fix_channel,
+                        },
+                    },
+                )
+            finding.match_method = "uncomparable"
+            finding.match_confidence = MATCH_CONFIDENCE["uncomparable"]
+            finding.matched_range_id = None
+            finding.matched_source = None
+            finding.matched_release = None
+            finding.fixed_version = None
+            finding.fix_channel = None
+            finding.last_evaluated_at = now
+            continue
+        installed = session.execute(
+            select(AssetComponent.asset_id).where(
+                AssetComponent.asset_id == finding.asset_id,
+                AssetComponent.component_id == finding.component_id,
+            )
+        ).first()
+        if installed is None:
+            continue
+        finding.state = "unmatched"
+        finding.state_changed_at = now
+        finding.last_evaluated_at = now
+        finding.advisory_revision = vulnerability.revision
+        record(
+            session,
+            actor="system:correlation",
+            action="FINDING_UNMATCHED",
+            subject=f"finding:{finding.id}",
+            detail={
+                "vulnerability_id": vulnerability.id,
+                "advisory_revision": vulnerability.revision,
+                "reason": "no published range covers the installed version any more",
+            },
+        )
+        closed += 1
+    return closed, became_undecided
 
 
 def stale_findings(session: Session, limit: int = 500) -> list[str]:

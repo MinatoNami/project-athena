@@ -13,6 +13,6 @@ export async function downloadJson(path: string, filename: string): Promise<numb
   a.href = url
   a.download = filename
   a.click()
-  URL.revokeObjectURL(url)
+  revokeLater(url)
   return text.length
 }

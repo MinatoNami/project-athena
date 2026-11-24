@@ -250,3 +250,57 @@ def test_sbom_for_a_never_scanned_asset_says_so(session):
     props = {p["name"]: p["value"] for p in bom["metadata"]["properties"]}
     assert bom["components"] == []
     assert "never scanned" in props["athena:completeness"]
+
+
+@pytest.mark.parametrize(
+    ("clone_url", "published"),
+    [
+        (
+            "https://x-access-token:ghp_TOKENVALUE123@github.com/acme/api.git",
+            "https://github.com/acme/api.git",
+        ),
+        (
+            "https://user@git.example.com:8443/team/svc?token=abc#x",
+            "https://git.example.com:8443/team/svc",
+        ),
+        ("git@github.com:acme/api.git", "ssh://github.com/acme/api.git"),
+        # An IPv6 literal keeps the brackets `hostname` strips.
+        (
+            "https://bot:TOKEN@[fd00::5]:3000/acme/api.git",
+            "https://[fd00::5]:3000/acme/api.git",
+        ),
+    ],
+)
+def test_a_repository_product_id_never_carries_credentials(clone_url, published):
+    """The VEX leaves Athena; a token in the stored clone URL must not go with it."""
+    repo = Asset(
+        id=uuid.uuid4(),
+        kind="repository",
+        identity_key="github.com/acme/api",
+        display_name="acme/api",
+        attributes={"clone_url": clone_url},
+    )
+    pid = product_id(repo)
+    assert pid == published
+    assert "TOKEN" not in pid and "token=" not in pid and "@" not in pid.split("//", 1)[-1]
+
+
+def test_sbom_status_comes_from_the_inventory_run_not_a_later_code_scan(session, estate):
+    """A config scan that succeeded after a partial inventory run must not make the
+    SBOM claim its contents were read completely."""
+    image, _ = estate
+    session.add(
+        ScanRun(
+            asset_id=image.id,
+            kind="misconfiguration",
+            tool="trivy",
+            tool_version="0.76.2",
+            status="succeeded",
+            started_at=datetime.now(UTC) + timedelta(minutes=5),
+            finished_at=datetime.now(UTC) + timedelta(minutes=6),
+        )
+    )
+    session.flush()
+    props = {p["name"]: p["value"] for p in sbom_for(session, image)["metadata"]["properties"]}
+    assert props["athena:scan_status"] == "partial"
+    assert "may be incomplete" in props["athena:completeness"]
