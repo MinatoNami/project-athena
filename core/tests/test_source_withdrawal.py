@@ -206,7 +206,12 @@ def test_a_bound_that_cannot_be_compared_leaves_the_finding_open(session):
 
     result = correlate_advisory(session, cve)
     assert result["unmatched"] == 0
-    assert _finding(session, cve, host).state == before
+    finding = _finding(session, cve, host)
+    assert finding.state == before
+    # Marked evaluated against this revision, so its match must say what this
+    # revision supports — uncertain — not what the last one did.
+    assert finding.match_method == "uncomparable"
+    assert finding.match_confidence < 0.5
 
 
 def test_a_withdrawn_malware_report_takes_its_flag_with_it(session):
@@ -246,3 +251,49 @@ def test_a_withdrawn_duplicate_leaves_a_malware_flag_another_report_still_holds(
     vulnerability = session.get(Vulnerability, cve)
     session.refresh(vulnerability)
     assert vulnerability.malicious is True, f"{second} still says it is malware"
+
+
+def test_a_ghsa_with_a_malware_alias_keeps_the_flag_when_the_report_goes(session):
+    """OSV gives some GHSAs a true MAL- alias. That source classifies the advisory as
+    malware on its own, so a separate MAL- report withdrawing does not clear it."""
+    cve = f"CVE-2099-{uuid.uuid4().int % 10**9}"
+    package = f"pkg-{uuid.uuid4().hex[:6]}"
+    mal = f"MAL-2099-{uuid.uuid4().hex[:6]}"
+    ghsa = f"GHSA-{uuid.uuid4().hex[:4]}-5555-6666"
+    upsert_advisory(session, parse(_record(mal, cve, package) | {"aliases": [], "related": [cve]}))
+    upsert_advisory(session, parse(_record(ghsa, cve, package) | {"aliases": [cve, mal]}))
+
+    withdrawn = _record(mal, cve, package, withdrawn="2026-11-10T00:00:00Z")
+    upsert_advisory(session, parse(withdrawn | {"aliases": [], "related": [cve]}))
+    vulnerability = session.get(Vulnerability, cve)
+    session.refresh(vulnerability)
+    assert vulnerability.malicious is True, f"{ghsa} still says it is malware"
+
+    # And once that source goes too, nothing does.
+    gone = _record(ghsa, cve, package, withdrawn="2026-11-11T00:00:00Z")
+    assert upsert_advisory(session, parse(gone | {"aliases": [cve, mal]})) == "revised"
+    session.refresh(vulnerability)
+    assert vulnerability.malicious is False
+
+
+def test_a_source_ingested_before_classification_was_kept_holds_the_flag(session):
+    """Sources recorded before migration 0020 have no classification. Unknown is
+    read as possibly malware: a retraction never clears what one may hold."""
+    from sqlalchemy import text
+
+    cve = f"CVE-2099-{uuid.uuid4().int % 10**9}"
+    package = f"pkg-{uuid.uuid4().hex[:6]}"
+    mal = f"MAL-2099-{uuid.uuid4().hex[:6]}"
+    pysec = f"PYSEC-{uuid.uuid4().hex[:8]}"
+    upsert_advisory(session, parse(_record(mal, cve, package) | {"aliases": [], "related": [cve]}))
+    upsert_advisory(session, parse(_record(pysec, cve, package)))
+    session.execute(
+        text("UPDATE advisory_source SET malicious = NULL WHERE source_record = :r"),
+        {"r": pysec},
+    )
+
+    withdrawn = _record(mal, cve, package, withdrawn="2026-11-10T00:00:00Z")
+    upsert_advisory(session, parse(withdrawn | {"aliases": [], "related": [cve]}))
+    vulnerability = session.get(Vulnerability, cve)
+    session.refresh(vulnerability)
+    assert vulnerability.malicious is True

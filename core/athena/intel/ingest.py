@@ -127,16 +127,41 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
     )
 
     _replace_ranges(session, advisory, source_record=source_record)
+    _record_source(
+        session,
+        advisory,
+        source_record=source_record,
+        source=source,
+        digest=digest,
+        malicious=is_malicious(advisory),
+    )
 
+    return "new" if is_new_vulnerability else "revised"
+
+
+def _record_source(
+    session: Session,
+    advisory: NormalisedAdvisory,
+    *,
+    source_record: str,
+    source: str,
+    digest: str,
+    malicious: bool,
+) -> None:
+    """This source record's ingestion state, and whether it says the advisory is
+    malware — kept per source so the advisory's flag can be recomputed when one is
+    retracted (`_retract_source`)."""
     session.execute(
         text(
             """
             INSERT INTO advisory_source
-                (vulnerability_id, source_record, source, content_hash, modified_at)
-            VALUES (:id, :rec, :source, :hash, :modified)
+                (vulnerability_id, source_record, source, content_hash, modified_at,
+                 malicious)
+            VALUES (:id, :rec, :source, :hash, :modified, :malicious)
             ON CONFLICT (vulnerability_id, source_record) DO UPDATE SET
                 content_hash = EXCLUDED.content_hash,
                 modified_at  = EXCLUDED.modified_at,
+                malicious    = EXCLUDED.malicious,
                 ingested_at  = now()
             """
         ),
@@ -146,10 +171,9 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
             "source": source,
             "hash": digest,
             "modified": advisory.modified_at,
+            "malicious": malicious,
         },
     )
-
-    return "new" if is_new_vulnerability else "revised"
 
 
 def _retract_source(
@@ -182,7 +206,34 @@ def _retract_source(
             AffectedRange.source_record == source_record,
         )
     ).rowcount
-    if removed:
+    # A withdrawn record classifies nothing any more.
+    _record_source(
+        session,
+        advisory,
+        source_record=source_record,
+        source=advisory.source,
+        digest=digest,
+        malicious=False,
+    )
+    # The upsert only ever sets `malicious`, so a withdrawn malware report merged
+    # under a CVE (by alias, upstream or related id) left the flag standing on the
+    # sources that never said it. It is recomputed from the sources that remain —
+    # a GHSA with a true MAL- alias counts as much as a MAL- record — and a source
+    # ingested before that was recorded counts as possibly malware, never as not.
+    cleared = session.execute(
+        text(
+            """
+            UPDATE vulnerability SET malicious = false
+             WHERE id = :id AND malicious
+               AND upper(id) NOT LIKE 'MAL-%'
+               AND NOT EXISTS (
+                   SELECT 1 FROM advisory_source s
+                    WHERE s.vulnerability_id = :id AND s.malicious IS NOT FALSE)
+            """
+        ),
+        {"id": advisory.id},
+    ).rowcount
+    if removed or cleared:
         session.execute(
             text(
                 "UPDATE vulnerability SET revision = revision + 1, revised_at = :now"
@@ -190,46 +241,7 @@ def _retract_source(
             ),
             {"id": advisory.id, "now": now},
         )
-        # A withdrawn malware report merged under a CVE (by alias, upstream or
-        # related id) was the reason the row is flagged malicious, and the upsert
-        # only ever sets the flag. With no malware report's ranges left, nothing
-        # still says the package is the attack — so the flag goes with the report.
-        if source_record.upper().startswith("MAL-"):
-            session.execute(
-                text(
-                    """
-                    UPDATE vulnerability SET malicious = false
-                     WHERE id = :id AND malicious
-                       AND upper(id) NOT LIKE 'MAL-%'
-                       AND NOT EXISTS (
-                           SELECT 1 FROM affected_range r
-                            WHERE r.vulnerability_id = :id
-                              AND upper(r.source_record) LIKE 'MAL-%')
-                    """
-                ),
-                {"id": advisory.id},
-            )
-    session.execute(
-        text(
-            """
-            INSERT INTO advisory_source
-                (vulnerability_id, source_record, source, content_hash, modified_at)
-            VALUES (:id, :rec, :source, :hash, :modified)
-            ON CONFLICT (vulnerability_id, source_record) DO UPDATE SET
-                content_hash = EXCLUDED.content_hash,
-                modified_at  = EXCLUDED.modified_at,
-                ingested_at  = now()
-            """
-        ),
-        {
-            "id": advisory.id,
-            "rec": source_record,
-            "source": advisory.source,
-            "hash": digest,
-            "modified": advisory.modified_at,
-        },
-    )
-    return "revised" if removed else "unchanged"
+    return "revised" if removed or cleared else "unchanged"
 
 
 def is_malicious(advisory: NormalisedAdvisory) -> bool:

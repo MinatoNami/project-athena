@@ -238,3 +238,119 @@ def test_a_discarded_cached_verdict_is_reported_as_discarded(worker_session, mon
 
     assert result["status"] == "discarded"
     assert notified == []
+
+
+# ── a match the advisory has moved past ──────────────────────────────────────
+
+
+def test_a_finding_waits_for_correlation_after_a_revision(worker_session):
+    """Ingest has revised the advisory; correlation has not re-matched the finding.
+    Its facts describe the old range, so neither triage nor investigation reads
+    them, and the finding is left as it was."""
+    from athena.workers.investigate import _load, _load_for_triage
+
+    session, _, _ = worker_session
+    finding = _finding(session, state="discovered", revision=2)
+    finding.advisory_revision = 1
+    session.flush()
+
+    assert _load(str(finding.id)) is None
+    assert _load_for_triage(str(finding.id)) is None
+    session.refresh(finding)
+    assert finding.state == "discovered"
+
+    finding.advisory_revision = 2  # correlation has caught up
+    session.flush()
+    context = _load(str(finding.id))
+    assert context is not None and context["advisory_revision"] == 2
+
+
+def test_a_verdict_on_a_match_from_before_the_revision_is_discarded(worker_session):
+    session, _, notified = worker_session
+    finding = _finding(session, state="investigating", revision=2)
+    finding.advisory_revision = 1
+    session.flush()
+
+    outcome = _apply(finding, revision=2)
+
+    session.refresh(finding)
+    assert outcome["discarded"] is True
+    assert finding.state == "discovered"
+    assert notified == []
+
+
+def test_an_investigation_of_an_older_revision_does_not_answer_this_one(worker_session):
+    from athena.db.models import InvestigationRecord
+    from athena.workers.investigate import _load
+
+    session, _, _ = worker_session
+    finding = _finding(session, state="discovered", revision=2)
+    earlier = InvestigationRecord(
+        fingerprint=uuid.uuid4().hex,
+        vulnerability_id=finding.vulnerability_id,
+        advisory_revision=1,
+        verdict="applicable",
+        verdict_confidence=0.9,
+        model="m",
+        prompt_hash="p",
+    )
+    session.add(earlier)
+    session.flush()
+    finding.investigation_id = earlier.id
+    session.flush()
+    assert _load(str(finding.id)) is not None, "the advisory changed since it was asked"
+
+    earlier.advisory_revision = 2
+    finding.state = "discovered"
+    session.flush()
+    assert _load(str(finding.id)) is None, "already answered for this revision"
+
+
+def test_a_rematched_finding_is_assessed_again(worker_session):
+    """Whatever was concluded answered a match its source retracted. Reopened by a
+    range that came back, the finding is a new question and is queued as one."""
+    from athena.correlation.engine import correlate_advisory
+    from athena.workers.investigate import _load
+
+    session, _, _ = worker_session
+    cve = f"CVE-2099-{uuid.uuid4().int % 10**9}"
+    package = f"pkg-{uuid.uuid4().hex[:6]}"
+    ghsa = f"GHSA-{uuid.uuid4().hex[:4]}-7777-8888"
+    upsert_advisory(session, parse(_record(ghsa, cve, package)))
+    asset = Asset(kind="host", identity_key=f"h-{uuid.uuid4().hex}", display_name="h")
+    component = Component(ecosystem="pypi", name=package, version="1.0")
+    session.add_all([asset, component])
+    session.flush()
+    run = ScanRun(
+        asset_id=asset.id, kind="host", tool="t", status="succeeded", finished_at=datetime.now(UTC)
+    )
+    session.add(run)
+    session.flush()
+    session.add(
+        AssetComponent(
+            asset_id=asset.id,
+            component_id=component.id,
+            scope="direct",
+            observed_at=datetime.now(UTC),
+            scan_run_id=run.id,
+        )
+    )
+    session.flush()
+    correlate_advisory(session, cve)
+    finding = session.query(Finding).filter_by(vulnerability_id=cve).one()
+    finding.state = "confirmed"
+    finding.investigation_id = uuid.uuid4()
+    finding.risk_band, finding.risk_score, finding.confidence = "high", 70, 0.9
+    finding.triage_disposition = "investigate"
+    session.flush()
+
+    upsert_advisory(session, parse(_record(ghsa, cve, package, withdrawn="2026-11-10T00:00:00Z")))
+    correlate_advisory(session, cve)
+    upsert_advisory(session, parse(_record(f"PYSEC-{uuid.uuid4().hex[:8]}", cve, package)))
+    assert correlate_advisory(session, cve)["reopened"] == 1
+
+    session.refresh(finding)
+    assert finding.state == "discovered"
+    assert finding.investigation_id is None
+    assert (finding.risk_band, finding.risk_score, finding.triage_disposition) == (None, None, None)
+    assert _load(str(finding.id)) is not None, "eligible to be investigated again"

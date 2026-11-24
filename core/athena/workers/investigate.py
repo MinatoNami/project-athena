@@ -41,6 +41,19 @@ VERDICT_STATE = {
 }
 
 
+def match_is_current(finding: Finding, vulnerability: Vulnerability) -> bool:
+    """Whether the finding's match facts describe the advisory as it now stands.
+
+    Ingest revises an advisory before correlation re-evaluates its findings, and in
+    between the finding still carries the old range's facts — whether the version
+    is in range, the fixed version. Triaged or investigated then, a verdict about
+    the old range was recorded against the new revision and passed the check
+    meant to catch exactly that. Correlation catches up within the hour (the stale
+    sweep), or at once when the poller queued it; the finding waits until then.
+    """
+    return finding.advisory_revision >= vulnerability.revision
+
+
 def state_for(verdict: str, *, malicious: bool) -> str:
     """The lifecycle state a verdict moves a finding to.
 
@@ -126,17 +139,20 @@ def _load(finding_id: str) -> dict[str, Any] | None:
         if finding is None or finding.state not in ("discovered", "investigating"):
             return None
 
+        vuln_for_guard = session.get(Vulnerability, finding.vulnerability_id)
+        if vuln_for_guard is not None and not match_is_current(finding, vuln_for_guard):
+            return None
+
         # An uncertain verdict returns the finding to `discovered`, which is correct —
         # it has not been settled. But without this guard a sweep would investigate it
         # again on every pass, forever, at 40 seconds a time. Re-investigation happens
-        # when the advisory changes, not because the answer was inconclusive.
-        vuln_for_guard = session.get(Vulnerability, finding.vulnerability_id)
-        if (
-            finding.investigation_id is not None
-            and vuln_for_guard is not None
-            and finding.advisory_revision >= vuln_for_guard.revision
-        ):
-            return None
+        # when the advisory changes, not because the answer was inconclusive — so the
+        # question is which revision the investigation answered, not which one the
+        # finding was last matched against.
+        if finding.investigation_id is not None and vuln_for_guard is not None:
+            answered = session.get(InvestigationRecord, finding.investigation_id)
+            if answered is None or answered.advisory_revision >= vuln_for_guard.revision:
+                return None
 
         asset = session.get(Asset, finding.asset_id)
         component = session.get(Component, finding.component_id)
@@ -322,10 +338,13 @@ def _apply(
             return {}
         vulnerability = session.get(Vulnerability, finding.vulnerability_id)
         current = vulnerability.revision if vulnerability is not None else None
-        if finding.state != "investigating" or current != advisory_revision:
+        # Both the advisory and the finding's match must still be at the revision
+        # the question was asked about: `_load` asks only once they agree.
+        revised = current != advisory_revision or finding.advisory_revision != advisory_revision
+        if finding.state != "investigating" or revised:
             return _discard(
                 session, finding, verdict, model=model,
-                revised=current != advisory_revision, advisory_revision=advisory_revision,
+                revised=revised, advisory_revision=advisory_revision,
             )
 
         asset = session.get(Asset, finding.asset_id)
@@ -686,6 +705,9 @@ def _load_for_triage(finding_id: str) -> dict[str, Any] | None:
         component = session.get(Component, finding.component_id)
         vulnerability = session.get(Vulnerability, finding.vulnerability_id)
         if not (asset and component and vulnerability):
+            return None
+        # Triage reads the fixed version off the match; an old range's is no basis.
+        if not match_is_current(finding, vulnerability):
             return None
 
         return {

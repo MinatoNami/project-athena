@@ -464,6 +464,11 @@ class AdvisorySource(Base):
     ingested_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    # Whether this record classifies the advisory as malware (its own `MAL-` id, or
+    # a true `MAL-` alias). False once withdrawn; NULL when ingested before this was
+    # recorded (migration 0020), which counts as possibly. `vulnerability.malicious`
+    # is recomputed from these when a source is retracted.
+    malicious: Mapped[bool | None] = mapped_column(Boolean)
 
 
 class IntelSource(Base):

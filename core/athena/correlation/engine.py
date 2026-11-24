@@ -302,6 +302,21 @@ def _record(
                 else "no_fix_available"
             )
             existing.state_changed_at = now
+            # Whatever was concluded about it answered a match that was since
+            # retracted; this is a different one. Kept, the old verdict stood as an
+            # assessment of the new range, and the triage sweep (which wants no
+            # investigation) and `_load` (which wants an older revision) both passed
+            # the finding by — so it was never looked at again. Cleared, it is queued
+            # like any new finding. The investigation itself stays on record.
+            previous = existing.investigation_id
+            existing.investigation_id = None
+            existing.risk_score = None
+            existing.risk_band = None
+            existing.confidence = None
+            existing.triage_disposition = None
+            existing.triage_reason = None
+            existing.triage_confidence = None
+            existing.triaged_at = None
             record(
                 session,
                 actor="system:correlation",
@@ -311,6 +326,7 @@ def _record(
                     "vulnerability_id": vulnerability.id,
                     "advisory_revision": vulnerability.revision,
                     "state": existing.state,
+                    "assessment_cleared": str(previous) if previous else None,
                 },
             )
         existing.match_method = candidate.match_method
@@ -499,7 +515,7 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
     matched_pairs: set[tuple[Any, Any]] = set()
     # Not affected only for want of an answer — a version that could not be ordered
     # against a range, a release-specific range on an asset whose release is not
-    # known. Left as they are: closing them would report an unknown as a retraction.
+    # known. Left open: closing them would report an unknown as a retraction.
     undecided: set[tuple[Any, Any]] = set()
     for (ecosystem, package), package_ranges in by_package.items():
         installed = session.execute(
@@ -543,7 +559,7 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
             created += int(outcome == "created")
             reopened += int(outcome == "reopened")
 
-    unmatched = _close_unmatched(session, vulnerability, matched_pairs | undecided)
+    unmatched = _close_unmatched(session, vulnerability, matched_pairs, undecided)
     _mark_evaluated(session, vulnerability)
 
     return {
@@ -594,7 +610,10 @@ def _undecided(method: str, conflicts: list[dict[str, Any]]) -> bool:
 
 
 def _close_unmatched(
-    session: Session, vulnerability: Vulnerability, keep: set[tuple[Any, Any]]
+    session: Session,
+    vulnerability: Vulnerability,
+    matched: set[tuple[Any, Any]],
+    undecided: set[tuple[Any, Any]],
 ) -> int:
     """Close open findings that no remaining range supports.
 
@@ -602,8 +621,13 @@ def _close_unmatched(
     retracted — a withdrawn duplicate GHSA, a corrected bound — left behind every
     finding it had produced, matching nothing and listed forever. Only findings on
     packages still installed are closed here: one whose package has gone is
-    inventory's to resolve, for a different reason. `keep` holds the (asset,
-    component) pairs this run matched, or could not decide.
+    inventory's to resolve, for a different reason.
+
+    `matched` and `undecided` are (asset, component) pairs from this run. A matched
+    finding was refreshed by `_record`. An undecided one stays open, but its match
+    is restated as what this revision supports — uncertain — rather than left saying
+    what the previous one did: it is about to be marked evaluated against this
+    revision, and investigation trusts a current revision to mean a current match.
     """
     from athena.audit import record
 
@@ -616,7 +640,16 @@ def _close_unmatched(
     now = datetime.now(UTC)
     closed = 0
     for finding in open_findings:
-        if (finding.asset_id, finding.component_id) in keep:
+        pair = (finding.asset_id, finding.component_id)
+        if pair in matched:
+            continue
+        if pair in undecided:
+            finding.match_method = "uncomparable"
+            finding.match_confidence = MATCH_CONFIDENCE["uncomparable"]
+            finding.matched_range_id = None
+            finding.matched_source = None
+            finding.matched_release = None
+            finding.last_evaluated_at = now
             continue
         installed = session.execute(
             select(AssetComponent.asset_id).where(
