@@ -34,6 +34,7 @@ async function suppressed() {
 
 const revokeConfirming = ref(false)
 const revokePassword = ref('')
+const revokeTotpCode = ref('')
 const revokeNote = ref<string | null>(null)
 
 async function revoke() {
@@ -41,8 +42,9 @@ async function revoke() {
   revokeNote.value = null
   try {
     if (revokeConfirming.value) {
-      await stepUp(revokePassword.value)
+      await stepUp(revokePassword.value, me.value?.mfa_enabled ? revokeTotpCode.value.trim() : undefined)
       revokePassword.value = ''
+      revokeTotpCode.value = ''
       revokeConfirming.value = false
     }
     await api(`suppressions/${suppression.value.active.id}/revoke`, { method: 'POST' })
@@ -50,7 +52,9 @@ async function revoke() {
   } catch (e: any) {
     if (needsStepUp(e)) {
       revokeConfirming.value = true
-      revokeNote.value = 'Confirm your password to show it again.'
+      revokeNote.value = me.value?.mfa_enabled
+        ? 'Confirm your password and authenticator code to show it again.'
+        : 'Confirm your password to show it again.'
       return
     }
     revokeNote.value = e?.data?.detail ?? e?.message ?? 'The suppression was not revoked.'
@@ -320,8 +324,20 @@ const tabs = [
           aria-label="Password"
           style="margin-top:.5rem"
         />
+        <input
+          v-if="revokeConfirming && me?.mfa_enabled"
+          v-model="revokeTotpCode"
+          class="mono"
+          inputmode="numeric"
+          autocomplete="one-time-code"
+          maxlength="6"
+          aria-label="Authenticator code"
+          style="margin-top:.5rem"
+        />
         <p v-if="revokeNote" role="alert">{{ revokeNote }}</p>
-        <button class="btn" style="margin-top:.5rem" @click="revoke">Show it again</button>
+        <button class="btn" style="margin-top:.5rem"
+                :disabled="revokeConfirming && !stepUpReady(revokePassword, revokeTotpCode, !!me?.mfa_enabled)"
+                @click="revoke">Show it again</button>
       </div>
 
       <div v-else-if="suppression?.lapsed?.invalidated_reason" class="banner warn">

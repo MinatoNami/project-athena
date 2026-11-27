@@ -34,6 +34,9 @@ const saving = ref(false)
 const failed = ref<string | null>(null)
 const confirming = ref(false)
 const password = ref('')
+const totpCode = ref('')
+const { data: me } = useNuxtData<{ mfa_enabled?: boolean } | null>('me')
+const mfaEnabled = computed(() => !!me.value?.mfa_enabled)
 
 const expiryRequired = computed(() => reasonCode.value === 'accepted_risk')
 const hint = computed(() => REASONS.find(r => r.code === reasonCode.value)?.hint ?? '')
@@ -71,8 +74,9 @@ async function submit() {
   failed.value = null
   try {
     if (confirming.value) {
-      await stepUp(password.value)
+      await stepUp(password.value, mfaEnabled.value ? totpCode.value.trim() : undefined)
       password.value = ''
+      totpCode.value = ''
       confirming.value = false
     }
     await api(`findings/${props.findingId}/suppress`, {
@@ -88,7 +92,9 @@ async function submit() {
   } catch (e: any) {
     if (needsStepUp(e)) {
       confirming.value = true
-      failed.value = 'Confirm your password to save this suppression.'
+      failed.value = mfaEnabled.value
+        ? 'Confirm your password and authenticator code to save this suppression.'
+        : 'Confirm your password to save this suppression.'
       return
     }
     failed.value = e?.data?.detail ?? e?.message ?? 'The suppression was not saved.'
@@ -161,13 +167,19 @@ async function submit() {
         <input v-model="password" type="password" autocomplete="current-password" />
       </label>
 
+      <label v-if="confirming && mfaEnabled" class="field">
+        <span class="lbl">Authenticator code</span>
+        <input v-model="totpCode" class="mono" inputmode="numeric" autocomplete="one-time-code" maxlength="6" />
+      </label>
+
       <p v-if="failed" class="failed">{{ failed }}</p>
 
       <div class="acts">
         <button class="btn" @click="emit('close')">Cancel</button>
         <button
           class="btn primary"
-          :disabled="saving || tooShort || (expiryRequired && !until)"
+          :disabled="saving || tooShort || (expiryRequired && !until)
+            || (confirming && !stepUpReady(password, totpCode, mfaEnabled))"
           @click="submit"
         >{{ saving ? 'Saving…' : 'Stop showing it' }}</button>
       </div>

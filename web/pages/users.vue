@@ -192,11 +192,11 @@ function isSelf(user: UserRow) {
       </label>
       <label v-if="me?.mfa_enabled" class="field">
         <span class="lbl">Authenticator code</span>
-        <input v-model="totpCode" class="mono" inputmode="numeric" autocomplete="one-time-code" maxlength="8" />
+        <input v-model="totpCode" class="mono" inputmode="numeric" autocomplete="one-time-code" maxlength="6" />
       </label>
       <div class="acts">
         <button class="btn" @click="cancelIdentity">Cancel</button>
-        <button class="btn primary" :disabled="busy || !password || (me?.mfa_enabled && !totpCode)"
+        <button class="btn primary" :disabled="busy || !stepUpReady(password, totpCode, !!me?.mfa_enabled)"
                 @click="confirmIdentity">Confirm and continue</button>
       </div>
     </section>
