@@ -125,7 +125,7 @@ def create_job(
             principal,
             body.kind,
             "invalid payload",
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             exc.errors(include_url=False, include_context=False, include_input=False),
         ) from None
 

@@ -120,9 +120,9 @@ def register_repository(
     try:
         key = identity_for(AssetKind.REPOSITORY, url=body.url)
     except IdentityError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     if body.tier not in TIERS:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Unknown tier {body.tier!r}")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Unknown tier {body.tier!r}")
 
     asset, created = register_asset(
         session,
@@ -376,12 +376,14 @@ def update_asset(
 
     if body.tier is not None:
         if body.tier not in TIERS:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Unknown tier {body.tier!r}")
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT, f"Unknown tier {body.tier!r}"
+            )
         asset.tier = body.tier
     if body.exposure is not None:
         if body.exposure not in EXPOSURES:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, f"Unknown exposure {body.exposure!r}"
+                status.HTTP_422_UNPROCESSABLE_CONTENT, f"Unknown exposure {body.exposure!r}"
             )
         asset.exposure = body.exposure
     if body.criticality is not None:
@@ -477,7 +479,7 @@ def rescan(
 
     offer = _scan_offer(session, asset)
     if offer.action is None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, offer.reason)
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, offer.reason)
 
     if offer.action == COLLECT:
         return _collect_from_host(session, asset, offer.node, principal)
@@ -542,11 +544,11 @@ def classify(
     for group in body.groups:
         if group.tier is not None and group.tier not in TIERS:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, f"Unknown tier {group.tier!r}"
+                status.HTTP_422_UNPROCESSABLE_CONTENT, f"Unknown tier {group.tier!r}"
             )
         if group.exposure is not None and group.exposure not in EXPOSURES:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, f"Unknown exposure {group.exposure!r}"
+                status.HTTP_422_UNPROCESSABLE_CONTENT, f"Unknown exposure {group.exposure!r}"
             )
 
     changed = 0

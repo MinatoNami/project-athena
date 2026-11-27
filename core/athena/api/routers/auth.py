@@ -59,7 +59,7 @@ def bootstrap(body: BootstrapRequest, response: Response, session: Session = Dep
         raise HTTPException(status.HTTP_409_CONFLICT, "An account already exists")
 
     if (problem := A.validate_password_strength(body.password)) is not None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, problem)
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, problem)
 
     if A.consume_bootstrap_token(session, body.token) is None:
         record_isolated(
@@ -149,10 +149,10 @@ def _replace_single_use_password(session: Session, user: User, body: LoginReques
     ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
     if (problem := A.validate_password_strength(body.new_password)) is not None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, problem)
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, problem)
     if body.new_password == body.password:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, "The new password must differ from the old one."
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "The new password must differ from the old one."
         )
     user.password_hash = A.hash_password(body.new_password)
     user.password_change_required = False
