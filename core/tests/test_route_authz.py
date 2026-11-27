@@ -34,6 +34,11 @@ STEP_UP_ROUTES = {
     ("POST", "/api/v1/suppressions/{suppression_id}/revoke"),
     ("POST", "/api/v1/nodes/enrol-token"),
     ("DELETE", "/api/v1/nodes/{node_id}"),
+    ("POST", "/api/v1/auth/mfa/enrol"),
+    ("POST", "/api/v1/users/invite"),
+    ("POST", "/api/v1/users/{user_id}/role"),
+    ("POST", "/api/v1/users/{user_id}/disable"),
+    ("POST", "/api/v1/users/{user_id}/mfa/reset"),
 }
 
 MUTATION_WORDS = {"apply", "rotate", "block", "isolate", "revoke", "execute", "delete"}

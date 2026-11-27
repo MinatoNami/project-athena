@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from athena.api import auth as A
 from athena.api import totp
-from athena.api.deps import Principal, can_read, current_principal, db
+from athena.api.deps import Principal, can_read, current_principal, db, read_with_step_up
 from athena.api.types import AccountEmail
 from athena.audit import record, record_isolated
 from athena.config import get_settings
@@ -224,15 +224,12 @@ def step_up(
 
 @router.post("/mfa/enrol")
 def mfa_enrol(
-    principal: Principal = Depends(can_read),
+    principal: Principal = Depends(read_with_step_up),
     session: Session = Depends(db),
 ) -> dict:
     user = principal.user
     if user.mfa_enabled:
         raise HTTPException(status.HTTP_409_CONFLICT, "MFA is already active; reset it first")
-    if not A.has_fresh_step_up(principal.session_row):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Fresh step-up required")
-
     secret = totp.generate_secret()
     user.mfa_secret = totp.seal_secret(user.id, secret)
     user.mfa_last_counter = None

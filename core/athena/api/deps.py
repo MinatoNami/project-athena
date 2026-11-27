@@ -94,6 +94,7 @@ def require_step_up(*roles: str):
 
 
 can_read = require_role(*READ_ROLES)
+read_with_step_up = require_step_up(*READ_ROLES)
 can_operate = require_role(*OPERATE_ROLES)
 can_administer = require_role(*ADMIN_ROLES)
 operate_with_step_up = require_step_up(*OPERATE_ROLES)

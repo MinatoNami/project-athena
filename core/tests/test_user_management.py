@@ -78,13 +78,17 @@ def _mutations(target_id):
 
 
 def test_every_user_route_carries_the_admin_role_dependency(app):
+    from athena.api.deps import ADMIN, ROLE_CHECK_ATTR
     from athena.api.routers.users import router
 
+    def calls(dependant):
+        for dep in dependant.dependencies:
+            yield dep.call
+            yield from calls(dep)
+
     for route in router.routes:
-        calls = [d.call for d in route.dependant.dependencies]
-        assert any(getattr(c, "__qualname__", "").startswith("require_role") for c in calls), (
-            route.path
-        )
+        required = [getattr(c, ROLE_CHECK_ATTR, None) for c in calls(route.dependant)]
+        assert (ADMIN,) in required, route.path
 
 
 @pytest.mark.parametrize("role", ["viewer", "operator", "approver", "auditor"])
@@ -111,7 +115,7 @@ def test_admins_need_a_fresh_step_up(app, session):
     for method, path, body in _mutations(target.id):
         response = getattr(client, method)(path, json=body)
         assert response.status_code == 403, path
-        assert response.json()["detail"] == "Fresh step-up required"
+        assert response.json()["detail"] == "step_up_required"
 
 
 def test_admins_cannot_change_their_own_account(app, session):
