@@ -76,6 +76,14 @@ def test_malformed_codes_are_refused(code):
     assert totp.matching_counter(RFC_KEY, code, last_counter=None, unix_seconds=59) is None
 
 
+@pytest.mark.parametrize(
+    "code", ["٢٨٧٠٨٢", "２８７０８２", "28708²"]
+)
+def test_non_ascii_digits_are_refused_without_raising(code):
+    assert code.isdigit()
+    assert totp.matching_counter(RFC_KEY, code, last_counter=None, unix_seconds=59) is None
+
+
 def test_provisioning_uri_names_issuer_account_and_parameters():
     uri = totp.provisioning_uri("JBSWY3DPEHPK3PXP", "ops@example.com")
     parts = urlsplit(uri)
