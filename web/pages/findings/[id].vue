@@ -233,6 +233,10 @@ const tabs = [
         malicious package, not a flawed release. Remove it and treat the asset — and
         anything that installed it — as compromised: rotate every credential it could
         read. The steps are under <strong>Fix</strong>.
+        <CompromiseAssessment
+          v-if="data.compromise_assessment" :finding-id="data.id"
+          :assessment="data.compromise_assessment" @done="refresh()"
+        />
       </div>
 
       <div v-else-if="data.deferred" class="banner">
