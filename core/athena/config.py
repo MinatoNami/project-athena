@@ -58,8 +58,18 @@ class Settings(BaseSettings):
         "aquasec/trivy:0.76.2"
         "@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb"
     )
+    syft_image: str = (
+        "anchore/syft:v1.57.2"
+        "@sha256:e97e20b6e6d1699c60296b66ab337941724f9bd06ac279d893eda89601fc4b2a"
+    )
+    git_image: str = (
+        "alpine/git:v2.54.1"
+        "@sha256:29cff25811f790b9f72fc266bf8009a5a911714c0e03c31c47339c50909d9aef"
+    )
 
-    @field_validator("gitleaks_image", "trivy_image", mode="before")
+    @field_validator(
+        "gitleaks_image", "trivy_image", "syft_image", "git_image", mode="before"
+    )
     @classmethod
     def _blank_image_means_default(cls, value: Any, info: Any) -> Any:
         if isinstance(value, str) and not value.strip():
