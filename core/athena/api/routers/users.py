@@ -11,15 +11,14 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from athena.api import auth as A
-from athena.api.deps import Principal, db, require_role
+from athena.api.deps import ADMIN, Principal, db, require_role
 from athena.api.types import AccountEmail
 from athena.audit import record
 from athena.db.models import Session_, User
 
 router = APIRouter(prefix="/users", tags=["users"])
 
-ADMIN = "admin"
-AssignableRole = Literal["admin", "analyst", "viewer"]
+AssignableRole = Literal["viewer", "operator", "approver", "auditor", "admin"]
 
 
 class InviteRequest(BaseModel):

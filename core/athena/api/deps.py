@@ -14,9 +14,14 @@ STEP_UP_CHECK_ATTR = "athena_requires_step_up"
 STEP_UP_REQUIRED = "step_up_required"
 STEP_UP_HEADER = "X-Athena-Step-Up"
 
+VIEWER = "viewer"
+OPERATOR = "operator"
+APPROVER = "approver"
+AUDITOR = "auditor"
 ADMIN = "admin"
-READ_ROLES = (ADMIN,)
-OPERATE_ROLES = (ADMIN,)
+ROLES = (VIEWER, OPERATOR, APPROVER, AUDITOR, ADMIN)
+READ_ROLES = ROLES
+OPERATE_ROLES = (OPERATOR, ADMIN)
 ADMIN_ROLES = (ADMIN,)
 
 

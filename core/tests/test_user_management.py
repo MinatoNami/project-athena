@@ -87,7 +87,7 @@ def test_every_user_route_carries_the_admin_role_dependency(app):
         )
 
 
-@pytest.mark.parametrize("role", ["analyst", "viewer"])
+@pytest.mark.parametrize("role", ["viewer", "operator", "approver", "auditor"])
 def test_non_admins_are_forbidden(app, session, role):
     target = _make_user(session, "viewer")
     client = _signed_in(app, _make_user(session, role))
@@ -126,7 +126,7 @@ def test_invite_issues_a_single_use_credential(app, session):
     client = _signed_in(app, admin)
     email = f"invitee-{uuid.uuid4().hex[:8]}@example.com"
 
-    invited = client.post("/api/v1/users/invite", json={"email": email, "role": "analyst"})
+    invited = client.post("/api/v1/users/invite", json={"email": email, "role": "operator"})
     assert invited.status_code == 201
     credential = invited.json()["invite_credential"]
     invitee_id = invited.json()["id"]
@@ -145,7 +145,7 @@ def test_invite_issues_a_single_use_credential(app, session):
 
     changed = invitee.post("/api/v1/auth/login", json={**first, "new_password": NEW_PASSWORD})
     assert changed.status_code == 200
-    assert changed.json()["role"] == "analyst"
+    assert changed.json()["role"] == "operator"
 
     invitee.cookies.clear()
     assert invitee.post("/api/v1/auth/login", json=first).status_code == 401
@@ -171,9 +171,9 @@ def test_set_role_disable_and_reset_mfa_are_applied_and_audited(app, session):
     session.commit()
 
     assert client.post(f"/api/v1/users/{target.id}/role", json={"role": "bogus"}).status_code == 422
-    promoted = client.post(f"/api/v1/users/{target.id}/role", json={"role": "analyst"})
+    promoted = client.post(f"/api/v1/users/{target.id}/role", json={"role": "operator"})
     assert promoted.status_code == 200
-    assert promoted.json()["role"] == "analyst"
+    assert promoted.json()["role"] == "operator"
 
     reset = client.post(f"/api/v1/users/{target.id}/mfa/reset")
     assert reset.status_code == 200
