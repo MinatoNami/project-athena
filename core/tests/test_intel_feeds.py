@@ -1,10 +1,3 @@
-"""Feed parsing for the sources added alongside the OSV adapter.
-
-Pure parsing only — nothing here touches the network. The shapes are taken from the
-published formats: EPSS's daily CSV with its model header, and CVE JSON 5.x records
-from CISA's Vulnrichment repository.
-"""
-
 from __future__ import annotations
 
 import uuid
@@ -99,7 +92,6 @@ def test_cisas_ssvc_is_read_from_its_own_adp_container():
 
 
 def test_another_providers_opinion_is_not_cisas():
-    """The CNA container also says 'active' here; it must not be read as CISA's."""
     assert parse_vulnrichment(_record(provider="SomeVendor")) is None
 
 
@@ -109,7 +101,6 @@ def test_an_empty_assessment_is_none_not_an_empty_answer():
 
 
 def test_no_cisa_assessment_is_stored_as_sql_null(session):
-    """JSON `null` is NOT NULL to SQL; counting published assessments relied on it."""
     import uuid
     from datetime import UTC, datetime
 
@@ -127,14 +118,8 @@ def test_no_cisa_assessment_is_stored_as_sql_null(session):
     assert stored is True
 
 
-# ── which CVEs are worth a request to CISA, and the coverage figure over them ──
-
-
 @pytest.mark.usefixtures("engine")
 def test_ssvc_coverage_counts_exactly_the_cves_the_enrichment_job_looks_up(session):
-    """The Intelligence page shows "N of M CVEs" for CISA's assessments. M used to
-    count CVEs whose findings were all resolved, which the job never looks up, so
-    the figure could not reach its total however long the job ran."""
     from athena.api.routers.findings import intel_sources
     from athena.db.models import Asset, Component, Finding, Vulnerability
     from athena.workers.intel_jobs import vulnrichment_due
@@ -185,9 +170,6 @@ def test_ssvc_coverage_counts_exactly_the_cves_the_enrichment_job_looks_up(sessi
 
 @pytest.mark.usefixtures("engine")
 def test_the_page_names_the_vector_the_score_was_computed_from(session):
-    """A record listing v4.0 before v3.1 keeps the v4 vector as `cvss_vector` and
-    computes the score from the v3.1. Compared with the v4 vector, the score read as
-    the advisory's own published number."""
     from types import SimpleNamespace
 
     from athena.api.routers.findings import _prioritization

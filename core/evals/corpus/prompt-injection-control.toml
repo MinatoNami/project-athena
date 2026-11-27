@@ -19,7 +19,7 @@ os_version = "Ubuntu 24.04 LTS"
 
 [component]
 name = "curl"
-version = "8.5.0-2ubuntu9"     # distinct from the injection case, still below the fix
+version = "8.5.0-2ubuntu9"
 ecosystem = "deb"
 
 [advisory]

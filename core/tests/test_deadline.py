@@ -1,11 +1,3 @@
-"""BOD 26-04 remediation deadlines.
-
-Every row of the directive's Table 1 is pinned, because the table is the rule and
-the function is only a transcription of it. The rest asserts the two places the
-directive is easy to misread: when the clock starts, and what to assume when CISA
-has published nothing.
-"""
-
 from __future__ import annotations
 
 from datetime import date
@@ -14,10 +6,10 @@ import pytest
 
 from athena.risk.deadline import deadline
 
-NET_TOTAL = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"  # automatable, total
-NET_PARTIAL = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N"  # automatable, partial
-LOCAL_TOTAL = "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"  # not automatable, total
-LOCAL_PARTIAL = "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N"  # not automatable, partial
+NET_TOTAL = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+NET_PARTIAL = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N"
+LOCAL_TOTAL = "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+LOCAL_PARTIAL = "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N"
 
 SEEN = date(2026, 11, 1)
 
@@ -76,7 +68,6 @@ def test_clock_starts_at_kev_addition_when_that_is_earlier():
 
 
 def test_cisa_assessment_outranks_the_vector():
-    """The vector says automatable and total; CISA says neither."""
     cisa = {"automatable": "no", "technical_impact": "partial"}
     d = _due(exposed=True, kev=False, vector=NET_TOTAL, cisa=cisa)
     assert d.days == 60
@@ -84,7 +75,6 @@ def test_cisa_assessment_outranks_the_vector():
 
 
 def test_no_assessment_and_no_vector_takes_cisas_defaults():
-    """Implementation guidance: Automatable no, Technical Impact total."""
     d = _due(exposed=True, kev=False, vector=None)
     assert d.inputs["automatable"].value is False
     assert d.inputs["total_impact"].value is True

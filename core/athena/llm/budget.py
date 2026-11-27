@@ -1,13 +1,3 @@
-"""Spend limits for the AI layer.
-
-A local model has no invoice, but it does have wall-clock: an unbounded sweep can
-occupy the machine indefinitely and starve everything else. The limit is on model
-calls rather than tokens, because that is what the operator can reason about.
-
-On exhaustion work is *queued*, never silently dropped. "We stopped looking" and
-"there was nothing to find" must never be the same state.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -24,12 +14,7 @@ log = structlog.get_logger(__name__)
 
 
 class BudgetExhausted(RuntimeError):
-    """The call was refused to protect the machine, not because anything failed.
-
-    Deliberately not ModelUnavailable: the model is fine and we chose not to ask it.
-    Reporting a self-imposed limit as an outage would send somebody to debug a
-    healthy endpoint.
-    """
+    pass
 
 
 @dataclass
@@ -57,7 +42,6 @@ class Budget:
 
 
 def current(session: Session) -> Budget:
-    """Model calls made in the rolling window."""
     settings = get_settings()
     window = settings.ai_budget_window_hours
     since = datetime.now(UTC) - timedelta(hours=window)
@@ -72,13 +56,6 @@ def current(session: Session) -> Budget:
 
 
 def check(session: Session, *, purpose: str) -> Budget:
-    """Raise if the window is spent.
-
-    Called on every model call rather than once per sweep. A limit enforced only
-    where work is scheduled binds only the scheduler: anything calling the gateway
-    directly — a script, a harness, a future feature — spends freely past it, which
-    is how a 2,000-call ceiling came to sit under 6,500 calls.
-    """
     budget = current(session)
     if budget.exhausted:
         log.warning("llm.budget_exhausted", purpose=purpose, **budget.as_dict())

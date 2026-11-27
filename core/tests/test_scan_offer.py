@@ -1,11 +1,3 @@
-"""What the Rescan button is allowed to promise.
-
-The page and the endpoint both read `_scan_offer`: one decides whether to offer the
-button, the other decides what pressing it runs. The failure this guards against is
-not a crash — it is the button being offered for an asset nothing can scan, which is
-how it behaved for every kind except `repository`, silently swallowing the 422.
-"""
-
 from __future__ import annotations
 
 import pytest
@@ -26,13 +18,6 @@ class _Result:
 
 
 class _Session:
-    """Enough session to answer "is a node enrolled for this host?".
-
-    The rule under test is a decision, not a query, and the suite's real sessions
-    need Postgres — which would make this skip on the machines where the button is
-    actually being changed.
-    """
-
     def __init__(self, node: Node | None = None) -> None:
         self._node = node
 
@@ -54,7 +39,6 @@ def _asset(kind: str, **attributes: str) -> Asset:
     ],
 )
 def test_an_image_the_worker_would_refuse_is_not_offered(attributes: dict[str, str]) -> None:
-    """Dangling `<none>` images were offered a scan the worker refuses at once."""
     offer = _scan_offer(_Session(), _asset("image", **attributes))
     assert offer.action is None
     assert offer.reason and "cannot locate it" in offer.reason
@@ -92,7 +76,6 @@ def test_a_host_with_no_node_says_so_rather_than_offering() -> None:
 
 @pytest.mark.parametrize("kind", ["container", "service", "network_host"])
 def test_kinds_without_a_scan_give_a_reason(kind: str) -> None:
-    """Silence reads as a broken button; these are covered another way, or not at all."""
     offer = _scan_offer(_Session(), _asset(kind))
     assert offer.action is None
     assert offer.reason

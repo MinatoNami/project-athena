@@ -10,18 +10,18 @@ from athena.audit import record
 from athena.db.models import Job
 from athena.queue import (
     enqueue,
-    handlers,  # noqa: F401  (registers handlers so kinds resolve)
+    handlers,  # noqa: F401
     known_kinds,
 )
 from athena.workers import (
-    image,  # noqa: F401  (registers scan.image)
-    intel_jobs,  # noqa: F401  (registers intel.* and correlate.*)
-    investigate,  # noqa: F401  (registers investigate.finding)
-    node_ingest,  # noqa: F401  (registers ingest.node_observation)
-    notify_jobs,  # noqa: F401  (registers notify.dispatch)
-    repository,  # noqa: F401  (registers scan.repository)
-    rescore,  # noqa: F401  (registers rescore.findings)
-    suppression_jobs,  # noqa: F401  (registers suppression.review)
+    image,  # noqa: F401
+    intel_jobs,  # noqa: F401
+    investigate,  # noqa: F401
+    node_ingest,  # noqa: F401
+    notify_jobs,  # noqa: F401
+    repository,  # noqa: F401
+    rescore,  # noqa: F401
+    suppression_jobs,  # noqa: F401
 )
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])

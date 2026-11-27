@@ -1,10 +1,3 @@
-"""Record every outbound model call, including the ones refused.
-
-"What has left my network?" must be answerable from a table rather than inferred
-from logs, on a tool that holds a map of every weakness in the estate.
-
-Revision ID: 0011
-"""
 from __future__ import annotations
 
 import sqlalchemy as sa
@@ -29,8 +22,6 @@ def upgrade() -> None:
         sa.Column("data_classes", pg.ARRAY(sa.Text), nullable=False, server_default="{}"),
         sa.Column("blocked", sa.Boolean, nullable=False, server_default=sa.false()),
         sa.Column("reason", sa.Text),
-        # The payload itself is never stored — only a digest, so a call can be
-        # correlated without the log becoming a copy of everything sent.
         sa.Column("payload_hash", sa.Text, nullable=False),
         sa.Column("bytes_out", sa.Integer, nullable=False, server_default="0"),
         sa.Column("prompt_tokens", sa.Integer, nullable=False, server_default="0"),

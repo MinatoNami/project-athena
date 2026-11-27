@@ -1,12 +1,3 @@
-"""Re-check live suppressions against the world as it is now.
-
-Expiry needs no sweep — it is evaluated in the query, so an expired suppression
-stops applying the moment it expires. Premise invalidation does need one, because it
-is an event worth recording: the operator should be able to see that a decision was
-overturned and why, rather than merely notice a finding reappearing and wonder
-whether they imagined dismissing it.
-"""
-
 from __future__ import annotations
 
 from typing import Any

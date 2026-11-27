@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Runs ON THE DEPLOYMENT HOST. Waits for the API to answer /healthz.
 set -euo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."   # deploy/
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 timeout_s="${1:-120}"
 waited=0
 

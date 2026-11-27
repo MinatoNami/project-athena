@@ -1,14 +1,4 @@
 <script setup lang="ts">
-/**
- * The application shell.
- *
- * There was none: every page rebuilt its own header, so there was no way to move
- * between findings and assets without the browser's back button, and nothing told
- * you whether the data you were reading was current.
- *
- * Freshness lives here rather than on one page because a stale feed invalidates
- * everything rendered above it — that should never take a click to discover.
- */
 const { data: me } = await useMe()
 const route = useRoute()
 
@@ -25,8 +15,6 @@ const { data: intel } = await useAsyncData('shell-intel', () =>
   api<any>('intel/sources').catch(() => null),
 )
 
-// The tab's one shared event stream (see useEvents): the shell reports on it rather
-// than opening a second connection of its own.
 const connected = useEventStatus()
 
 const items = computed(() => [
@@ -39,17 +27,11 @@ const items = computed(() => [
   { to: '/activity', label: 'Activity', glyph: 'activity' },
 ])
 
-// ⌘K / Ctrl+K from anywhere. "/" too, unless the reader is typing into a field —
-// stealing a keystroke from a reason someone is writing would be worse than no
-// shortcut at all.
 const paletteOpen = ref(false)
 const isMac = ref(true)
 onMounted(() => {
   isMac.value = /Mac|iPhone|iPad/.test(navigator.platform)
   const onKey = (e: KeyboardEvent) => {
-    // ⌘K on a Mac, Ctrl+K elsewhere — not both: on a Mac, Ctrl+K in a text field is
-    // "delete to end of line", and taking it opened the palette over a half-written
-    // suppression reason.
     if ((isMac.value ? e.metaKey : e.ctrlKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault()
       paletteOpen.value = !paletteOpen.value
@@ -73,7 +55,6 @@ function isActive(to: string) {
   return to === '/' ? route.path === '/' : route.path.startsWith(to)
 }
 
-/** Oldest successful fetch across sources: the feed is only as fresh as its slowest part. */
 const intelAge = computed(() => {
   const sources = intel.value?.sources ?? []
   if (!sources.length) return null
@@ -90,11 +71,8 @@ const intelLabel = computed(() => {
   return `${Math.round(age / 86400)}d old`
 })
 
-/** Staleness is the API's call, per source, so the rail and /intel can never disagree
-    (they used 48h and 6h respectively, and the API a third rule). */
 const intelStale = computed(() => (intel.value ? !!intel.value.any_source_stale : true))
 
-/** Three states, not two: a check that could not be run is not a broken chain. */
 const audit = computed<'intact' | 'broken' | 'unknown'>(() =>
   nav.value?.audit == null ? 'unknown' : nav.value.audit.intact ? 'intact' : 'broken',
 )
@@ -218,7 +196,6 @@ async function logout() {
   font-size: .74rem; color: var(--ink-2); overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; flex-grow: 1;
 }
-/* An icon, not a word: at 216px a long address squeezed "Sign out" onto two lines. */
 .signout {
   background: none; border: 0; padding: .15rem; margin: 0; line-height: 0;
   color: var(--ink-muted); cursor: pointer; border-radius: 5px; flex-shrink: 0;
@@ -243,18 +220,12 @@ async function logout() {
   .status, .who { display: none; }
   .search { margin: 0; }
   .search .navlabel, .search kbd { display: none; }
-  /* Wrap rather than force the page wider than the screen (WCAG 1.4.10 reflow):
-     the nav takes its own full-width row and scrolls sideways within it. */
   .rail { flex-wrap: wrap; }
   .navlist { order: 3; flex-basis: 100%; overflow-x: auto; padding-bottom: .15rem;
              scrollbar-width: none; }
   .navlist::-webkit-scrollbar { display: none; }
   .navitem { white-space: nowrap; }
-  /* Stale intelligence invalidates everything on screen, so it stays visible even
-     when the rest of the footer folds away. (`:first-child` never matched: the
-     inbox bell comes first.) */
   .status.intel { display: flex; }
-  /* A broken chain or a dropped live connection is never folded away (rule 6). */
   .status.audit.broken, .status.conn.warn { display: flex; }
 }
 </style>

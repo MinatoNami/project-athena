@@ -1,13 +1,3 @@
-"""The investigation tool registry.
-
-Every tool here is a *question*, never a command. The registry contains no mutating
-operation of any kind, so a successful prompt injection has nothing to call — the
-boundary is structural, not a matter of instructing the model to behave.
-
-Enforcement lives outside the model: `call_tool` refuses anything not in this dict,
-whatever the model asks for.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -28,14 +18,11 @@ from athena.db.models import (
 
 log = structlog.get_logger(__name__)
 
-# A tool may read at most this many rows. An investigation that needs more than this
-# is asking the wrong question, and an unbounded read would blow the context window.
 MAX_ROWS = 50
 
 
 class ToolError(RuntimeError):
-    """A tool could not answer. Surfaced to the model as an explicit failure so it
-    records uncertainty rather than inventing a value."""
+    pass
 
 
 def _asset(session: Session, asset_id: str) -> Asset:
@@ -46,7 +33,6 @@ def _asset(session: Session, asset_id: str) -> Asset:
 
 
 def get_asset(session: Session, *, asset_id: str) -> dict[str, Any]:
-    """Facts about the asset the finding is on."""
     asset = _asset(session, asset_id)
     return {
         "display_name": asset.display_name,
@@ -58,8 +44,6 @@ def get_asset(session: Session, *, asset_id: str) -> dict[str, Any]:
         "os": asset.attributes.get("os_version"),
         "distro": asset.attributes.get("distro"),
         "distro_release": asset.attributes.get("distro_release"),
-        # Freshness travels with every fact: a nine-day-old observation is not the
-        # same as a current one, and the model should weigh it accordingly.
         "last_inventoried_at": (
             asset.last_inventoried_at.isoformat() if asset.last_inventoried_at else None
         ),
@@ -68,11 +52,6 @@ def get_asset(session: Session, *, asset_id: str) -> dict[str, Any]:
 
 
 def list_listening_ports(session: Session, *, asset_id: str) -> dict[str, Any]:
-    """Services listening on the asset, with their bind addresses.
-
-    The bind address is the exposure fact: 127.0.0.1:6379 and 0.0.0.0:6379 are
-    entirely different situations.
-    """
     asset = _asset(session, asset_id)
     rows = session.execute(
         select(Asset)
@@ -98,7 +77,6 @@ def list_listening_ports(session: Session, *, asset_id: str) -> dict[str, Any]:
 
 
 def get_component(session: Session, *, component_id: str) -> dict[str, Any]:
-    """The installed package this finding is about."""
     component = session.get(Component, component_id)
     if component is None:
         raise ToolError(f"No component {component_id}")
@@ -119,7 +97,6 @@ def get_component(session: Session, *, component_id: str) -> dict[str, Any]:
 
 
 def get_advisory(session: Session, *, vulnerability_id: str) -> dict[str, Any]:
-    """The published advisory. Text here is attacker-influenceable — see the loop."""
     vulnerability = session.get(Vulnerability, vulnerability_id)
     if vulnerability is None:
         raise ToolError(f"No advisory {vulnerability_id}")
@@ -142,12 +119,10 @@ def get_advisory(session: Session, *, vulnerability_id: str) -> dict[str, Any]:
 
 
 def count_affected_assets(session: Session, *, vulnerability_id: str) -> dict[str, Any]:
-    """How widespread this is, which bears on urgency but not on applicability."""
     rows = session.execute(
         text(
             "SELECT a.tier, count(*) AS n FROM finding f "
             "  JOIN asset a ON a.id = f.asset_id "
-            # A finding no published range supports is not spread.
             " WHERE f.vulnerability_id = :v AND f.state <> 'unmatched' GROUP BY a.tier"
         ),
         {"v": vulnerability_id},
@@ -156,7 +131,6 @@ def count_affected_assets(session: Session, *, vulnerability_id: str) -> dict[st
 
 
 def get_related_findings(session: Session, *, asset_id: str) -> dict[str, Any]:
-    """Other findings on the same asset, for context on its general state."""
     rows = session.execute(
         select(Finding.vulnerability_id, Finding.state, Finding.risk_band)
         .where(Finding.asset_id == asset_id)
@@ -168,7 +142,6 @@ def get_related_findings(session: Session, *, asset_id: str) -> dict[str, Any]:
     }
 
 
-# The registry. A name absent here cannot be invoked, whatever the model asks for.
 TOOLS: dict[str, Callable[..., dict[str, Any]]] = {
     "get_asset": get_asset,
     "list_listening_ports": list_listening_ports,
@@ -189,11 +162,6 @@ TOOL_DESCRIPTIONS = {
 
 
 def call_tool(session: Session, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Invoke a registered tool.
-
-    Refusal is by allowlist, not by pattern: anything not in TOOLS is rejected
-    without being interpreted at all.
-    """
     tool = TOOLS.get(name)
     if tool is None:
         raise ToolError(

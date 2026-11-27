@@ -1,11 +1,4 @@
 <script setup lang="ts">
-/**
- * Stage drop-off (§9), as a bar funnel rather than a tapering cone.
- *
- * The bars carry the counts; the strip underneath carries what actually matters —
- * how much of the previous stage survived into this one. A funnel without that is
- * four numbers in descending order.
- */
 const props = defineProps<{
   stages: { label: string; value: number; hint?: string }[]
   unit?: string

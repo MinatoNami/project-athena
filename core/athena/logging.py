@@ -9,7 +9,6 @@ REDACT_KEYS = {"password", "token", "secret", "key", "authorization", "cookie"}
 
 
 def _redact(_logger, _method, event_dict: dict) -> dict:
-    """Defence in depth: a secret must never reach the log even if one is passed."""
     for k in list(event_dict):
         if any(marker in k.lower() for marker in REDACT_KEYS):
             event_dict[k] = "<redacted>"

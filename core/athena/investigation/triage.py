@@ -1,19 +1,3 @@
-"""Triage: which findings deserve a full investigation.
-
-A single model call, no tools, small budget. Its only job is to decide where the
-expensive loop is worth spending — 40 seconds and 40,000 tokens each, against a
-backlog of hundreds.
-
-Two rules keep it honest:
-
-Triage never closes a finding. It has no evidence, only the summary it was handed, so
-it cannot conclude that a vulnerability does not apply. A deprioritised finding stays
-`discovered`, stays listed, and still reports that it has not been investigated.
-
-Some findings are never deprioritised, whatever the model says. Those gates are in
-code below, not in the prompt, because a prompt is a request.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -26,9 +10,6 @@ from athena.llm import ModelUnavailable, complete_json
 
 log = structlog.get_logger(__name__)
 
-# Deprioritising requires real confidence. Investigating something irrelevant costs
-# 40 seconds; overlooking something real costs considerably more, so the asymmetry
-# is deliberate.
 DEPRIORITISE_THRESHOLD = 0.75
 
 MAX_TOKENS = 1200
@@ -69,19 +50,15 @@ class Triage:
     disposition: str
     confidence: float
     reason: str
-    forced: bool = False        # a code gate overrode the model
+    forced: bool = False
     tokens: int = 0
     duration_ms: int = 0
 
 
-# The gates live in `priority` now: the scheduler has to apply the same ones when it
-# decides what to spend on, and two copies of "never skip a KEV entry" is one copy too
-# many. Re-exported so the name still reads at the call site below.
 _hard_gates = always_investigate
 
 
 def triage(facts: dict[str, Any]) -> Triage:
-    """Decide whether this finding earns a full investigation."""
     if (reason := _hard_gates(facts)) is not None:
         return Triage(
             disposition="investigate", confidence=1.0, forced=True,
@@ -103,8 +80,6 @@ def triage(facts: dict[str, Any]) -> Triage:
             max_tokens=MAX_TOKENS, purpose="triage",
         )
     except (ModelUnavailable, Exception) as exc:  # noqa: BLE001
-        # A triage failure must not silently drop the finding. Defaulting to
-        # investigate keeps it in the queue rather than quietly discarding it.
         log.warning("triage.failed", error=str(exc))
         return Triage(
             disposition="investigate", confidence=0.0, forced=True,
@@ -119,8 +94,6 @@ def triage(facts: dict[str, Any]) -> Triage:
         confidence = 0.0
     reason = str(answer.get("reason") or "")[:1000]
 
-    # A low-confidence deprioritise is an investigate. The model expressing doubt is
-    # information; acting on it as though it were a decision is not.
     forced = False
     if disposition == "deprioritise" and confidence < DEPRIORITISE_THRESHOLD:
         disposition = "investigate"

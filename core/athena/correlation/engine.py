@@ -1,13 +1,3 @@
-"""Correlation: which installed components fall inside which advisory ranges.
-
-Correlation produces *candidates*, never confirmations. A version match means the
-package looks affected on paper; whether it is actually exploitable here is
-investigation's job (M3). Nothing in this module may set a finding to `confirmed`.
-
-The hard part is not the matching, it is the backports. See
-athena/intel/authority.py.
-"""
-
 from __future__ import annotations
 
 import uuid
@@ -40,14 +30,12 @@ from athena.versions.compare import (
 log = structlog.get_logger(__name__)
 
 
-# How much to trust a match, by how it was made. Investigation can raise a
-# finding's overall confidence with evidence; it cannot raise this.
 MATCH_CONFIDENCE: dict[str, float] = {
-    "distro_advisory": 0.95,    # the distribution's own tracker for its own package
-    "purl_exact_range": 0.95,   # ecosystem advisory, exact package, real comparator
-    "cpe_range": 0.70,          # CPE is coarse and frequently over-broad
-    "heuristic_range": 0.40,    # comparator is a heuristic for this ecosystem
-    "uncomparable": 0.20,       # we could not order the versions
+    "distro_advisory": 0.95,
+    "purl_exact_range": 0.95,
+    "cpe_range": 0.70,
+    "heuristic_range": 0.40,
+    "uncomparable": 0.20,
 }
 
 
@@ -65,8 +53,6 @@ class CandidateFinding:
     fixed_version: str | None
     advisory_revision: int
     rationale: str
-    # Ranges that pointed the other way, or that were outranked. Recorded so a
-    # disagreement between sources is visible rather than silently resolved.
     conflicts: list[dict[str, Any]]
 
 
@@ -81,17 +67,6 @@ def _method_for(ecosystem: str, authority: Authority) -> str:
 
 
 def _applies_to_release(r: AffectedRange, distro_release: str | None) -> bool:
-    """Whether a distro range describes the release actually installed.
-
-    OSV returns ranges for every supported release of a distribution under the same
-    package. Ubuntu 22.04 fixed openssl in 3.0.2-0ubuntu1.12 while 24.04 fixed it in
-    3.0.13-0ubuntu3.12; comparing a 24.04 host against the 22.04 range makes a
-    vulnerable host look patched, because 3.0.13 sorts above 3.0.2.
-
-    A range with no release attached applies everywhere. A host whose release is
-    unknown is not matched against release-specific ranges at all — an unknown
-    release is a coverage gap, not a licence to guess.
-    """
     if r.distro_release is None:
         return True
     if distro_release is None:
@@ -107,15 +82,6 @@ def evaluate(
     ranges: list[AffectedRange],
     distro_release: str | None = None,
 ) -> tuple[bool, str, float, AffectedRange | None, str, list[dict[str, Any]]]:
-    """Decide whether one component is affected, given every range for it.
-
-    Returns (affected, method, confidence, matched_range, rationale, conflicts).
-
-    Only ranges from an authoritative source for this ecosystem can make a
-    component affected. For a distribution package that means the distribution's
-    own tracker: an upstream range cannot tell whether the fix was backported, and
-    trusting it produces a false positive on every patched host.
-    """
     normalised = normalise_name(ecosystem, package)
     conflicts: list[dict[str, Any]] = []
 
@@ -138,7 +104,6 @@ def evaluate(
     authoritative = [r for r in ranges if is_authoritative(ecosystem, Authority(r.authority))]
     advisory_only = [r for r in ranges if r not in authoritative]
 
-    # Record what the non-authoritative sources said, whichever way it went.
     for r in advisory_only:
         try:
             said_affected = in_affected_range(
@@ -226,11 +191,6 @@ def _candidate(
     rationale: str,
     conflicts: list[dict[str, Any]],
 ) -> CandidateFinding:
-    """Build a candidate, copying the matched range's identifying facts.
-
-    They are copied rather than referenced because affected_range is replaced
-    wholesale on every advisory revision.
-    """
     return CandidateFinding(
         vulnerability_id=vulnerability_id,
         asset_id=asset_id,
@@ -249,7 +209,6 @@ def _candidate(
 
 
 def _ranges_for(session: Session, ecosystem: str, package: str) -> dict[str, list[AffectedRange]]:
-    """Every range touching this package, grouped by vulnerability."""
     rows = session.execute(
         select(AffectedRange).where(
             AffectedRange.ecosystem == ecosystem,
@@ -266,14 +225,6 @@ def _ranges_for(session: Session, ecosystem: str, package: str) -> dict[str, lis
 def _record(
     session: Session, candidate: CandidateFinding, *, vulnerability: Vulnerability
 ) -> tuple[Finding, str]:
-    """Create or refresh a candidate finding. Always `discovered`, never confirmed.
-
-    Returns the finding and what happened to it: "created", "reopened" (it had been
-    `unmatched` and a range covers it again), "decided" (its match had been
-    undecided and is a match again, with a fix back on it) or "refreshed". The
-    callers publish on all but the last — a page must hear about a finding coming
-    back, or its fix changing, as much as about a new one.
-    """
     existing = session.execute(
         select(Finding).where(
             Finding.vulnerability_id == candidate.vulnerability_id,
@@ -284,17 +235,12 @@ def _record(
 
     now = datetime.now(UTC)
     if existing is not None:
-        # A fix appearing later moves the finding back into actionable work — and
-        # so does learning the package is malware, which has no fix to wait for.
         if existing.state == "no_fix_available" and (
             candidate.fixed_version or vulnerability.malicious
         ):
             existing.state = "discovered"
             existing.state_changed_at = datetime.now(UTC)
-        # Matched again after a source retracted the range behind it: a corrected or
-        # re-published range makes it real again (see `_close_unmatched`).
         reopened = existing.state == "unmatched"
-        # Its match had been undecided, and the fix with it (`_close_unmatched`).
         decided = existing.match_method == "uncomparable"
         if reopened:
             from athena.audit import record
@@ -305,12 +251,6 @@ def _record(
                 else "no_fix_available"
             )
             existing.state_changed_at = now
-            # Whatever was concluded about it answered a match that was since
-            # retracted; this is a different one. Kept, the old verdict stood as an
-            # assessment of the new range, and the triage sweep (which wants no
-            # investigation) and `_load` (which wants an older revision) both passed
-            # the finding by — so it was never looked at again. Cleared, it is queued
-            # like any new finding. The investigation itself stays on record.
             previous = existing.investigation_id
             existing.investigation_id = None
             existing.risk_score = None
@@ -346,7 +286,6 @@ def _record(
         if decided:
             from athena.audit import record
 
-            # The pair to FINDING_MATCH_UNDECIDED: the match, and its fix, are back.
             record(
                 session,
                 actor="system:correlation",
@@ -362,15 +301,6 @@ def _record(
             return existing, "decided"
         return existing, "refreshed"
 
-    # A distribution routinely publishes an advisory before, or without, a fix.
-    # Those are real findings but nothing can be done about them, and mixing them
-    # with actionable work is the volume-over-action failure the product exists to
-    # avoid. The lifecycle already has a state for it.
-    #
-    # Malware is the exception. Its record never carries a fixed version — there is
-    # no release to upgrade to — so it landed here, in a bucket the default view and
-    # the triage queue both exclude: a typosquat filed as "nothing to be done yet".
-    # The action is removal, and it is available now.
     actionable = candidate.fixed_version or vulnerability.malicious
     state = "discovered" if actionable else "no_fix_available"
 
@@ -402,7 +332,6 @@ def _attach_evidence(
     candidate: CandidateFinding,
     vulnerability: Vulnerability,
 ) -> None:
-    """Every conclusion carries the reasoning that produced it."""
     import hashlib
     import json
 
@@ -448,13 +377,11 @@ def _attach_evidence(
 
 
 def release_of(asset: Asset) -> str | None:
-    """The distribution release an asset runs, if it is known."""
     attributes = asset.attributes or {}
     return attributes.get("distro_release")
 
 
 def correlate_asset(session: Session, asset: Asset) -> dict[str, Any]:
-    """Match every component on one asset against known advisories."""
     distro_release = release_of(asset)
     rows = session.execute(
         select(Component)
@@ -512,18 +439,10 @@ def correlate_asset(session: Session, asset: Asset) -> dict[str, Any]:
 
 
 def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any]:
-    """Match one advisory against everything already inventoried.
-
-    This is the reverse direction that makes new-CVE correlation fast: it queries
-    the component index rather than rescanning any asset.
-    """
     vulnerability = session.get(Vulnerability, vulnerability_id)
     if vulnerability is None:
         return {"status": "unknown_advisory"}
     if vulnerability.withdrawn_at is not None:
-        # Nothing to match, but its findings have now been looked at against this
-        # revision — withdrawal itself is a revision, and leaving them behind it kept
-        # the advisory in the hourly stale sweep for good.
         _mark_evaluated(session, vulnerability)
         return {"status": "withdrawn", "matched": 0}
 
@@ -537,9 +456,6 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
 
     matched = created = candidates = reopened = decided = 0
     matched_pairs: set[tuple[Any, Any]] = set()
-    # Not affected only for want of an answer — a version that could not be ordered
-    # against a range, a release-specific range on an asset whose release is not
-    # known. Left open: closing them would report an unknown as a retraction.
     undecided: set[tuple[Any, Any]] = set()
     for (ecosystem, package), package_ranges in by_package.items():
         installed = session.execute(
@@ -597,22 +513,12 @@ def correlate_advisory(session: Session, vulnerability_id: str) -> dict[str, Any
         "created": created,
         "reopened": reopened,
         "unmatched": unmatched,
-        # Matches that became undecided (their fix withdrawn from the page) or were
-        # decided again (a fix back on it). Counted so the run is published.
         "undecided": became_undecided,
         "decided": decided,
     }
 
 
 def _mark_evaluated(session: Session, vulnerability: Vulnerability) -> None:
-    """Every finding of this advisory has now been weighed against its revision.
-
-    `_record` brings matched findings up to date, but a finding that did not match —
-    unmatched, resolved, a package since removed — kept its old revision, and
-    `stale_findings` re-queued the advisory every hour, indefinitely. The revision
-    marks what a finding was last evaluated against, and this run evaluated all of
-    them.
-    """
     session.execute(
         text(
             "UPDATE finding SET advisory_revision = :rev"
@@ -622,19 +528,10 @@ def _mark_evaluated(session: Session, vulnerability: Vulnerability) -> None:
     )
 
 
-# States a finding can be in while its match is still the reason it exists. Later
-# states (a fix under way, a decision taken) are left to their own owners.
 OPEN_STATES = ("discovered", "investigating", "confirmed", "no_fix_available", "regressed")
 
 
 def _undecided(method: str, conflicts: list[dict[str, Any]]) -> bool:
-    """Whether a not-affected evaluation is really "could not say".
-
-    `evaluate` answers not-affected both when every range excludes the version and
-    when it could not order the version against one (`uncomparable`) or could not
-    apply a release-specific range because the asset's release is unknown. Only the
-    first is a retraction.
-    """
     return method == "uncomparable" or any(
         c.get("says") in ("uncomparable", "unknown") for c in conflicts
     )
@@ -646,24 +543,6 @@ def _close_unmatched(
     matched: set[tuple[Any, Any]],
     undecided: set[tuple[Any, Any]],
 ) -> tuple[int, int]:
-    """Close open findings that no remaining range supports.
-
-    Returns how many were closed, and how many matches became undecided this run —
-    both changes a connected page must hear about.
-
-    Correlation used to only add and refresh matches, so a range its source
-    retracted — a withdrawn duplicate GHSA, a corrected bound — left behind every
-    finding it had produced, matching nothing and listed forever. Only findings on
-    packages still installed are closed here: one whose package has gone is
-    inventory's to resolve, for a different reason.
-
-    `matched` and `undecided` are (asset, component) pairs from this run. A matched
-    finding was refreshed by `_record`. An undecided one stays open, but its match
-    is restated as what this revision supports — uncertain, with no fixed version
-    it vouches for — rather than left saying what the previous one did: it is about
-    to be marked evaluated against this revision, and investigation trusts a
-    current revision to mean a current match.
-    """
     from athena.audit import record
 
     open_findings = session.execute(
@@ -681,10 +560,6 @@ def _close_unmatched(
         if pair in undecided:
             if finding.match_method != "uncomparable":
                 became_undecided += 1
-                # What the previous range said, kept as history rather than as the
-                # current match: its fixed version is an upgrade this revision no
-                # longer vouches for, and triage, investigation and the fix page all
-                # read `fixed_version` as current.
                 record(
                     session,
                     actor="system:correlation",
@@ -738,12 +613,6 @@ def _close_unmatched(
 
 
 def stale_findings(session: Session, limit: int = 500) -> list[str]:
-    """Findings evaluated against an older advisory revision.
-
-    A revised advisory must re-correlate what it already produced, including
-    findings previously closed — a corrected range can make a dismissed finding
-    real again.
-    """
     rows = session.execute(
         text(
             "SELECT DISTINCT f.vulnerability_id FROM finding f "

@@ -1,13 +1,4 @@
 <script setup lang="ts">
-/**
- * One finding, as a case file.
- *
- * The investigation is what separates this from a version-matcher, and the old page
- * buried it under advisory metadata. Three things are deliberately prominent rather
- * than tucked away: what was established and by which tool, where code overruled the
- * model, and what could not be determined at all. The first is the claim, the second
- * is the best available measure of how far to trust it, the third is its honest edge.
- */
 const route = useRoute()
 const { data: me } = await useMe()
 if (!me.value) await navigateTo('/login')
@@ -19,12 +10,6 @@ const { data, pending, error, refresh } = await useAsyncData(`finding-${route.pa
   api<any>(`findings/${route.params.id}`),
 )
 
-/**
- * The open tab lives in the URL, so a link to "the fix for this" opens on the fix.
- * With none given, the case opens where its most useful answer is: malware on Fix
- * (removal is the whole story), an uninvestigated finding on Exploitability (there
- * is no verdict to show), everything else on the Verdict.
- */
 const requested = TAB_IDS.find(t => t === route.query.tab)
 const tab = ref<Tab>(
   requested
@@ -74,7 +59,6 @@ const forensic = computed(() =>
   !!(data.value?.prioritization?.deadline?.forensic_triage
     || (data.value?.prioritization?.kev?.listed && data.value?.prioritization?.kev?.forensic_triage)),
 )
-/** EPSS as a probability, never shown as a certainty. */
 function epssText(score: number) {
   if (score >= 0.995) return '>99%'
   return `${(score * 100).toFixed(score >= 0.1 ? 0 : 1)}%`
@@ -103,9 +87,6 @@ function evidenceLabel(s: any) {
   return s.evidence?.length ? s.evidence.join(', ') : 'nothing cited'
 }
 
-// Named for what the operator has to do about it, not for the taxonomy. Nobody
-// arrives wanting to know that something is `base_image`; they want to know that the
-// command they were about to run will not survive a restart.
 const FIX_KIND: Record<string, string> = {
   os_package: 'The package manager installs this',
   base_image: 'This needs the image rebuilt',
@@ -117,21 +98,11 @@ const FIX_KIND: Record<string, string> = {
   unknown: 'Not enough is recorded to say',
 }
 
-/**
- * The scoring arithmetic as bars — as what it is, a product of multipliers.
- *
- * `raw = base × (0.30 + 0.70 × exploitation) × exposure × running × importance ×
- * reachability`. Drawn as "contributions" sorted by size, a neutral 1.00 got the
- * longest bar while the 0.10 that crushed the score got the shortest, and the
- * product itself was plotted as one more factor. Each bar is now the multiplier
- * actually applied, in formula order, and the product is stated rather than drawn.
- */
 const FACTOR_ORDER = ['base', 'exploitation', 'exposure', 'running', 'importance', 'reachability']
 const riskFactors = computed(() => {
   const factors: Record<string, number> = risk.value?.factors ?? {}
   return FACTOR_ORDER.filter(name => factors[name] != null).map((name) => {
     const raw = Number(factors[name])
-    // Exploitation enters through a floor: none at all still keeps 30% of the score.
     const applied = name === 'exploitation' ? 0.30 + 0.70 * raw : raw
     return {
       label: pretty(name),
@@ -160,10 +131,7 @@ async function copyCommand() {
     await navigator.clipboard.writeText(fix.value.command)
     copied.value = true
     setTimeout(() => { copied.value = false }, 1600)
-  } catch {
-    // A refused clipboard is not worth an error state — the text is on screen and
-    // selectable, which is what it was there for.
-  }
+  } catch {}
 }
 
 const tabs = [
@@ -210,8 +178,6 @@ const tabs = [
           <div class="badges">
             <span v-if="data.vulnerability.malicious" class="tag bad strong caps">malware</span>
             <SsvcChip v-else :outcome="data.prioritization?.ssvc?.outcome" />
-            <!-- One deadline, worded once. CISA's federal KEV date is a different
-                 deadline and goes in the tooltip, not beside it as a second date. -->
             <span v-if="deadlineBadge" class="tag" :class="{ bad: deadlineBadge.bad }"
                   :title="deadlineBadge.title">
               {{ deadlineBadge.text }}
@@ -262,12 +228,6 @@ const tabs = [
         </div>
       </div>
 
-      <!-- Not investigated is its own state, never a low score. And "waiting its
-           turn" is not the same as "the floor will never select it" — a page that
-           says the first while the second is true is telling the operator something
-           is coming that is not. -->
-      <!-- Malware first and loudest: the generic "not investigated" banner below would
-           read as a routine version match, which is the opposite of the truth. -->
       <div v-if="data.vulnerability.malicious" class="banner bad">
         <strong>Malware installed on {{ data.asset.display_name }}.</strong> <code>{{ data.component.name }} {{ data.component.version }}</code> is a published
         malicious package, not a flawed release. Remove it and treat the asset — and
@@ -324,7 +284,6 @@ const tabs = [
         <button class="btn" style="margin-top:.5rem" @click="revoke">Show it again</button>
       </div>
 
-      <!-- A finding that came back says why, rather than simply reappearing. -->
       <div v-else-if="suppression?.lapsed?.invalidated_reason" class="banner warn">
         <strong>This came back.</strong>
         It was set aside on
@@ -352,7 +311,6 @@ const tabs = [
 
       <div id="case-panel" role="tabpanel" :aria-labelledby="`case-tab-${tab}`">
 
-      <!-- ══ Verdict ══ -->
       <div v-if="tab === 'verdict'" class="cols">
         <div class="main">
           <StateBlock v-if="!inv" kind="never" title="No investigation has run">
@@ -418,8 +376,6 @@ const tabs = [
               </table>
             </div>
 
-            <!-- Where the model asserted something it could not support and code
-                 overruled it. Prominent, because burying it would defeat its purpose. -->
             <div v-if="inv.corrections?.length" class="card overruled">
               <div class="lbl warn">Athena overruled itself · {{ inv.corrections.length }}</div>
               <ul class="corrections">
@@ -447,8 +403,6 @@ const tabs = [
         </div>
 
         <aside class="side">
-          <!-- A reused verdict is a different claim from one reached for this asset
-               alone, and with a high cache-hit rate most verdicts are reused. -->
           <div v-if="inv" class="card">
             <div class="lbl">This answer</div>
             <div class="kv"><span>Reached</span>
@@ -479,13 +433,10 @@ const tabs = [
         </aside>
       </div>
 
-      <!-- ══ Exploitability ══ -->
       <div v-else-if="tab === 'priority'" class="wide">
         <PriorityPanel :p="data.prioritization" />
       </div>
 
-      <!-- ══ Why this score ══ -->
-      <!-- ══ Fix ══ -->
       <div v-else-if="tab === 'fix'" class="narrow">
         <StateBlock v-if="!fix" kind="never" title="No route to a fix has been worked out">
           This finding has not been classified, so nothing here would be more than a
@@ -497,9 +448,6 @@ const tabs = [
             <div class="lbl">{{ FIX_KIND[fix.class] ?? FIX_KIND.unknown }}</div>
             <p class="fixsummary"><UntrustedText :text="fix.summary" /></p>
 
-            <!-- Deliberately absent for a transitive dependency and for a package
-                 baked into an image: there is no command that would work, and
-                 offering a plausible one invites exactly the wrong attempt. -->
             <div v-if="fix.command" class="cmdrow">
               <code class="cmd">{{ fix.command }}</code>
               <button class="btn" @click="copyCommand">{{ copied ? 'Copied' : 'Copy' }}</button>
@@ -513,8 +461,6 @@ const tabs = [
               <span class="muted"><UntrustedText :text="fix.change_at" /></span></div>
           </div>
 
-          <!-- Malware is an incident, so its fix is a response checklist rather than a
-               command. Nothing here is executed by Athena. -->
           <div v-if="fix.class === 'malicious'" class="card">
             <div class="lbl">Respond, in this order</div>
             <ol class="respond">
@@ -531,8 +477,6 @@ const tabs = [
             </ol>
           </div>
 
-          <!-- Why it cannot be done now sits on its own, above the unknowns: it is a
-               different kind of statement from "we did not check". -->
           <div v-if="fix.blocked_by" class="card blocked">
             <div class="lbl warn">Not actionable yet</div>
             <p class="rationale">
@@ -588,7 +532,6 @@ const tabs = [
         </template>
       </div>
 
-      <!-- ══ Raw evidence ══ -->
       <div v-else-if="tab === 'evidence'" class="narrow">
         <StateBlock v-if="!data.evidence?.length" kind="never" title="No evidence recorded">
           Nothing has been observed and stored for this finding yet.
@@ -605,7 +548,6 @@ const tabs = [
         </div>
       </div>
 
-      <!-- ══ Advisory ══ -->
       <div v-else class="narrow">
         <div class="card">
           <div class="lbl">Advisory</div>
@@ -626,8 +568,6 @@ const tabs = [
           </p>
         </div>
 
-        <!-- Sources can disagree about which versions are affected. Shown rather than
-             resolved behind the scenes. -->
         <div v-if="data.advisory_ranges?.length" class="card">
           <div class="lbl">Affected ranges, by source</div>
           <table class="sig">

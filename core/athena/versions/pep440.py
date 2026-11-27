@@ -1,10 +1,3 @@
-"""PEP 440 version ordering.
-
-Python's ordering is not lexical and not SemVer: `1.0a1 < 1.0 < 1.0.post1`, and
-`1.0.dev1` sorts before every other 1.0. Getting this wrong silently mismatches
-advisory ranges, so the ordering key is built explicitly rather than approximated.
-"""
-
 from __future__ import annotations
 
 import re
@@ -23,12 +16,10 @@ _VERSION = re.compile(
     re.VERBOSE | re.IGNORECASE,
 )
 
-# Normalised pre-release spellings. `c` and `pre` are aliases for `rc`.
 _PRE_ALIASES = {"alpha": "a", "beta": "b", "c": "rc", "pre": "rc", "preview": "rc"}
 
-# Sentinels that order correctly against real segment tuples.
-_NEGATIVE_INFINITY = ("!",)   # sorts before any ("#", ...) tuple
-_INFINITY = ("~",)            # sorts after
+_NEGATIVE_INFINITY = ("!",)
+_INFINITY = ("~",)
 
 
 class InvalidVersion(ValueError):
@@ -67,26 +58,21 @@ def parse(version: str) -> dict[str, Any]:
 
 
 def sort_key(version: str) -> tuple:
-    """A tuple that orders the same way PEP 440 says versions order."""
     parsed = parse(version)
 
-    # Trailing zeros are not significant: 1.0 == 1.0.0.
     release = tuple(reversed(list(_drop_trailing_zeros(reversed(parsed["release"])))))
 
     pre = parsed["pre"]
     if pre is None:
-        # No pre-release. A dev release with no pre still sorts before the final
-        # release; otherwise the final release sorts after all its pre-releases.
         is_bare_dev = parsed["post"] is None and parsed["dev"] is not None
         pre = _NEGATIVE_INFINITY if is_bare_dev else _INFINITY
 
     post = parsed["post"] or _NEGATIVE_INFINITY
-    dev = parsed["dev"] or _INFINITY   # absence of .devN sorts AFTER any .devN
+    dev = parsed["dev"] or _INFINITY
 
     if parsed["local"] is None:
         local: tuple = _NEGATIVE_INFINITY
     else:
-        # Numeric segments compare numerically and above alphabetic ones.
         local = tuple(
             (int(part), "") if part.isdigit() else (-1, part)
             for part in re.split(r"[._-]", parsed["local"])

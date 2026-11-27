@@ -14,9 +14,6 @@ const busy = ref(false)
 const error = ref('')
 const linked = ref<number | null>(null)
 
-// Offered rather than typed. Matching is exact on the name the runtime reports, so
-// the one thing that must not happen is somebody entering a plausible spelling that
-// links nothing — and the names are already on this page.
 const imageNames = computed(() => {
   const names = new Set<string>()
   for (const a of data.value?.assets ?? []) {
@@ -83,8 +80,6 @@ useEvents(['assets'], refresh)
         <button type="submit" :disabled="busy">{{ busy ? 'Adding…' : 'Add' }}</button>
       </form>
 
-      <!-- Nothing in an image records the source that built it. Saying so here is the
-           only way a finding on an image ever leads to the file that has to change. -->
       <div class="buildsrow">
         <input
           v-model="builds" list="known-images" class="grow"
@@ -124,8 +119,6 @@ useEvents(['assets'], refresh)
               <span v-else>{{ a.tier }}</span>
             </td>
             <td>
-              <!-- Never show 0 for an asset we have not inventoried: that reads as
-                   "no dependencies" when it means "we have not looked". -->
               <span v-if="a.never_inventoried" class="muted">unknown</span>
               <span v-else>{{ a.component_count }}</span>
             </td>

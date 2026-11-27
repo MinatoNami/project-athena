@@ -1,9 +1,3 @@
-"""Core's task-signing key.
-
-Separate from the executor's grant key: they authorise different things, and a
-compromise of one must not confer the other.
-"""
-
 from __future__ import annotations
 
 from functools import lru_cache

@@ -1,21 +1,3 @@
-"""Suppression: deciding a finding does not need attention, and recording why.
-
-The distinction this module exists to hold is between *suppressing* and *hiding*.
-Hiding removes something from view. Suppressing records that a person looked at it
-and judged it did not need attention **given what was true at the time** — and keeps
-that premise, so the judgement can be re-checked when the situation moves.
-
-Without the premise, a one-line "accepted, not exposed" outlives the isolation it
-depended on, and the finding stays invisible through exactly the change that made it
-matter. Capturing it is what lets an isolated service becoming internet-facing, or a
-flaw joining the known-exploited catalogue, put the finding back in front of someone
-with a stated reason.
-
-Nothing here deletes a finding. Suppressed findings are excluded from the default
-list and counted separately, the same way findings with no published fix are: held
-back, never hidden.
-"""
-
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -38,30 +20,16 @@ REASON_CODES = {
     "fix_scheduled": "A fix is already planned",
 }
 
-# Long enough that a reader six months later has something to work with.
 MIN_REASON = 8
 
-# Accepted risk is the one reason that is a decision rather than a fact, so it is the
-# one that must be revisited. The others describe the world and are re-checked by the
-# premise; this one describes an appetite, and appetites go stale silently.
 REQUIRES_EXPIRY = {"accepted_risk"}
 
 
 class SuppressionError(ValueError):
-    """Rejected for a stated reason the caller should show the operator."""
-
-
-# ── premise ──────────────────────────────────────────────────────────────────
+    pass
 
 
 def capture_premise(session: Session, finding: Finding) -> dict[str, Any]:
-    """The facts a suppression is standing on.
-
-    Deliberately narrow. Every entry here is something whose change would undermine
-    a normal reason for dismissing a finding; anything broader would invalidate
-    suppressions on churn nobody cares about, and a suppression that keeps
-    resurfacing for no reason gets replaced by one with no expiry at all.
-    """
     asset = session.get(Asset, finding.asset_id)
     vulnerability = session.get(Vulnerability, finding.vulnerability_id)
     return {
@@ -74,13 +42,6 @@ def capture_premise(session: Session, finding: Finding) -> dict[str, Any]:
 
 
 def premise_broken(premise: dict[str, Any], current: dict[str, Any]) -> str | None:
-    """What changed, phrased for the person who will read it on the finding.
-
-    Only changes that argue *against* the suppression count. A service becoming more
-    isolated, or a flaw dropping off the exploited catalogue, does not invalidate a
-    decision to dismiss it — reinstating findings because the situation improved
-    would train people to ignore the mechanism.
-    """
     exposure_rank = {"isolated": 0, "internal": 1, "unknown": 2, "internet": 3}
     tier_rank = {"personal": 0, "development": 1, "staging": 2, "unknown": 3, "production": 4}
 
@@ -107,15 +68,7 @@ def premise_broken(premise: dict[str, Any], current: dict[str, Any]) -> str | No
     return None
 
 
-# ── matching ─────────────────────────────────────────────────────────────────
-
-
 def active_predicate(now: datetime | None = None) -> Any:
-    """Is this suppression still in force?
-
-    Expiry is evaluated here rather than by a sweep, so an expired suppression stops
-    applying the moment it expires instead of the next time something happens to run.
-    """
     moment = now or datetime.now(UTC)
     return and_(
         Suppression.revoked_at.is_(None),
@@ -125,15 +78,11 @@ def active_predicate(now: datetime | None = None) -> Any:
 
 
 def scope_matches_finding() -> Any:
-    """A null column widens the scope: null asset means any asset."""
     return and_(
         Suppression.vulnerability_id == Finding.vulnerability_id,
         or_(Suppression.asset_id.is_(None), Suppression.asset_id == Finding.asset_id),
         or_(Suppression.component_id.is_(None), Suppression.component_id == Finding.component_id),
     )
-
-
-# ── operations ───────────────────────────────────────────────────────────────
 
 
 def create_suppression(
@@ -146,7 +95,6 @@ def create_suppression(
     expires_at: datetime | None = None,
     actor: str,
 ) -> Suppression:
-    """Suppress, from the finding a person was looking at when they decided."""
     if reason_code not in REASON_CODES:
         raise SuppressionError(
             f"Unknown reason {reason_code!r} — expected one of {', '.join(sorted(REASON_CODES))}"
@@ -219,7 +167,6 @@ def create_suppression(
 
 
 def revoke_suppression(session: Session, *, suppression: Suppression, actor: str) -> Suppression:
-    """Put the finding back deliberately. Revocation is kept, never deleted."""
     if suppression.revoked_at is not None:
         raise SuppressionError("This suppression has already been revoked.")
     suppression.revoked_at = datetime.now(UTC)
@@ -235,12 +182,6 @@ def revoke_suppression(session: Session, *, suppression: Suppression, actor: str
 
 
 def review_suppressions(session: Session) -> dict[str, Any]:
-    """Re-check every live suppression against the world as it is now.
-
-    Runs on a sweep rather than at query time because invalidation is an event worth
-    recording — the operator should be able to see that a decision was overturned and
-    why, not merely notice a finding reappearing.
-    """
     live = session.execute(
         select(Suppression).where(
             Suppression.revoked_at.is_(None), Suppression.invalidated_at.is_(None)
@@ -263,8 +204,6 @@ def review_suppressions(session: Session) -> dict[str, Any]:
         if not findings:
             continue
 
-        # The scope may cover many findings; the strongest argument against the
-        # suppression wins, because one exposed asset is enough to undo it.
         broken: str | None = None
         for finding in findings:
             reason = premise_broken(suppression.premise, capture_premise(session, finding))
@@ -277,8 +216,6 @@ def review_suppressions(session: Session) -> dict[str, Any]:
         suppression.invalidated_at = datetime.now(UTC)
         suppression.invalidated_reason = broken
         invalidated += 1
-        # Worth interrupting for: somebody believed this was handled, and the ground
-        # it stood on moved. Grouped per advisory like everything else.
         from athena.notify import emit
 
         emit(

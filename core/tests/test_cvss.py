@@ -1,11 +1,3 @@
-"""CVSS base scores.
-
-The calculator was checked exhaustively against an independent implementation over
-all 5,184 v3.0/v3.1 base vectors before these were written. These pin the published
-examples, the rounding rule that distinguishes 3.0 from 3.1, and the refusals — a
-vector this module cannot read must produce None, never a number.
-"""
-
 from __future__ import annotations
 
 import pytest
@@ -32,7 +24,6 @@ def test_published_examples(vector, expected):
 
 
 def test_no_impact_is_zero_not_unknown():
-    """A vector that states no impact is a measured zero — distinct from None."""
     assert cvss.base_score("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:N") == 0.0
 
 
@@ -50,11 +41,11 @@ def test_temporal_metrics_are_ignored_for_the_base_score():
     [
         None,
         "",
-        "AV:N/AC:L/Au:N/C:P/I:P/A:P",  # v2 — not scored here
-        "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H",  # A missing
-        "CVSS:3.1/AV:X/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",  # unknown value
-        "CVSS:3.1/AV:N/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",  # repeated metric
-        "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:Q/C:H/I:H/A:H",  # unknown scope
+        "AV:N/AC:L/Au:N/C:P/I:P/A:P",
+        "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H",
+        "CVSS:3.1/AV:X/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+        "CVSS:3.1/AV:N/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+        "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:Q/C:H/I:H/A:H",
         "CVSS:9.9/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
     ],
 )
@@ -63,8 +54,6 @@ def test_unreadable_vectors_are_refused_not_guessed(vector):
 
 
 def test_v4_is_parsed_but_not_scored():
-    """v4 scores come from FIRST's macro-vector table. Without it, no number — the
-    caller falls back to the published label rather than to an approximation."""
     vector = "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
     assert cvss.parse(vector).get("AT") == "N"
     assert cvss.base_score(vector) is None

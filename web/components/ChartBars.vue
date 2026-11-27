@@ -1,16 +1,6 @@
 <script setup lang="ts">
-/**
- * Magnitude across categories — the form §9 gives for almost everything here.
- *
- * Two kinds of not-knowing, both drawn as a dashed outline rather than a fill.
- * `value: null` was never measured, so it spans the track and says so. `dashed`
- * with a real value is a known quantity whose *band* is unknown — the unassessed
- * share of an estate. Neither may render as a zero-length bar: rule 1 says unknown
- * is never clean, and a missing bar is the most convincing clean there is.
- */
 const props = defineProps<{
   rows: { label: string; value: number | null; color?: string; hint?: string; dashed?: boolean }[]
-  /** Appended to each direct label — "findings", "packages", "%". */
   unit?: string
   summary: string
 }>()
@@ -20,7 +10,6 @@ const { theme, chrome } = useChartTheme()
 const max = computed(() => Math.max(1, ...props.rows.map(r => r.value ?? 0)))
 const height = computed(() => Math.max(90, props.rows.length * 30 + 16))
 
-/** Room for the longest direct label, since they sit outside the bar. */
 const gutter = computed(() => {
   const longest = Math.max(...props.rows.map(r =>
     (r.value === null ? (r.hint || 'not measured') : r.value.toLocaleString()).length,
@@ -43,9 +32,6 @@ const option = computed(() => ({
   tooltip: {
     ...chrome.value.tooltip,
     trigger: 'item',
-    // ECharts inserts this string as HTML, and labels include names that arrive
-    // from node agents and registries (asset display names, ecosystems) — so every
-    // piece of text is escaped before it is wrapped in markup.
     formatter: (p: any) => {
       const row = props.rows[p.dataIndex]
       const value = row.value === null

@@ -1,21 +1,3 @@
-"""What a checkout declares, as a check on what the scanner found.
-
-Syft catalogued this repository and reported 754 npm packages and nothing else. The
-scan was recorded as succeeded with no warnings, and the asset showed as fully
-inventoried — while `core/pyproject.toml`, declaring eleven runtime dependencies, had
-never been read. Nothing in the pipeline could notice, because every check operated on
-what the SBOM contained rather than on what it should have contained.
-
-This reads the manifests in the tree and asks a question the SBOM cannot answer about
-itself: something here declares dependencies in an ecosystem the scan reported nothing
-for. That is a gap in what is known, not a known limitation, so it makes the scan
-partial and the asset stays stale — which is the truth.
-
-Manifests are counted, not trusted for versions. `fastapi>=0.115` is not a version and
-recording it as one would put an unmatched range into correlation. The declaration is
-evidence that something is there, and that is all it is used for.
-"""
-
 from __future__ import annotations
 
 import json
@@ -28,17 +10,12 @@ import structlog
 
 log = structlog.get_logger(__name__)
 
-# Directories that hold somebody else's manifests. A `package.json` inside
-# node_modules describes a dependency, not a declaration by this repository, and
-# walking them turns a check into a crawl.
 SKIP_DIRS = {
     ".git", "node_modules", ".venv", "venv", "vendor", "__pycache__",
     ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist", "build",
     ".output", ".nuxt", "target", ".tox",
 }
 
-# Bounded deliberately: this is a cross-check, not an inventory, and a repository
-# with thousands of manifests is not one where reading all of them changes the answer.
 MAX_FILES = 400
 MAX_BYTES = 2_000_000
 
@@ -47,21 +24,12 @@ _REQ_LINE = re.compile(r"^\s*[A-Za-z0-9._-]+\s*(?:[<>=!~\[]|$)")
 
 @dataclass(frozen=True)
 class Declaration:
-    """A manifest that names dependencies, and how many it names."""
-
     path: str
     ecosystem: str
     declared: int
 
 
 def declarations(root: pathlib.Path) -> list[Declaration]:
-    """Every manifest in the tree that declares at least one dependency.
-
-    A manifest declaring nothing is not evidence of anything. This repository's
-    `node/go.mod` names a module and a Go version and requires no third-party
-    package at all — syft reporting no Go components for it is correct, and treating
-    the file's presence as a gap would manufacture a permanent false alarm.
-    """
     found: list[Declaration] = []
     seen = 0
     for path in _walk(root):
@@ -87,12 +55,6 @@ def declarations(root: pathlib.Path) -> list[Declaration]:
 
 
 def gaps(declared: list[Declaration], ecosystems: set[str]) -> list[str]:
-    """Ecosystems declared in the tree that the SBOM reported nothing for.
-
-    Phrased so that whoever reads it knows both what is missing and what would close
-    it. A gap nobody can act on reads as noise and gets ignored, which costs more
-    than not reporting it.
-    """
     out: list[str] = []
     for ecosystem in sorted({d.ecosystem for d in declared} - ecosystems):
         files = [d for d in declared if d.ecosystem == ecosystem]
@@ -107,7 +69,6 @@ def gaps(declared: list[Declaration], ecosystems: set[str]) -> list[str]:
 
 
 def _remedy(ecosystem: str) -> str:
-    """Why the scanner could not see it, where that is known."""
     if ecosystem == "pypi":
         return (
             "Declared ranges are not versions, so nothing here can be matched against "
@@ -144,7 +105,6 @@ def _count_requirements(text: str) -> int:
 
 
 def _pyproject(text: str) -> tuple[str, int]:
-    """setuptools and poetry layouts both, since either may be what a repo uses."""
     try:
         doc = tomllib.loads(text)
     except tomllib.TOMLDecodeError:
@@ -154,7 +114,6 @@ def _pyproject(text: str) -> tuple[str, int]:
     for extra in (project.get("optional-dependencies") or {}).values():
         count += len(extra or [])
     poetry = ((doc.get("tool") or {}).get("poetry") or {}).get("dependencies") or {}
-    # `python` is the interpreter constraint, not a package.
     count += len([k for k in poetry if k != "python"])
     return "pypi", count
 
@@ -170,7 +129,6 @@ def _package_json(text: str) -> tuple[str, int]:
 
 
 def _go_mod(text: str) -> tuple[str, int]:
-    """Counts `require` entries only. A module that requires nothing declares nothing."""
     count, in_block = 0, False
     for raw in text.splitlines():
         line = raw.strip()

@@ -1,19 +1,6 @@
-/**
- * A scan run, in words a person can act on.
- *
- * The stored `error` is built for an engineer reading a database: a diagnosis
- * wrapped around 300 characters of the scanner's stderr. Showing it raw was the
- * worst of both — too much for a reader who wants to know whether the asset is
- * covered, too little for one who wants to debug the scanner. So the outcome is
- * translated, and the original is kept verbatim behind a disclosure rather than
- * thrown away.
- */
-
 export interface ScanOutcome {
-  /** One of: covered · partial · unknown — what this run established, not how it exited. */
   state: 'covered' | 'partial' | 'unknown'
   headline: string
-  /** The scanner's own words, for the person who does want them. */
   detail: string | null
 }
 
@@ -29,7 +16,6 @@ const CAUSES: [RegExp, string][] = [
   [/clone|checkout|authentication|permission denied/i, 'Athena could not check the source out.'],
 ]
 
-/** Scan kinds that look at a repository's tree rather than inventory its packages. */
 export const CODE_SCAN_KINDS = ['secret', 'misconfiguration']
 
 export function scanOutcome(run: {
@@ -40,8 +26,6 @@ export function scanOutcome(run: {
 }): ScanOutcome {
   const components = run.stats?.components
 
-  // A secrets or misconfiguration scan says nothing about packages, so it is never
-  // described as having "read" any.
   if (run.kind && CODE_SCAN_KINDS.includes(run.kind) && run.status === 'succeeded') {
     const n = run.stats?.findings ?? 0
     const what = run.kind === 'secret' ? 'secret' : 'misconfiguration'

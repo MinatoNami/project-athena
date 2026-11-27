@@ -1,9 +1,3 @@
-"""SSE relay.
-
-Postgres LISTEN/NOTIFY feeds an in-process broker; clients receive identity only and
-refetch through the normal API, so authorisation is re-checked on the read path.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -38,8 +32,6 @@ class Broker:
             try:
                 q.put_nowait(message)
             except asyncio.QueueFull:
-                # A slow client is dropped rather than allowed to stall the broker.
-                # It reconnects with Last-Event-ID and catches up from the outbox.
                 self._subscribers.discard(q)
 
     async def _listen(self) -> None:
@@ -55,7 +47,7 @@ class Broker:
                     log.info("events.listening", channel=CHANNEL)
                     async for notify in conn.notifies():
                         self._fanout(notify.payload)
-            except Exception as exc:  # noqa: BLE001 - reconnect rather than die
+            except Exception as exc:  # noqa: BLE001
                 log.warning("events.listen_failed", error=str(exc))
                 await asyncio.sleep(2)
 
@@ -80,7 +72,7 @@ async def event_stream(topics: set[str], queue: asyncio.Queue[str]):
         try:
             raw = await asyncio.wait_for(queue.get(), timeout=15.0)
         except TimeoutError:
-            yield ": keepalive\n\n"   # keeps proxies from closing an idle stream
+            yield ": keepalive\n\n"
             continue
         try:
             event = json.loads(raw)

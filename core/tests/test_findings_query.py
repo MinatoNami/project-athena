@@ -1,11 +1,3 @@
-"""Server-side findings querying.
-
-These assert the properties that make the list trustworthy rather than exact SQL:
-that a page boundary never drops or repeats a group, that a filtered view reports
-what it is excluding, and that group-level facets are decided over the group rather
-than over whichever row the database happened to reach first.
-"""
-
 from __future__ import annotations
 
 import uuid
@@ -65,7 +57,6 @@ def _finding(session, vulnerability, asset, component, *, band=None, score=None,
 
 @pytest.fixture
 def estate(session):
-    """Four vulnerabilities with deliberately awkward shapes."""
     prod = _asset(session, "edge", exposure="internet")
     lap = _asset(session, "laptop", tier="development", exposure="isolated")
 
@@ -77,7 +68,6 @@ def estate(session):
     _finding(session, crit, prod, _component(session, "nginx"), band="critical", score=78)
     _finding(session, med, lap, _component(session, "curl"), band="low", score=4)
     _finding(session, none, prod, _component(session, "libxml2"))
-    # One group, two instances, only one assessed and only one carrying a fix.
     _finding(session, mixed, prod, _component(session, "tar"), band="medium", score=31)
     _finding(session, mixed, lap, _component(session, "tar"), fix=None)
     session.flush()
@@ -93,7 +83,6 @@ def test_a_group_takes_the_worst_of_its_instances(session, estate):
     mixed = next(g for g in page.groups if g["vulnerability_id"] == estate["mixed"].id)
     assert mixed["instance_count"] == 2
     assert mixed["investigated_count"] == 1
-    # Not an average: averaging would hide the instance worth looking at.
     assert mixed["worst_band"] == "medium"
     assert mixed["worst_score"] == 31
 
@@ -101,16 +90,10 @@ def test_a_group_takes_the_worst_of_its_instances(session, estate):
 def test_assessed_groups_rank_above_unassessed(session, estate):
     order = _ids(query_findings(session, FindingQuery(limit=100)))
     assert order.index(estate["crit"].id) < order.index(estate["none"].id)
-    # A measured `low` still outranks something nobody has looked at.
     assert order.index(estate["med"].id) < order.index(estate["none"].id)
 
 
 def test_assessment_is_decided_over_the_group_not_one_row(session, estate):
-    """`mixed` has an assessed instance and an unassessed one.
-
-    It belongs in `assessed` and must not also appear in `unassessed`; deciding this
-    per row would have put it in both.
-    """
     assessed = _ids(query_findings(session, FindingQuery(assessed=True, limit=100)))
     unassessed = _ids(query_findings(session, FindingQuery(assessed=False, limit=100)))
     assert estate["mixed"].id in assessed
@@ -120,7 +103,6 @@ def test_assessment_is_decided_over_the_group_not_one_row(session, estate):
 
 
 def test_fix_availability_is_also_a_group_property(session, estate):
-    """`mixed` has one instance with a fix and one without: it is fixable."""
     fixable = _ids(query_findings(session, FindingQuery(has_fix=True, limit=100)))
     assert estate["mixed"].id in fixable
 
@@ -157,8 +139,6 @@ def test_the_last_page_offers_no_cursor(session, estate):
 
 
 def test_a_mangled_cursor_returns_the_first_page(session, estate):
-    """It is an opaque token nobody is meant to construct, so a stale one is not an
-    error to show a person — it is a reason to start again from the top."""
     first = _ids(query_findings(session, FindingQuery(limit=2)))
     assert _ids(query_findings(session, FindingQuery(limit=2, cursor="not-a-cursor"))) == first
 
@@ -166,7 +146,6 @@ def test_a_mangled_cursor_returns_the_first_page(session, estate):
 def test_facets_report_both_what_exists_and_what_survives(session, estate):
     filtered = query_findings(session, FindingQuery(kev=True, limit=100))
     assert filtered.matching_group_count < filtered.group_count
-    # The population is unchanged by filtering; only `matching` moves.
     unfiltered = query_findings(session, FindingQuery(limit=100))
     assert filtered.group_count == unfiltered.group_count
     assert filtered.facets["assessed"]["total"] == unfiltered.facets["assessed"]["total"]
@@ -174,25 +153,15 @@ def test_facets_report_both_what_exists_and_what_survives(session, estate):
 
 
 def test_band_facets_keep_the_unassessed_in_their_own_bucket(session, estate):
-    """The distribution chart reads these directly.
-
-    A group nothing has assessed has no band at all. Folding it into
-    `informational` would draw the estate's unknown portion as its mildest, which is
-    the one thing rule 1 forbids — so it is counted separately and charted
-    separately.
-    """
     facets = query_findings(session, FindingQuery(limit=100)).facets
     bands = {name: facets[f"band:{name}"]["total"] for name in
              ("critical", "high", "medium", "low", "informational", "unassessed")}
     assert bands == {"critical": 1, "high": 0, "medium": 1, "low": 1,
                      "informational": 0, "unassessed": 1}
-    # Every group lands in exactly one bucket, so the chart's total is the estate.
     assert sum(bands.values()) == query_findings(session, FindingQuery(limit=100)).group_count
 
 
 def test_instances_obey_the_same_filters_as_the_groups(session, estate):
-    """Filtering to internet-facing assets and then listing every asset in the group
-    would answer a different question from the one asked."""
     page = query_findings(session, FindingQuery(exposure="internet", limit=100))
     mixed = next(g for g in page.groups if g["vulnerability_id"] == estate["mixed"].id)
     assert mixed["instance_count"] == 1
@@ -217,11 +186,6 @@ def test_instance_totals_describe_the_matching_set_not_the_page(session, estate)
 
 
 def test_needs_attention_includes_unassessed_known_exploited(session, estate):
-    """A known-exploited flaw nobody has looked at is the strongest reason to look.
-
-    A queue defined purely on measured band would rank it nowhere, because it has no
-    measured band at all.
-    """
     unlooked_kev = _advisory(session, f"CVE-E-{uuid.uuid4().hex[:6]}", kev=True)
     host = _asset(session, "unlooked", exposure="internet")
     _finding(session, unlooked_kev, host, _component(session, "openssl"))
@@ -230,7 +194,6 @@ def test_needs_attention_includes_unassessed_known_exploited(session, estate):
     queue = _ids(query_findings(session, FindingQuery(needs_attention=True, limit=100)))
     assert unlooked_kev.id in queue, "unassessed KEV must reach the queue"
     assert estate["crit"].id in queue
-    # A measured `low` is a decision already taken, not work waiting.
     assert estate["med"].id not in queue
     assert estate["none"].id not in queue
 
@@ -242,9 +205,6 @@ def test_the_queue_count_matches_what_the_queue_returns(session, estate):
 
 
 def test_every_facet_respects_group_level_filters(session, estate):
-    """Exposure used to be counted outside the group aggregate, so it never saw the
-    HAVING clauses: filtering to an empty population still reported the full estate
-    as matching on exposure while every other facet correctly reported none."""
     page = query_findings(session, FindingQuery(assessed=False, limit=100))
     assert page.matching_group_count == page.facets["unassessed"]["matching"]
     for name, counts in page.facets.items():
@@ -255,8 +215,6 @@ def test_every_facet_respects_group_level_filters(session, estate):
 
 
 def test_unassessed_malware_leads_the_queue_and_has_its_own_facet(session, estate):
-    """A malicious package nothing has assessed yet has no band, and would otherwise
-    rank below every assessed low. It is a compromise in progress, so it leads."""
     laptop = _asset(session, "dev-box", tier="development", exposure="isolated")
     mal = Vulnerability(
         id=f"MAL-2099-{uuid.uuid4().hex[:6]}", summary="Malicious code in colourama",
@@ -277,8 +235,6 @@ def test_unassessed_malware_leads_the_queue_and_has_its_own_facet(session, estat
 
 
 def test_a_withdrawn_advisory_stops_ranking(session, estate):
-    """Its publisher retracted it. A withdrawn malware report must not go on holding
-    the top of the queue at critical."""
     host = _asset(session, "ci-runner")
     retracted = Vulnerability(
         id=f"MAL-2099-{uuid.uuid4().hex[:6]}", summary="Malicious code in fastapi",
@@ -294,8 +250,6 @@ def test_a_withdrawn_advisory_stops_ranking(session, estate):
 
 
 def test_the_three_today_tabs_partition_the_estate(session, estate):
-    """Needs-you, waiting and cleared must not overlap: a known-exploited critical
-    listed under "cleared" tells a reader the opposite of the truth."""
     def ids(**kw):
         return {g["vulnerability_id"] for g in query_findings(
             session, FindingQuery(limit=200, **kw)).groups}
@@ -313,8 +267,6 @@ def test_the_three_today_tabs_partition_the_estate(session, estate):
 
 
 def test_a_partly_assessed_group_is_waiting_not_cleared(session, estate):
-    """One of two instances assessed as low, the other never looked at. "Cleared"
-    would say the group was dealt with while half of it is unknown."""
     a = _asset(session, "build-1", tier="development", exposure="isolated")
     b = _asset(session, "build-2", tier="development", exposure="isolated")
     partial = _advisory(session, f"CVE-E-{uuid.uuid4().hex[:6]}", cvss=3.1)
@@ -328,11 +280,7 @@ def test_a_partly_assessed_group_is_waiting_not_cleared(session, estate):
 
     assert partial.id in ids(fully_assessed=False, needs_attention=False)
     assert partial.id not in ids(fully_assessed=True, needs_attention=False)
-    # `assessed` keeps its own meaning — any instance — for the findings filter.
     assert partial.id in ids(assessed=True)
-
-
-# ── the list endpoint's own figures ──────────────────────────────────────────
 
 
 def _list(session, **params):
@@ -342,8 +290,6 @@ def _list(session, **params):
 
 
 def test_no_fix_count_is_over_what_the_list_could_show(session):
-    """Shown as what the list holds back, so it leaves out what no filter can list —
-    a withdrawn advisory's findings — and follows the list's asset scope."""
     host, other = _asset(session, "nofix-a"), _asset(session, "nofix-b")
     live = _advisory(session, f"CVE-2099-{uuid.uuid4().hex[:8]}")
     retracted = _advisory(session, f"CVE-2099-{uuid.uuid4().hex[:8]}")

@@ -22,5 +22,5 @@ kev = false
 
 [expected]
 verdict_in = ["uncertain", "applicable"]
-require_uncertainties = true    # it must say what it could not determine
-max_confidence = 0.8            # and must not be confident about it
+require_uncertainties = true
+max_confidence = 0.8

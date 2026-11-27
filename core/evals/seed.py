@@ -1,11 +1,3 @@
-"""Build and tear down the database fixture for one case.
-
-Eval rows live in the same database as real ones, distinguished by an `EVAL-` prefix
-on advisory ids and an `eval:` prefix on asset identity keys. Everything carrying
-those markers is removed before and after a run, so an interrupted run cannot leave
-fixtures behind to be mistaken for findings about real machines.
-"""
-
 from __future__ import annotations
 
 import uuid
@@ -27,20 +19,12 @@ from athena.db.models import (
 )
 from athena.intel.authority import SOURCE_AUTHORITY, Authority
 
-# Which feed a range of this shape would really have come from. Getting this right
-# matters: authority decides which range wins when several describe one package, and a
-# fixture that lied about its provenance would exercise a path production never takes.
 DEFAULT_SOURCE = {"deb": "ubuntu", "rpm": "redhat", "apk": "alpine"}
 
-# Stamped on components the corpus creates. Teardown removes only these, so an eval
-# run that happens to name a package the real inventory also carries reuses that row
-# and leaves it alone.
 EVAL_COMPONENT_MARK = "eval-fixture"
 
 EVAL_ADVISORY_PREFIX = "EVAL-"
 EVAL_IDENTITY_PREFIX = "eval:"
-# Fixed sentinel: every eval-seeded AssetComponent traces to the same "scan run",
-# which makes eval rows recognisable in the database without a join.
 EVAL_SCAN_RUN = uuid.UUID("00000000-0000-0000-0000-00000000e7a1")
 
 
@@ -60,15 +44,11 @@ def _asset(session, case, *, kind: str, suffix: str, spec: dict[str, Any]) -> As
 
 
 def build(case) -> dict[str, Any]:
-    """Create the rows one case needs. Returns the ids the harness reads back."""
     now = datetime.now(UTC)
     with session_scope() as session:
         host = _asset(session, case, kind=case.asset.get("kind", "host"),
                       suffix="asset", spec=case.asset)
 
-        # Services are assets in their own right, linked to the host. The listening-
-        # port tool reads them, so a case claiming network exposure must seed one —
-        # otherwise the case would be asking the model to assert what it cannot see.
         for index, svc in enumerate(case.services):
             service = _asset(
                 session, case, kind="service", suffix=f"svc{index}",
@@ -135,7 +115,7 @@ def build(case) -> dict[str, Any]:
             revision=1,
         )
         session.add(vulnerability)
-        session.flush()   # the range's foreign key needs the advisory to exist first
+        session.flush()
         ecosystem = case.component["ecosystem"]
         source = adv.get("source") or DEFAULT_SOURCE.get(ecosystem, "osv")
         session.add(AffectedRange(
@@ -178,7 +158,6 @@ def build(case) -> dict[str, Any]:
 
 
 def clear() -> int:
-    """Remove every eval row. Safe to call when none exist."""
     with session_scope() as session:
         vuln_ids = session.execute(
             select(Vulnerability.id).where(Vulnerability.id.like(f"{EVAL_ADVISORY_PREFIX}%"))
@@ -219,8 +198,6 @@ def clear() -> int:
             )
             session.execute(delete(Vulnerability).where(Vulnerability.id.in_(vuln_ids)))
 
-        # Evidence rows reference findings that are gone; the audit chain is append-only
-        # and is deliberately left intact — an eval run is a real thing that happened.
         session.execute(text(
             "DELETE FROM evidence WHERE finding_id NOT IN (SELECT id FROM finding)"
         ))

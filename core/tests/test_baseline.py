@@ -1,14 +1,3 @@
-"""Baselines.
-
-A baseline separates the situation you inherited from the one you are creating. The
-property under test is that it is a *lens* and not a dismissal: nothing is hidden,
-the backlog stays countable, and anything that is genuinely an emergency stays in
-front of you regardless of how old it is.
-
-A suite that only checked "baselined findings disappear" would pass against a
-feature that quietly reproduces the wall of red it exists to prevent.
-"""
-
 from __future__ import annotations
 
 import uuid
@@ -80,9 +69,6 @@ def _baseline(session, asset):
     session.flush()
 
 
-# ── the lens ─────────────────────────────────────────────────────────────────
-
-
 def test_without_a_baseline_everything_is_new(session, estate):
     seen = _visible(session)
     assert estate["old_quiet"].vulnerability_id in seen
@@ -102,7 +88,6 @@ def test_findings_that_arrive_afterwards_are_new(session, estate):
 
 
 def test_the_backlog_stays_countable(session, estate):
-    """Held back, never hidden — the same treatment as findings with no fix."""
     _baseline(session, estate["asset"])
     page = query_findings(session, FindingQuery(limit=200))
     assert page.baseline_group_count >= 1
@@ -117,12 +102,7 @@ def test_clearing_a_baseline_brings_everything_back(session, estate):
     assert estate["old_quiet"].vulnerability_id in _visible(session)
 
 
-# ── the escape clause, which is the point ────────────────────────────────────
-
-
 def test_a_known_exploited_finding_is_never_baselined_away(session, estate):
-    """An actively exploited flaw is not "state I inherited and accepted". It is an
-    emergency that happens to be old."""
     _baseline(session, estate["asset"])
     assert estate["old_kev"].vulnerability_id in _visible(session)
 
@@ -133,8 +113,6 @@ def test_a_high_band_finding_is_never_baselined_away(session, estate):
 
 
 def test_an_old_finding_that_becomes_exploited_returns(session, estate):
-    """The escape is evaluated on read, so it applies the moment the world changes
-    rather than whenever something next happens to run."""
     _baseline(session, estate["asset"])
     quiet = estate["old_quiet"]
     assert quiet.vulnerability_id not in _visible(session)
@@ -152,13 +130,7 @@ def test_an_old_finding_scored_up_returns(session, estate):
     assert quiet.vulnerability_id in _visible(session)
 
 
-# ── it is not a suppression ──────────────────────────────────────────────────
-
-
 def test_a_baseline_needs_no_reason_and_hides_nothing(session, estate):
-    """Deliberately unlike suppression: dismissing something on its merits requires
-    an argument, accepting a starting position does not — and one parameter shows
-    all of it again."""
     _baseline(session, estate["asset"])
     everything = _visible(session, include_baseline=True)
     for key in ("old_quiet", "old_kev", "old_bad"):
@@ -190,7 +162,6 @@ def test_baselining_one_asset_leaves_others_alone(session, estate):
 
 
 def test_unbaselined_assets_are_reported(session, estate):
-    """This is what tells the UI whether offering a baseline would achieve anything."""
     before = query_findings(session, FindingQuery(limit=1)).unbaselined_asset_count
     assert before >= 1
     _baseline(session, estate["asset"])

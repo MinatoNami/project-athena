@@ -1,13 +1,3 @@
-"""Ephemeral container sandbox for scanner execution.
-
-Scanners parse deeply untrusted input — crafted archives, adversarial manifests,
-hostile container layers. They never run in the worker process.
-
-Containers are launched as siblings through the Docker socket, so any path shared
-with them must live on a named volume both can see, not a path that exists only
-inside the worker's filesystem.
-"""
-
 from __future__ import annotations
 
 import json
@@ -43,14 +33,6 @@ class SandboxResult:
 
     @property
     def diagnosis(self) -> str:
-        """What went wrong, in words rather than a number.
-
-        137 is SIGKILL, which from a memory-limited container means the kernel's OOM
-        killer. It arrives with an empty stderr — the process is not given the chance
-        to say anything — so an unexplained "exit 137" is the least actionable
-        failure this system can produce, and it went unnoticed for exactly that
-        reason.
-        """
         if self.timed_out:
             return "timeout"
         if self.truncated:
@@ -70,7 +52,7 @@ class SandboxResult:
 
 @dataclass
 class Mount:
-    volume: str          # named volume, or a host path
+    volume: str
     target: str
     read_only: bool = True
 
@@ -83,25 +65,16 @@ class SandboxSpec:
     image: str
     command: list[str]
     mounts: list[Mount] = field(default_factory=list)
-    # No network by default. A scanner that needs one must say so explicitly, and the
-    # reason should be obvious at the call site.
     network: str = "none"
     timeout: int = DEFAULT_TIMEOUT
     memory: str = DEFAULT_MEMORY
     pids: int = DEFAULT_PIDS
     workdir: str | None = None
     env: dict[str, str] = field(default_factory=dict)
-    # Scratch space inside the sandbox. An image scan exports whole layers, so it
-    # needs far more than a filesystem scan does.
     tmpfs_size: str = "256m"
 
 
 def ensure_image(image: str, *, timeout: int = 600) -> None:
-    """Pull the scanner image up front.
-
-    Pulling implicitly during `docker run` interleaves progress output with the
-    scanner's own stderr, which buries the actual failure when something goes wrong.
-    """
     inspect = subprocess.run(  # noqa: S603
         ["docker", "image", "inspect", image],  # noqa: S607
         capture_output=True, timeout=60, check=False,
@@ -121,11 +94,6 @@ def ensure_image(image: str, *, timeout: int = 600) -> None:
 
 
 def run_sandboxed(spec: SandboxSpec) -> SandboxResult:
-    """Run one scanner invocation under confinement.
-
-    Confinement is not defence-in-depth garnish here: the input is chosen by whoever
-    controls the repository or image being scanned.
-    """
     args = [
         "docker", "run", "--rm",
         "--network", spec.network,
@@ -135,11 +103,6 @@ def run_sandboxed(spec: SandboxSpec) -> SandboxResult:
         "--security-opt", "no-new-privileges",
         "--cap-drop", "ALL",
         "--read-only",
-        # The sandbox container's own scratch space: nosuid, size-capped, and
-        # destroyed with the container.
-        # mode=1777 matters: Docker mounts a tmpfs root-owned by default, and the
-        # sandbox runs unprivileged with a read-only root — so without it the
-        # scanner has nowhere at all to write and fails with a bare permission error.
         "--tmpfs", f"/tmp:rw,nosuid,mode=1777,size={spec.tmpfs_size}",  # noqa: S108
         "--user", "10001:10001",
     ]
@@ -158,7 +121,7 @@ def run_sandboxed(spec: SandboxSpec) -> SandboxResult:
              network=spec.network, timeout=spec.timeout)
 
     try:
-        proc = subprocess.run(  # noqa: S603, S607 - fixed argv, no shell
+        proc = subprocess.run(  # noqa: S603, S607
             args, capture_output=True, timeout=spec.timeout, check=False
         )
     except subprocess.TimeoutExpired:
@@ -182,7 +145,6 @@ def run_sandboxed(spec: SandboxSpec) -> SandboxResult:
 
 
 def sandbox_available() -> bool:
-    """Whether the worker can launch sandboxed scanners at all."""
     try:
         proc = subprocess.run(  # noqa: S603
             ["docker", "version", "--format", "{{.Server.Version}}"],  # noqa: S607

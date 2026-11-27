@@ -1,11 +1,3 @@
-"""Suppressing findings, and undoing it.
-
-Every route here is a decision somebody is accountable for, so each writes an audit
-event and none of them delete anything: a revoked suppression stays, because "who
-decided to stop showing this, and who changed their mind" is exactly the question a
-trail exists to answer.
-"""
-
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -50,7 +42,6 @@ def _serialise(session: Session, s: Suppression) -> dict[str, Any]:
         "reason_code": s.reason_code,
         "reason": s.reason,
         "reason_label": REASON_CODES.get(s.reason_code, s.reason_code),
-        # What the decision rested on, kept so it can be argued with later.
         "premise": s.premise,
         "created_by": s.created_by,
         "created_at": s.created_at,
@@ -58,7 +49,6 @@ def _serialise(session: Session, s: Suppression) -> dict[str, Any]:
         "revoked_at": s.revoked_at,
         "revoked_by": s.revoked_by,
         "invalidated_at": s.invalidated_at,
-        # Why the finding came back, in the words shown on the finding itself.
         "invalidated_reason": s.invalidated_reason,
         "expired": expired,
         "active": s.revoked_at is None and s.invalidated_at is None and not expired,
@@ -89,7 +79,6 @@ def suppress(
     principal: Principal = Depends(current_principal),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
-    """Stop showing a finding, and record what that decision rested on."""
     finding = session.get(Finding, finding_id)
     if finding is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such finding")
@@ -105,8 +94,6 @@ def suppress(
             actor=principal.actor,
         )
     except SuppressionError as exc:
-        # The message is written for the operator, so it is passed through rather
-        # than replaced with a generic rejection.
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
     return _serialise(session, suppression)
@@ -118,7 +105,6 @@ def revoke(
     principal: Principal = Depends(current_principal),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
-    """Put the findings back. The suppression is kept, marked revoked."""
     suppression = session.get(Suppression, suppression_id)
     if suppression is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such suppression")
@@ -135,11 +121,6 @@ def suppression_for_finding(
     _: Principal = Depends(current_principal),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
-    """The live suppression covering this finding, if any.
-
-    Also returns the most recent dead one, so a finding that came back can say why
-    rather than simply reappearing.
-    """
     finding = session.get(Finding, finding_id)
     if finding is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such finding")

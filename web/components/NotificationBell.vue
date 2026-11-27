@@ -1,15 +1,7 @@
 <script setup lang="ts">
-/**
- * The notification inbox.
- *
- * Counts are shown separately for urgent and routine. A single badge would make an
- * actively exploited flaw look identical to nine routine assessments, which is the
- * flattening the grouping and throttling exist to undo.
- */
 const open = ref(false)
 const trigger = ref<HTMLButtonElement | null>(null)
 
-/** Escape closes and returns focus to the bell, where the reader left from. */
 function onKey(e: KeyboardEvent) {
   if (e.key === 'Escape' && open.value) {
     open.value = false
@@ -71,7 +63,6 @@ function when(at: string | null) {
         <button v-if="unread" class="linkish" @click="markAll">Mark all read</button>
       </div>
 
-      <!-- A failed fetch is not an empty inbox. -->
       <p v-if="data == null" class="empty">
         The inbox could not be loaded, so this says nothing about what is waiting.
         <button class="linkish" @click="refresh()">Try again</button>
@@ -98,14 +89,12 @@ function when(at: string | null) {
           </div>
           <p v-if="n.body" class="body"><UntrustedText :text="n.body" /></p>
           <div class="meta">
-            <!-- The count is the grouping made visible: one message, many assets. -->
             <span v-if="n.occurrence_count > 1" class="rollup">
               across {{ n.occurrence_count }} assets
             </span>
             <span v-if="n.subjects?.length" class="subjects">
               {{ n.subjects.slice(0, 3).join(', ') }}<template v-if="n.subjects_truncated">…</template>
             </span>
-            <!-- Held is not failed, and the difference matters to whoever is waiting. -->
             <span v-if="n.digested" class="digested" title="Held back by the throttle, not lost">
               in digest
             </span>

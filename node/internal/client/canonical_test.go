@@ -5,14 +5,6 @@ import (
 	"testing"
 )
 
-// Expected output produced by Python's
-//
-//	json.dumps(value, sort_keys=True, separators=(",", ":"))
-//
-// The two implementations must agree byte for byte: core signs the Python rendering
-// and the node verifies the Go one, so any divergence rejects every task. Go's
-// encoding/json escapes <, >, and & where Python does not, which is exactly the
-// class of difference this guards.
 func TestCanonicalJSONMatchesPython(t *testing.T) {
 	cases := []struct {
 		name  string

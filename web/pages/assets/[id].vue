@@ -1,12 +1,4 @@
 <script setup lang="ts">
-/**
- * One asset: is it read, what is in it, and what happened last time we looked.
- *
- * The page used to answer the third question with the scanner's stderr. Outcomes
- * are now stated in words and the raw text kept behind a disclosure — the engineer
- * who wants it loses nothing, and the reader who does not is no longer shown a
- * failure they cannot act on.
- */
 const route = useRoute()
 const { data: me } = await useMe()
 if (!me.value) await navigateTo('/login')
@@ -20,8 +12,6 @@ const showPackages = ref(false)
 const openRun = ref<string | null>(null)
 useHead({ title: () => asset.value?.display_name || 'Asset' })
 
-// A host is not scanned from here — its node is asked to observe again — so the
-// button says what it will actually do.
 const scanLabel = computed(() =>
   asset.value?.scan?.action === 'collect' ? 'Collect now' : 'Rescan',
 )
@@ -35,8 +25,6 @@ async function rescan() {
     })
     scanNote.value = { text: res.message || 'Scan queued.', failed: false }
   } catch (e: any) {
-    // This used to be swallowed: the button went back to idle whether or not
-    // anything had been queued, so a refusal was indistinguishable from a scan.
     scanNote.value = {
       text: e?.data?.detail || e?.message || 'The scan could not be queued.',
       failed: true,
@@ -47,15 +35,11 @@ async function rescan() {
 }
 useEvents(['assets'], refresh)
 
-/** What is actually inside, by ecosystem — the shape of the dependency surface. */
-// Counted by the API over every package, not from the listed ones (which stop at
-// a page limit). The chart draws the top eight; the tile counts them all.
 const allEcosystems = computed(() =>
   (asset.value?.ecosystems ?? []).map((e: any) => ({ label: e.ecosystem, value: e.count })),
 )
 const ecosystems = computed(() => allEcosystems.value.slice(0, 8))
 
-/** Unknown is not zero: an unread asset gets a dashed row, not an empty chart. */
 const ecosystemRows = computed(() =>
   asset.value?.never_inventoried
     ? [{ label: 'contents', value: null, hint: 'never read' }]
@@ -66,16 +50,11 @@ const runs = computed(() =>
   (asset.value?.scan_runs ?? []).map((r: any) => ({ ...r, outcome: scanOutcome(r) })),
 )
 
-// The inventory verdict comes from the latest *inventory* run. A secrets scan that
-// finished after it says nothing about which packages are installed.
 const lastRun = computed(
   () => runs.value.find((r: any) => !CODE_SCAN_KINDS.includes(r.kind)) ?? null,
 )
 
 const exporting = ref<string | null>(null)
-// What /assets/classify can fix: tier and exposure. An unset importance alone is
-// stated on its own tile; sending it to a page that cannot set it led to
-// "Everything is classified".
 const unclassified = computed(() =>
   asset.value && (asset.value.tier === 'unknown' || asset.value.exposure === 'unknown'),
 )
@@ -90,8 +69,6 @@ async function exportDoc(kind: 'sbom' | 'vex') {
     } else {
       await downloadJson(`export/openvex?asset_id=${route.params.id}`, file)
     }
-    // Said, not silent: an export leaves the system and is audited, so the page
-    // confirms both.
     scanNote.value = { text: `Downloaded ${file}. The export is recorded in Activity.`, failed: false }
   } catch (e: any) {
     scanNote.value = { text: e?.data?.detail || 'The export could not be produced.', failed: true }
@@ -157,7 +134,6 @@ async function exportDoc(kind: 'sbom' | 'vex') {
         :of="asset.criticality === null ? 'unset — scored as middling' : 'of 5'"
         :status="asset.criticality === null ? 'warn' : null"
       />
-      <!-- "unknown" in bold and "unknown-facing" read as answers; they are gaps. -->
       <StatTile
         label="Placement"
         :value="asset.tier === 'unknown' ? null : asset.tier"

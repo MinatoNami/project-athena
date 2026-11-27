@@ -13,7 +13,6 @@ export default defineNuxtConfig({
   },
 
   runtimeConfig: {
-    // Server-only. The browser never receives a value that can reach core directly.
     athenaApiUrl: process.env.NUXT_ATHENA_API_URL || 'http://127.0.0.1:8000',
     sessionSecretFile: process.env.NUXT_SESSION_SECRET_FILE || '',
     public: {
@@ -22,8 +21,6 @@ export default defineNuxtConfig({
   },
 
   nitro: {
-    // The strict CSP is viable because the deployment is entirely self-contained:
-    // no CDN, no external fonts, no third-party analytics.
     routeRules: {
       '/**': {
         headers: {

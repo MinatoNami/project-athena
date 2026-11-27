@@ -1,15 +1,4 @@
 <script setup lang="ts">
-/**
- * ⌘K — go anywhere, find anything, without the mouse (WEB_UI.md §5).
- *
- * Search is the server's: findings by advisory id or summary through the same
- * query the list uses, so a result here is a finding the list would show. Assets are
- * fetched once per opening and filtered locally — there are hundreds, not millions.
- *
- * Nothing here acts without saying what it will do. The two actions that change
- * state (queueing a refresh, producing an export) are named as such, and an export
- * still goes through the audited endpoint.
- */
 const open = defineModel<boolean>('open', { default: false })
 
 const input = ref<HTMLInputElement | null>(null)
@@ -25,7 +14,6 @@ interface Item {
   label: string
   hint?: string
   tone?: 'bad'
-  /** Set on anything that changes state: the first Enter arms it, the second runs it. */
   confirm?: string
   run: () => Promise<void> | void
 }
@@ -69,8 +57,6 @@ let searchTimer: ReturnType<typeof setTimeout> | undefined
 let searchSeq = 0
 
 watch(open, async (value) => {
-  // However it closes — Escape, a choice, or the shortcut pressed again in the
-  // shell, which sets the model directly — focus goes back where it came from.
   if (!value) {
     nextTick(() => returnFocus?.focus?.())
     return
@@ -124,7 +110,6 @@ const items = computed<Item[]>(() => {
     out.push({
       id: `f-${g.group_key}`, group: 'Findings',
       label: `${g.vulnerability_id}${g.summary ? ` — ${g.summary}` : ''}`,
-      // Instances, not assets: one asset with two affected packages is two.
       hint: `${g.instance_count} affected${g.malicious ? ' · malware' : g.kev ? ' · KEV' : ''}`,
       tone: g.malicious || g.kev ? 'bad' : undefined,
       run: go(first ? `/findings/${first.finding_id}` : '/findings'),
@@ -157,8 +142,6 @@ function close() {
   open.value = false
 }
 
-// The highlight follows the item, not the position: finding results arrive after
-// the static entries, and Enter must open what the reader is looking at.
 watch(items, (list, old) => {
   const id = old?.[active.value]?.id
   const at = id ? list.findIndex(i => i.id === id) : -1
@@ -192,7 +175,7 @@ function onKey(e: KeyboardEvent) {
   else if (e.key === 'ArrowUp') { e.preventDefault(); active.value = n ? (active.value - 1 + n) % n : 0 }
   else if (e.key === 'Enter') { e.preventDefault(); choose(active.value) }
   else if (e.key === 'Escape') { e.preventDefault(); close() }
-  else if (e.key === 'Tab') { e.preventDefault() }   // focus stays in the dialog
+  else if (e.key === 'Tab') { e.preventDefault() }
 }
 
 watch(active, async (i) => {
@@ -268,8 +251,6 @@ kbd { font: 600 .64rem ui-monospace, SFMono-Regular, Menlo, monospace; color: va
               color: var(--ink-muted); padding: .55rem .55rem .25rem; }
 .opt { display: flex; align-items: center; justify-content: space-between; gap: .8rem;
        padding: .45rem .55rem; border-radius: 7px; cursor: pointer; font-size: .86rem; }
-/* The active option has to be findable at a glance: a plane background and a hairline
-   measured 1.0–1.3:1. An ink bar on the leading edge is unmistakable in both themes. */
 .opt.on { background: var(--plane); box-shadow: inset 3px 0 0 var(--ink); }
 .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .label.bad { color: var(--crit); }

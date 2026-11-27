@@ -1,11 +1,3 @@
-"""SSVC deployer decisions.
-
-The outcome table is CISA's, so the interesting assertions are about Athena's side of
-it: that every decision point says where it came from, that a missing fact is taken
-at its worse value *and admitted*, and that a forecast (EPSS) never stands in for
-the fact of exploitation.
-"""
-
 from __future__ import annotations
 
 import itertools
@@ -31,7 +23,6 @@ def test_the_table_is_complete():
 
 
 def test_outcomes_never_fall_as_any_point_worsens():
-    """Monotonicity: worse facts can never earn a milder outcome."""
     order = {o: i for i, o in enumerate(ssvc.OUTCOME_ORDER)}
     axes = [("none", "poc", "active"), ("no", "yes"), ("partial", "total")]
     for e, a, t in itertools.product(*axes):
@@ -70,7 +61,6 @@ def test_public_exploit_is_poc_not_active():
 
 
 def test_epss_is_not_an_input():
-    """A forecast is not the fact of exploitation: the signature does not take it."""
     with pytest.raises(TypeError):
         ssvc.decide(
             kev=False,
@@ -154,7 +144,6 @@ def test_cisa_vulnrichment_outranks_the_vector_mapping():
 
 
 def test_kev_outranks_a_stale_cisa_exploitation_value():
-    """CVEs exist that are in KEV while their ADP record still says 'none'."""
     decision = _decide(kev=True, cisa={"exploitation": "none"})
     assert decision.points["exploitation"].value == "active"
 

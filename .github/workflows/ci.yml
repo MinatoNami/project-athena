@@ -31,8 +31,6 @@ jobs:
       - name: Lint
         run: ruff check athena tests && ruff format --check athena tests
 
-      # These gates are security controls, not style. They run before anything else
-      # that could mask a failure.
       - name: Privilege boundaries
         run: pytest tests/test_boundaries.py -v
 
@@ -65,8 +63,6 @@ jobs:
       - run: gofmt -l . | tee /dev/stderr | (! read)
       - run: go vet ./...
       - run: go test ./...
-      # The agent must stay a single static binary: a runtime dependency on the
-      # protected host is the thing the Go choice exists to avoid.
       - run: CGO_ENABLED=0 go build -o /tmp/athena-node ./cmd/athena-node
       - name: Agent exposes no shell capability
         run: |

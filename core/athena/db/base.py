@@ -38,7 +38,6 @@ def _get_factory() -> sessionmaker[Session]:
 
 
 def new_session() -> Session:
-    """An unmanaged session. The caller owns commit, rollback, and close."""
     return _get_factory()()
 
 

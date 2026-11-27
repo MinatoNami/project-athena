@@ -1,10 +1,3 @@
-"""Hash-chained audit trail.
-
-Each row commits to its predecessor, so removing or altering history is detectable.
-Append-only is additionally enforced in the database by a trigger (migration 0003) —
-the application cannot rewrite history even with a bug.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -46,7 +39,6 @@ def record(
     subject: str,
     detail: dict[str, Any] | None = None,
 ) -> AuditEvent:
-    """Append one event. Serialised so concurrent writers cannot fork the chain."""
     session.execute(text("SELECT pg_advisory_xact_lock(hashtext('athena.audit'))"))
 
     prev = session.execute(
@@ -74,7 +66,7 @@ def record(
     return event
 
 
-def func_now():  # small indirection so tests can freeze time
+def func_now():
     from sqlalchemy import func
 
     return func.now()
@@ -87,13 +79,6 @@ def record_isolated(
     subject: str,
     detail: dict[str, Any] | None = None,
 ) -> None:
-    """Append an event in its own transaction.
-
-    Rejections (failed login, rejected bootstrap token, failed step-up) raise, which
-    rolls back the request transaction — and would take the audit record with it. The
-    events most worth auditing are exactly the ones that fail, so they are committed
-    independently of the outcome they describe.
-    """
     from athena.db.base import session_scope
 
     with session_scope() as isolated:
@@ -105,7 +90,6 @@ def _broken(checked: int, seq: int, reason: str) -> dict[str, Any]:
 
 
 def verify_chain(session: Session) -> dict[str, Any]:
-    """Recompute the chain. Returns the first divergence, if any."""
     rows = session.execute(
         select(
             AuditEvent.seq,

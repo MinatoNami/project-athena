@@ -1,11 +1,3 @@
-"""Correlation behaviour.
-
-M2's checkpoint calls the backport case "the single most important assertion in this
-milestone": an Ubuntu package carrying a distro-patched version must not be reported
-vulnerable because an upstream range says so. Getting it wrong produces a false
-positive on every Ubuntu host in the estate.
-"""
-
 from __future__ import annotations
 
 import pytest
@@ -15,8 +7,6 @@ from athena.intel.authority import Authority
 
 
 class FakeRange:
-    """A stand-in for an AffectedRange row, so these stay pure unit tests."""
-
     def __init__(self, *, source, authority, introduced=None, fixed=None,
                  last_affected=None, range_id=1, distro_release=None):
         self.id = range_id
@@ -28,12 +18,7 @@ class FakeRange:
         self.distro_release = distro_release
 
 
-# ── the backport rule ────────────────────────────────────────────────────────
-
 def test_upstream_range_alone_cannot_condemn_a_distro_package():
-    """Ubuntu ships the openssl fix as 3.0.13-0ubuntu3.12 while upstream's fixed
-    version is 3.2.0. The upstream range says every 3.0.x is vulnerable; believing
-    it would flag every patched Ubuntu host."""
     upstream_only = [
         FakeRange(source="osv", authority=Authority.UPSTREAM_ADVISORY,
                   introduced="0", fixed="3.2.0")
@@ -47,7 +32,6 @@ def test_upstream_range_alone_cannot_condemn_a_distro_package():
     assert method == "none"
     assert confidence == 0.0
     assert "backport" in rationale.lower()
-    # The disagreement is recorded, not discarded — an operator can still see it.
     assert conflicts and conflicts[0]["source"] == "osv"
     assert conflicts[0]["says"] == "affected"
 
@@ -73,8 +57,6 @@ def test_distro_tracker_decides_for_a_distro_package():
 
 
 def test_ecosystem_packages_still_use_upstream_advisories():
-    """The authority rule is about distributions. A PyPI package has no distro
-    tracker, and an upstream advisory is exactly the right source."""
     ranges = [FakeRange(source="osv", authority=Authority.UPSTREAM_ADVISORY,
                         introduced="2.0.0", fixed="2.31.0")]
     affected, method, confidence, *_ = evaluate(
@@ -85,11 +67,7 @@ def test_ecosystem_packages_still_use_upstream_advisories():
     assert confidence == MATCH_CONFIDENCE["purl_exact_range"]
 
 
-# ── confidence ───────────────────────────────────────────────────────────────
-
 def test_cpe_ranges_carry_lower_confidence_than_ecosystem_advisories():
-    """CPE matching is coarse and frequently over-broad, so it must not look as
-    trustworthy as an exact ecosystem match."""
     cpe = evaluate(
         ecosystem="pypi", package="requests", version="2.19.1",
         ranges=[FakeRange(source="nvd", authority=Authority.NVD_CPE,
@@ -111,10 +89,7 @@ def test_heuristic_ecosystems_are_capped():
     assert confidence == MATCH_CONFIDENCE["heuristic_range"]
 
 
-# ── uncertainty ──────────────────────────────────────────────────────────────
-
 def test_an_uncomparable_version_is_uncertain_not_unaffected():
-    """"We could not tell" must never be reported as "you are fine"."""
     ranges = [FakeRange(source="osv", authority=Authority.UPSTREAM_ADVISORY,
                         introduced="0", fixed="2.31.0")]
     affected, method, confidence, matched, rationale, _ = evaluate(
@@ -133,8 +108,6 @@ def test_no_ranges_at_all_produces_no_match():
     assert affected is False
     assert method == "none"
 
-
-# ── boundaries ───────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize(
     ("version", "expected"),
@@ -158,13 +131,7 @@ def test_package_name_normalisation_is_applied_in_the_rationale():
     assert "flask-sqlalchemy" in rationale
 
 
-# ── distribution release ─────────────────────────────────────────────────────
-
 def test_a_fix_in_another_release_does_not_clear_this_host():
-    """OSV returns ranges for every supported Ubuntu release under one package.
-    Ubuntu 22.04 fixed openssl in 3.0.2-0ubuntu1.12 and 24.04 in 3.0.13-0ubuntu3.12.
-    Comparing a 24.04 host against the 22.04 range makes a vulnerable host look
-    patched, because 3.0.13 sorts above 3.0.2."""
     ranges = [
         FakeRange(source="ubuntu", authority=Authority.DISTRO_TRACKER,
                   introduced="0", fixed="3.0.2-0ubuntu1.12"),
@@ -196,8 +163,6 @@ def test_the_matching_release_can_clear_a_host():
 
 
 def test_an_unknown_release_is_a_gap_not_a_guess():
-    """Matching a host of unknown release against release-specific ranges would be
-    guessing. The gap is recorded instead."""
     ranges = [
         FakeRange(source="ubuntu", authority=Authority.DISTRO_TRACKER,
                   introduced="0", fixed="3.0.13-0ubuntu3.12"),
@@ -212,8 +177,6 @@ def test_an_unknown_release_is_a_gap_not_a_guess():
 
 
 def test_only_a_decided_miss_can_close_a_finding():
-    """Re-correlation closes findings no range covers. An unknown release and a
-    version that cannot be ordered are "could not say", and must not close one."""
     from athena.correlation.engine import _undecided
 
     release_specific = FakeRange(source="ubuntu", authority=Authority.DISTRO_TRACKER,
@@ -253,12 +216,7 @@ def test_release_agnostic_ranges_still_apply():
     assert affected is True
 
 
-# ── advisory hashing ─────────────────────────────────────────────────────────
-
 def test_content_hash_tolerates_absent_range_bounds():
-    """Most real ranges have no last_affected, and many have no fixed version.
-    Sorting them directly compared None against str and raised, which failed
-    ingestion of every advisory carrying an open-ended range."""
     from athena.intel.model import NormalisedAdvisory, NormalisedRange, content_hash
 
     advisory = NormalisedAdvisory(
@@ -272,8 +230,6 @@ def test_content_hash_tolerates_absent_range_bounds():
 
 
 def test_content_hash_is_order_independent():
-    """Range order varies between fetches; a hash that changed with it would report
-    every advisory as revised on every poll."""
     from athena.intel.model import NormalisedAdvisory, NormalisedRange, content_hash
 
     a = NormalisedRange(ecosystem="pypi", package="requests", introduced="0", fixed="2.31.0")
@@ -295,10 +251,7 @@ def test_content_hash_changes_when_a_range_changes():
     assert content_hash(before) != content_hash(after)
 
 
-# ── no fix available ─────────────────────────────────────────────────────────
-
 def test_a_range_with_no_fix_still_matches():
-    """Distributions publish advisories before a fix exists. The match is real."""
     ranges = [FakeRange(source="ubuntu", authority=Authority.DISTRO_TRACKER,
                         introduced="0", fixed=None)]
     affected, method, *_ = evaluate(
@@ -308,12 +261,7 @@ def test_a_range_with_no_fix_still_matches():
     assert method == "distro_advisory"
 
 
-# ── match provenance ─────────────────────────────────────────────────────────
-
 def test_the_matched_range_facts_are_copied_onto_the_candidate():
-    """affected_range rows are replaced wholesale on every advisory revision, so a
-    finding that only referenced one lost its provenance the moment the advisory
-    changed — and the evidence chain silently stopped showing which range decided it."""
     from athena.correlation.engine import _candidate
 
     matched = FakeRange(source="ubuntu", authority=Authority.DISTRO_TRACKER,

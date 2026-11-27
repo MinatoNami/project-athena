@@ -1,32 +1,19 @@
-/* Tokens defined on bare :root for light; redefined for dark under both the OS
-   media query and an explicit toggle, so neither can win by accident.
-   Full palette: docs/WEB_UI.md §8. */
 :root {
   --surface: #fcfcfb;
   --plane: #f9f9f7;
   --ink: #0b0b0b;
   --ink-2: #52514e;
-  /* #898781 (the §8 value) measured 3.5:1 on the light surface — below AA for the
-     10–12px labels it is mostly used on. Darkened to 5.0:1; dark mode keeps §8's. */
   --ink-muted: #6f6d68;
   --rule: #e1e0d9;
-  /* Boundaries of controls (inputs, segmented controls, checkboxes) must clear 3:1
-     against the surface (WCAG 1.4.11); --rule is a hairline at 1.3:1. */
   --line-strong: #898781;
   --good: #0ca30c;
-  /* Status inks: the swatch colours are for marks; these are for words. */
   --good-ink: #0a7f0a;
-  /* The reserved status "critical" from §8, for bad states that are not severity —
-     internet-facing, actively exploited, overdue, malware. Used as a border with ink
-     text, so it never reads as the CRITICAL band's ramp colour. Never themed. */
   --bad: #d03b3b;
   --warn: #fab219;
-  /* Readable warning ink; the swatch colour itself is sub-3:1 on a light surface. */
   --warn-ink: #8a5a00;
   --crit: #66201f;
   --never-hatch: rgba(102, 32, 31, .22);
 
-  /* Type scale. Small sizes are for uppercase labels only. */
   --fs-2xs: .6875rem;
   --fs-xs: .75rem;
   --fs-sm: .8125rem;
@@ -34,14 +21,11 @@
   --fs-base: 1rem;
   --fs-lg: 1.125rem;
   --fs-xl: 1.375rem;
-  /* Radii. */
   --r-xs: 3px;
   --r-sm: 5px;
   --r-md: 7px;
   --r-lg: 10px;
   --r-xl: 12px;
-  /* Single-hue ordinal severity ramp, validated light and dark: monotone lightness,
-     adjacent ΔL ≥ 0.06, surface-adjacent step clears 2:1. See docs/WEB_UI.md §8. */
   --sev-critical: #66201f;
   --sev-high: #8e2f2c;
   --sev-medium: #b54840;
@@ -142,11 +126,6 @@ th { text-align: left; font-weight: 600; color: var(--ink-muted); font-size: .75
 td { padding: .45rem .5rem; border-top: 1px solid var(--rule); font-variant-numeric: tabular-nums; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
 
-/* ── Shared shell primitives ──────────────────────────────────────────────
-   Added with the redesign. `.wrap` stays for the pages that still use a
-   centred column; screens with their own left rail use `.page` instead, which
-   is full-bleed because a fixed 62rem column beside a 216px rail wastes the
-   half of a wide display where the evidence goes. */
 .page { padding: 1.4rem 1.75rem 2rem; max-width: 1500px; }
 .page-head { display: flex; align-items: flex-start; justify-content: space-between;
              gap: 1.25rem; margin-bottom: 1.1rem; }
@@ -155,7 +134,6 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
 .page-title p { margin: 0; font-size: .87rem; color: var(--ink-2); max-width: 70ch; }
 .actions { display: flex; gap: .5rem; flex-shrink: 0; }
 
-/* Links were never themed and rendered in browser blue/purple on both surfaces. */
 a { color: var(--ink); text-decoration-color: var(--line-strong); text-underline-offset: 2px; }
 a:hover { text-decoration-color: var(--ink); }
 .note { font-size: var(--fs-sm); color: var(--ink-2); }
@@ -176,14 +154,11 @@ a:hover { text-decoration-color: var(--ink); }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .tnum { font-variant-numeric: tabular-nums; }
 
-/* Hatching means "not looked at" and must never read as "clean". Used wherever a
-   value is absent because nothing checked, rather than because nothing was found. */
 .hatch {
   background: repeating-linear-gradient(45deg, transparent, transparent 3px,
               var(--never-hatch) 3px, var(--never-hatch) 4px);
 }
 
-/* Segmented control — the classification picker and the state gallery. */
 .seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 7px;
        overflow: hidden; background: var(--surface); }
 .seg button {
@@ -193,8 +168,6 @@ a:hover { text-decoration-color: var(--ink); }
 }
 .seg button:last-child { border-right: 0; }
 .seg button:hover { background: var(--plane); color: var(--ink); }
-/* Styled from the attribute as well as the class, so state and look cannot drift:
-   a selected segment is announced as pressed, not merely painted. */
 .seg button.on, .seg button[aria-pressed='true'] {
   background: var(--ink); color: var(--surface); font-weight: 600;
 }
@@ -205,14 +178,10 @@ a:hover { text-decoration-color: var(--ink); }
 
 @media (max-width: 860px) {
   .page { padding: 1.1rem 1rem 2rem; }
-  /* The subtitle was squeezed to one word per line beside the actions. */
   .page-head { flex-wrap: wrap; }
   .actions { flex-wrap: wrap; }
 }
 
-/* ── Accessibility primitives ─────────────────────────────────────────────
-   No focus style existed: pages relied on the browser ring, measured at 2.3:1 and
-   clipped inside every overflow:hidden container. */
 :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 .seg button:focus-visible { outline-offset: -3px; }
 .seg button[aria-pressed='true']:focus-visible, .seg button.on:focus-visible {
@@ -228,18 +197,12 @@ a:hover { text-decoration-color: var(--ink); }
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
-/* A whole row that expands is one button, so it is reachable and operable from
-   the keyboard and announces whether it is open. */
 .rowbtn {
   font: inherit; color: inherit; text-align: left; background: none; border: 0;
   padding: 0; margin: 0; width: 100%; cursor: pointer; border-radius: inherit;
   font-weight: inherit;
 }
 
-/* ── Tag: the one small label ─────────────────────────────────────────────
-   Replaces a score of local chip/badge/flag rules that had drifted across nine
-   font sizes, three radii and two border widths. Tone is carried by a word and a
-   border; severity colour stays inside <SeverityChip>. */
 .tag {
   display: inline-flex; align-items: center; gap: .3rem; white-space: nowrap;
   font-size: var(--fs-xs); font-weight: 500; line-height: 1.35;

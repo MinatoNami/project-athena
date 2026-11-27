@@ -34,8 +34,6 @@ func newTask() *Task {
 	}
 }
 
-// A node must run nothing core did not authorise. Without this check, anything that
-// could reach the agent could drive it.
 func TestTaskVerification(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	otherPub, otherPriv, _ := ed25519.GenerateKey(rand.Reader)

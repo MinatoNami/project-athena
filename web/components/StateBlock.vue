@@ -1,13 +1,4 @@
 <script setup lang="ts">
-/**
- * Empty, unlooked-at, clean and error states.
- *
- * The distinction this component exists to hold: `kind="never"` means nothing has
- * been checked, `kind="clean"` means something was checked and found nothing. Most
- * security tools render both as an empty list, which turns a blind spot into a
- * false all-clear. Here they get different marks — hatched versus a tick — and
- * `clean` is required to carry its denominators.
- */
 defineProps<{
   kind: 'never' | 'clean' | 'empty' | 'error'
   title: string
@@ -31,8 +22,6 @@ defineProps<{
     <div class="title">{{ title }}</div>
     <p class="body"><slot /></p>
 
-    <!-- The denominators are the claim. Without them "nothing needs you" is just a
-         green tick, which is the shape of reassurance this product refuses to give. -->
     <div v-if="stats?.length" class="stats">
       <div v-for="s in stats" :key="s.label" class="stat">
         <span class="mono tnum value">{{ s.value }}</span>

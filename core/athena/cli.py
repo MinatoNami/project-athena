@@ -1,15 +1,3 @@
-"""Athena command line.
-
-    athena serve       API
-    athena worker      queue consumer
-    athena scheduler   periodic work (leader-elected)
-    athena migrate     apply database migrations
-    athena bootstrap   mint a single-use admin bootstrap token
-    athena node-token  mint a single-use node enrolment token
-    athena doctor      check schema, keys, connectivity, queue health
-    athena keygen      generate a master key
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -50,7 +38,6 @@ def _serve() -> int:
 
 
 def _bootstrap() -> int:
-    """Mint a bootstrap token. Idempotent-safe: refuses once an account exists."""
     from athena.api.auth import (
         any_user_exists,
         live_bootstrap_token_exists,
@@ -70,7 +57,6 @@ def _bootstrap() -> int:
             return 0
         token = mint_bootstrap_token(session)
 
-    # Printed to stdout exactly once. It is never stored in recoverable form.
     print("\n" + "=" * 68, file=sys.stderr)
     print("  ATHENA FIRST-RUN BOOTSTRAP TOKEN (valid 24h, single use)", file=sys.stderr)
     print("=" * 68, file=sys.stderr)
@@ -81,11 +67,6 @@ def _bootstrap() -> int:
 
 
 def _node_token(tier: str = "unknown") -> int:
-    """Mint a node enrolment token without a dashboard session.
-
-    Enrolling a host is a shell-level operation on that host, so it should not
-    require logging into the UI first.
-    """
     import hashlib
     import secrets as _secrets
     from datetime import UTC, datetime, timedelta
@@ -125,7 +106,6 @@ def _node_token(tier: str = "unknown") -> int:
 
 
 def _doctor() -> int:
-    """Verify the things that silently break a deployment."""
     from sqlalchemy import text
 
     from athena.audit import verify_chain
@@ -134,7 +114,6 @@ def _doctor() -> int:
 
     checks: list[tuple[str, bool, str]] = []
 
-    # database + schema
     try:
         with session_scope() as session:
             session.execute(text("SELECT 1"))
@@ -145,7 +124,6 @@ def _doctor() -> int:
         _report(checks)
         return 1
 
-    # master key round-trip
     try:
         sealed = seal("athena-doctor-probe", aad="doctor")
         ok = unseal(**sealed, aad="doctor") == "athena-doctor-probe"
@@ -156,7 +134,6 @@ def _doctor() -> int:
         checks.append(("master key", False, str(exc)))
 
     with session_scope() as session:
-        # audit chain
         result = verify_chain(session)
         checks.append(
             (
@@ -168,7 +145,6 @@ def _doctor() -> int:
             )
         )
 
-        # append-only enforcement is a security control, so assert it rather than assume it
         enforced = session.execute(
             text(
                 "SELECT count(*) FROM pg_trigger "
@@ -179,7 +155,6 @@ def _doctor() -> int:
             ("audit immutability", enforced >= 2, f"{enforced} triggers installed (expect 2)")
         )
 
-        # queue health
         stuck = session.execute(
             text(
                 "SELECT count(*) FROM job WHERE finished_at IS NULL "
@@ -191,7 +166,6 @@ def _doctor() -> int:
         ).scalar_one()
         checks.append(("queue", stuck == 0, f"depth {depth}, exhausted {stuck}"))
 
-        # a downgraded cookie policy is a security finding about Athena itself
         secure = get_settings().cookie_secure
         checks.append(
             (
@@ -203,7 +177,6 @@ def _doctor() -> int:
             )
         )
 
-        # an account must exist, or the deployment is unusable
         users = session.execute(text("SELECT count(*) FROM app_user")).scalar_one()
         checks.append(
             (
@@ -253,7 +226,21 @@ def _rescore(*, dry_run: bool) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="athena", description=__doc__)
+    parser = argparse.ArgumentParser(
+        prog="athena",
+        description=(
+            "Athena command line.\n"
+            "\n"
+            "    athena serve       API\n"
+            "    athena worker      queue consumer\n"
+            "    athena scheduler   periodic work (leader-elected)\n"
+            "    athena migrate     apply database migrations\n"
+            "    athena bootstrap   mint a single-use admin bootstrap token\n"
+            "    athena node-token  mint a single-use node enrolment token\n"
+            "    athena doctor      check schema, keys, connectivity, queue health\n"
+            "    athena keygen      generate a master key\n"
+        ),
+    )
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("serve", "worker", "scheduler", "migrate", "bootstrap", "doctor", "keygen"):

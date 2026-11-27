@@ -50,13 +50,6 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def transaction(request: Request, call_next):
-        """Own the request transaction, and close it *before* the response is sent.
-
-        A 4xx or 5xx rolls back: a rejected request must leave no trace of the work it
-        attempted. Audit records that must survive a rejection are written in their own
-        transaction via `record_isolated`.
-        """
-
         def close(commit: bool) -> None:
             session = getattr(request.state, REQUEST_SESSION_ATTR, None)
             if session is None:
@@ -90,7 +83,6 @@ def create_app() -> FastAPI:
     @app.exception_handler(Exception)
     async def unhandled(request: Request, exc: Exception) -> JSONResponse:
         log.error("api.unhandled", path=request.url.path, error=str(exc))
-        # Never leak internals to the client — the detail lives in the log.
         return JSONResponse(
             status_code=500,
             content={"type": "about:blank", "title": "Internal Server Error", "status": 500},

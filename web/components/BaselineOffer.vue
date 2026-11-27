@@ -1,12 +1,4 @@
 <script setup lang="ts">
-/**
- * The offer to draw a line under an inherited backlog.
- *
- * Shown only while it would do something. The copy states what stays visible as
- * plainly as what goes, because an offer that reads as "make this all go away" is
- * one people take once and then distrust — and the escape clause means it is not
- * what happens anyway.
- */
 const emit = defineEmits<{ done: [] }>()
 
 const { data, refresh } = await useAsyncData('baseline', () =>
@@ -57,7 +49,6 @@ async function capture() {
     </template>
 
     <template v-else>
-      <!-- What stays is stated as plainly as what goes. -->
       <ul class="effects">
         <li>
           <span class="mono tnum">{{ accept.would_leave_default_view.toLocaleString() }}</span>

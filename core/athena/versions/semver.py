@@ -1,9 +1,3 @@
-"""SemVer ordering, as npm and Go modules use it.
-
-Build metadata is ignored for ordering (SemVer §10), and a pre-release sorts
-before its release: `1.0.0-rc.1 < 1.0.0`.
-"""
-
 from __future__ import annotations
 
 import re
@@ -32,7 +26,6 @@ def parse(version: str) -> tuple[int, int, int, tuple | None]:
 
 
 def _compare_prerelease(a: tuple | None, b: tuple | None) -> int:
-    # Absent pre-release outranks any pre-release.
     if a is None and b is None:
         return 0
     if a is None:
@@ -40,18 +33,15 @@ def _compare_prerelease(a: tuple | None, b: tuple | None) -> int:
     if b is None:
         return -1
 
-    # Non-strict on purpose: a longer pre-release chain outranks its prefix,
-    # which is decided after the common segments compare equal.
     for x, y in zip(a, b, strict=False):
         x_num, y_num = x.isdigit(), y.isdigit()
         if x_num and y_num:
             if int(x) != int(y):
                 return 1 if int(x) > int(y) else -1
         elif x_num != y_num:
-            return -1 if x_num else 1   # numeric identifiers rank below alphanumeric
+            return -1 if x_num else 1
         elif x != y:
             return 1 if x > y else -1
-    # A longer pre-release chain outranks its prefix: 1.0.0-a.1 > 1.0.0-a
     return (len(a) > len(b)) - (len(a) < len(b))
 
 

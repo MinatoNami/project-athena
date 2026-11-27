@@ -1,18 +1,3 @@
-"""Record how a fix is delivered, and keep match provenance on the finding.
-
-Two problems:
-
-Ubuntu publishes fixes for older or extended-support packages only through Ubuntu
-Pro (versions carrying ~esm or fips). Presenting those as an ordinary upgrade tells
-an operator to install something they may have no entitlement to.
-
-affected_range rows are replaced wholesale whenever an advisory is revised, so
-finding.matched_range_id dangles as soon as that happens and the evidence chain
-loses which range drove the match. The identifying facts are denormalised onto the
-finding, which is the durable place for them.
-
-Revision ID: 0008
-"""
 from __future__ import annotations
 
 import sqlalchemy as sa

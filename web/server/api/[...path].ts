@@ -1,10 +1,3 @@
-/**
- * BFF proxy.
- *
- * Every browser call to the API goes through here. Athena Core is never reachable
- * from the browser, which is the whole reason this application is server-rendered
- * rather than a static SPA (docs/WEB_UI.md §1).
- */
 export default defineEventHandler(async (event) => {
   const config = useRuntimeConfig()
   const path = getRouterParam(event, 'path') || ''
@@ -27,8 +20,6 @@ export default defineEventHandler(async (event) => {
     redirect: 'manual',
   })
 
-  // Forward Set-Cookie, re-scoped to wherever this app is mounted. See
-  // server/utils/cookieScope.ts for why this is not left to core.
   const mount = cookieMount(config.app.baseURL)
   for (const c of response.headers.getSetCookie?.() ?? []) {
     appendHeader(event, 'set-cookie', scopeCookie(c, mount))

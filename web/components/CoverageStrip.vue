@@ -1,12 +1,4 @@
 <script setup lang="ts">
-/**
- * The denominator strip.
- *
- * Coverage is chrome, not a footnote: every count elsewhere on the page is only
- * meaningful against how much was actually looked at. Tiles rather than a pie,
- * because four tiles compare faster than four wedges (§9) and a tile can say "none
- * of this was measured", which a wedge cannot.
- */
 const props = defineProps<{ coverage: any; findings?: any }>()
 
 const read = computed(() => {
@@ -46,8 +38,6 @@ const read = computed(() => {
     />
     <p class="legend">
       <span class="swatch hatch" aria-hidden="true" />
-      <!-- One text node for the flex container: bare text and inline elements were
-           each made a flex item and the sentence split into four columns. -->
       <span>Hatched or dashed means <strong>not looked at</strong> — never <em>clean</em>.</span>
     </p>
   </div>

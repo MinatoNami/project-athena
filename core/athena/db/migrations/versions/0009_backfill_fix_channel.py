@@ -1,12 +1,3 @@
-"""Derive the fix channel for ranges ingested before it was recorded.
-
-Migration 0008 gave affected_range.channel a server default of 'standard', which
-claims every existing fix is an ordinary upgrade — a fact nothing had checked. For
-Ubuntu the channel is recoverable from the fixed version itself, so it is derived
-rather than assumed.
-
-Revision ID: 0009
-"""
 from __future__ import annotations
 
 from alembic import op
@@ -33,7 +24,6 @@ def upgrade() -> None:
          WHERE channel = 'standard' AND fixed ILIKE '%fips%'
         """
     )
-    # Findings carry a denormalised copy, so they are corrected too.
     op.execute(
         """
         UPDATE finding f

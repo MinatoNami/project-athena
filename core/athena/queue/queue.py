@@ -1,10 +1,3 @@
-"""Postgres-backed job queue.
-
-`SELECT ... FOR UPDATE SKIP LOCKED` with a lease, so a worker that dies releases its
-job when the lease elapses rather than wedging it. `UNIQUE (kind, key)` makes
-enqueueing idempotent: the same scan requested twice is one job.
-"""
-
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -27,12 +20,6 @@ def enqueue(
     run_after: datetime | None = None,
     max_attempts: int = 5,
 ) -> Job | None:
-    """Enqueue idempotently. Returns None when an identical job is already pending.
-
-    Deduplication covers pending work only. A finished job must not reserve its key
-    forever: the scheduler buckets keys by interval, so a completed or failed poll
-    would otherwise block every later poll with the same key.
-    """
     row = session.execute(
         text(
             """
@@ -57,15 +44,6 @@ def enqueue(
     return session.get(Job, row.id)
 
 
-# Two complete literals rather than an interpolated fragment: nothing is built from
-# a variable, so there is no injection surface to reason about. Values are always
-# bound parameters.
-#
-# The `inflight` term is a fairness cap. Without it a large backfill occupies every
-# worker slot and starves everything else indefinitely — on the deployed host 805
-# queued correlation jobs held all four slots while image scans waited behind them.
-# Capping each kind below the pool size guarantees at least one slot is always
-# reachable by some other kind, whatever the queue looks like.
 _CLAIM_SQL = """
     WITH inflight AS (
         SELECT kind, count(*) AS running
@@ -96,10 +74,8 @@ CLAIM_OF_KIND = _CLAIM_SQL.format(kind_clause="AND j.kind = ANY(:kinds)")
 
 
 def claim(session: Session, *, kinds: list[str] | None = None) -> Job | None:
-    """Claim one runnable job, or None. The caller owns it until the lease expires."""
     settings = get_settings()
     lease = settings.job_lease_seconds
-    # At least one slot stays reachable by another kind, however deep the queue.
     kind_cap = max(1, settings.worker_concurrency - 1)
 
     base = {"lease": lease, "kind_cap": kind_cap}
@@ -120,7 +96,6 @@ def finish(
     result: dict[str, Any] | None = None,
     error: str | None = None,
 ) -> None:
-    """Complete a job, or release it for retry with backoff if attempts remain."""
     if succeeded or job.attempts >= job.max_attempts:
         job.finished_at = datetime.now(UTC)
         job.succeeded = succeeded
@@ -136,7 +111,6 @@ def finish(
 
 
 def publish(session: Session, *, topic: str, subject_id: str, version: int = 1) -> None:
-    """Emit a domain event. Identity only — subscribers refetch through the API."""
     session.add(Outbox(topic=topic, subject_id=str(subject_id), version=version))
 
 

@@ -1,23 +1,12 @@
 <script setup lang="ts">
-/**
- * One headline number, with the denominator it was computed over (rule 3) and,
- * where there is one, the target it is judged against.
- *
- * §9 prefers a row of these to a pie: a reader compares four tiles faster than
- * four wedges, and a tile can admit it has no value — which a wedge cannot.
- */
 defineProps<{
   label: string
-  /** `null` means nothing measured it. Rendered hatched, never as zero (rule 1). */
   value: string | number | null
-  /** The denominator — "of 41 assets". */
   of?: string
-  /** Progress against target, 0–1. Draws the bar only when given. */
   progress?: number | null
   target?: string
   status?: 'good' | 'warn' | 'bad' | null
   hint?: string
-  /** `target` is a goal this value is judged against, so met/short is said in words. */
   goal?: boolean
 }>()
 </script>
@@ -35,7 +24,6 @@ defineProps<{
     <div v-if="progress != null" class="track">
       <span class="fill" :style="{ width: `${Math.max(2, Math.min(100, progress * 100))}%` }" />
     </div>
-    <!-- Met or short is said in words, not by the figure's colour alone (§7, §8). -->
     <span v-if="target" class="target">
       <template v-if="goal && status === 'good'">✓ meeting · </template>
       <template v-else-if="goal && status === 'bad'">✗ short · </template>
@@ -53,7 +41,6 @@ defineProps<{
 .unknown { display: inline-block; width: 2.1rem; height: .95rem; border-radius: 3px;
            border: 1px dashed var(--rule); }
 .target { font-size: .69rem; color: var(--ink-muted); }
-/* Status is colour plus a word in the label beside it, never colour alone (§8). */
 .good .value { color: var(--good-ink); }
 .warn .value { color: var(--warn-ink); }
 .bad .value { color: var(--crit); }

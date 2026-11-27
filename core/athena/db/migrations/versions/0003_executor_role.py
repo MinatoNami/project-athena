@@ -1,11 +1,3 @@
-"""Least-privilege role for the executor.
-
-Technical Design §10: the executor may write change records and read what it needs to
-validate a grant, and nothing else. This is the database half of that boundary; the
-other half is that the executor image contains no LLM client.
-
-Revision ID: 0003
-"""
 from __future__ import annotations
 
 from alembic import op
@@ -15,13 +7,11 @@ down_revision = "0002"
 branch_labels = None
 depends_on = None
 
-EXECUTOR_TABLES_RW = ("audit_event",)          # may append, never rewrite (trigger still applies)
+EXECUTOR_TABLES_RW = ("audit_event",)
 EXECUTOR_TABLES_RO = ("job", "secret")
 
 
 def upgrade() -> None:
-    # The role is created by the deployment (it needs a password); this migration is
-    # idempotent and only grants privileges when the role already exists.
     op.execute(
         """
         DO $$

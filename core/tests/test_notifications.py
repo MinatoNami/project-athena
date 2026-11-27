@@ -1,11 +1,3 @@
-"""Notification grouping and throttling.
-
-The two properties from the milestone checkpoint are asserted literally — one CVE
-across fourteen hosts sends one notification, and a two-hundred-finding burst does
-not produce two hundred messages — because both are the difference between an alert
-somebody reads and one they filter to a folder they never open.
-"""
-
 from __future__ import annotations
 
 import uuid
@@ -33,9 +25,6 @@ def _counts(session):
     return dict(rows)
 
 
-# ── grouping ─────────────────────────────────────────────────────────────────
-
-
 def test_one_advisory_across_fourteen_hosts_is_one_notification(session):
     cve = f"CVE-N-{uuid.uuid4().hex[:8]}"
     for n in range(14):
@@ -60,7 +49,6 @@ def test_the_message_can_say_how_many_without_listing_them_all(session):
     session.flush()
     one = next(n for n in _pending(session) if cve in n.group_key)
     assert one.occurrence_count == 40
-    # Capped: naming forty assets is not more informative than naming a few.
     assert 0 < len(one.subjects) <= 12
 
 
@@ -76,8 +64,6 @@ def test_different_advisories_stay_separate(session):
 
 
 def test_a_sent_notification_does_not_absorb_later_occurrences(session):
-    """Grouping coalesces what has not gone out yet. Folding into something already
-    read would silently change a message somebody has acted on."""
     cve = f"CVE-N-{uuid.uuid4().hex[:8]}"
     key = f"finding.assessed:{cve}"
     emit(session, kind="finding.assessed", group_key=key, title=cve, body="", subject="a")
@@ -91,8 +77,6 @@ def test_a_sent_notification_does_not_absorb_later_occurrences(session):
 
 
 def test_one_urgent_occurrence_promotes_the_group(session):
-    """Fourteen routine instances plus one on an internet-facing host is an urgent
-    event, not a routine one."""
     cve = f"CVE-N-{uuid.uuid4().hex[:8]}"
     key = f"finding.assessed:{cve}"
     for n in range(5):
@@ -104,11 +88,7 @@ def test_one_urgent_occurrence_promotes_the_group(session):
     assert next(n for n in _pending(session) if n.group_key == key).urgency == "urgent"
 
 
-# ── throttling ───────────────────────────────────────────────────────────────
-
-
 def test_a_burst_does_not_become_a_flood(session, monkeypatch):
-    """Two hundred distinct findings must not produce two hundred messages."""
     from athena.config import get_settings
 
     settings = get_settings()
@@ -127,7 +107,6 @@ def test_a_burst_does_not_become_a_flood(session, monkeypatch):
 
 
 def test_throttled_notifications_are_held_not_dropped(session, monkeypatch):
-    """A throttle that lost messages would be indistinguishable from a broken one."""
     from athena.config import get_settings
 
     monkeypatch.setattr(get_settings(), "notify_max_per_window", 3, raising=False)
@@ -145,8 +124,6 @@ def test_throttled_notifications_are_held_not_dropped(session, monkeypatch):
 
 
 def test_urgent_bypasses_the_throttle(session, monkeypatch):
-    """The throttle protects attention. Spending its budget on routine notices while
-    an exploited flaw queues behind them would invert its purpose."""
     from athena.config import get_settings
 
     monkeypatch.setattr(get_settings(), "notify_max_per_window", 2, raising=False)
@@ -165,9 +142,6 @@ def test_urgent_bypasses_the_throttle(session, monkeypatch):
         select(Notification).where(Notification.group_key == urgent_key)
     ).scalars().one()
     assert urgent.state == "sent"
-
-
-# ── quiet hours ──────────────────────────────────────────────────────────────
 
 
 def test_quiet_hours_hold_routine_notifications(session, monkeypatch):
@@ -211,16 +185,12 @@ def test_a_window_crossing_midnight_is_understood():
 
 
 def test_an_unparsable_quiet_window_fails_open():
-    """A misconfigured quiet period should cost somebody a notification they did not
-    want, never one they needed."""
     assert not in_quiet_hours(datetime.now(UTC), "not a time range")
     assert not in_quiet_hours(datetime.now(UTC), "")
 
 
 
 def test_the_inbox_leads_with_what_matters(session):
-    """Everything dispatched in one pass shares a timestamp, so ordering by time
-    alone buried an exploited flaw under whatever routine work went out beside it."""
     from athena.api.routers.notifications import list_notifications
 
     tag = uuid.uuid4().hex[:8]

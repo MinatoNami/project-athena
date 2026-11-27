@@ -1,12 +1,3 @@
-"""What happens around an investigation while the model is still working.
-
-A verdict takes minutes. In that time correlation can close the finding, a person
-can move it on, or the advisory can be revised — and the late verdict must not
-undo any of that, nor notify anybody about a question that no longer stands. And
-when correlation only closes or reopens findings, connected pages must still hear
-about it.
-"""
-
 from __future__ import annotations
 
 import contextlib
@@ -33,9 +24,6 @@ pytestmark = pytest.mark.usefixtures("engine")
 
 @pytest.fixture
 def worker_session(session, monkeypatch):
-    """Point the workers' own transactions at the test session, and capture what
-    they publish and notify."""
-
     @contextlib.contextmanager
     def scope():
         yield session
@@ -155,9 +143,6 @@ def test_a_current_verdict_is_applied(worker_session):
     assert notified == [str(finding.id)]
 
 
-# ── closure-only correlation runs reach connected pages ──────────────────────
-
-
 def _record(record_id: str, cve: str, package: str, *, withdrawn: str | None = None) -> dict:
     record = {
         "id": record_id,
@@ -207,14 +192,12 @@ def test_closing_and_reopening_findings_publishes_an_update(worker_session):
     session.flush()
     assert correlate_one_advisory({"vulnerability_id": cve})["created"] == 1
 
-    # Only closes: nothing is created, and the page must still hear about it.
     upsert_advisory(session, parse(_record(ghsa, cve, package, withdrawn="2026-11-10T00:00:00Z")))
     published.clear()
     result = correlate_one_advisory({"vulnerability_id": cve})
     assert result["created"] == 0 and result["unmatched"] == 1
     assert published == [("findings", cve)]
 
-    # Only reopens: likewise.
     upsert_advisory(session, parse(_record(f"PYSEC-{uuid.uuid4().hex[:8]}", cve, package)))
     published.clear()
     result = correlate_one_advisory({"vulnerability_id": cve})
@@ -240,13 +223,7 @@ def test_a_discarded_cached_verdict_is_reported_as_discarded(worker_session, mon
     assert notified == []
 
 
-# ── a match the advisory has moved past ──────────────────────────────────────
-
-
 def test_a_finding_waits_for_correlation_after_a_revision(worker_session):
-    """Ingest has revised the advisory; correlation has not re-matched the finding.
-    Its facts describe the old range, so neither triage nor investigation reads
-    them, and the finding is left as it was."""
     from athena.workers.investigate import _load, _load_for_triage
 
     session, _, _ = worker_session
@@ -259,7 +236,7 @@ def test_a_finding_waits_for_correlation_after_a_revision(worker_session):
     session.refresh(finding)
     assert finding.state == "discovered"
 
-    finding.advisory_revision = 2  # correlation has caught up
+    finding.advisory_revision = 2
     session.flush()
     context = _load(str(finding.id))
     assert context is not None and context["advisory_revision"] == 2
@@ -307,8 +284,6 @@ def test_an_investigation_of_an_older_revision_does_not_answer_this_one(worker_s
 
 
 def test_a_rematched_finding_is_assessed_again(worker_session):
-    """Whatever was concluded answered a match its source retracted. Reopened by a
-    range that came back, the finding is a new question and is queued as one."""
     from athena.correlation.engine import correlate_advisory
     from athena.workers.investigate import _load
 
@@ -379,8 +354,6 @@ def _install(session, package: str) -> None:
 
 
 def test_a_match_becoming_undecided_or_decided_again_publishes_an_update(worker_session):
-    """Either way the fix a connected page shows has changed — withdrawn, or back —
-    though nothing was created, closed or reopened."""
     from athena.workers.intel_jobs import correlate_one_advisory
 
     session, published, _ = worker_session
@@ -391,7 +364,6 @@ def test_a_match_becoming_undecided_or_decided_again_publishes_an_update(worker_
     _install(session, package)
     assert correlate_one_advisory({"vulnerability_id": cve})["created"] == 1
 
-    # Revised to a bound the installed version cannot be ordered against.
     undecidable = _record(ghsa, cve, package)
     undecidable["affected"][0]["ranges"][0]["events"] = [
         {"introduced": "0"},
@@ -405,12 +377,10 @@ def test_a_match_becoming_undecided_or_decided_again_publishes_an_update(worker_
     assert result["created"] == result["unmatched"] == result["reopened"] == 0
     assert published == [("findings", cve)]
 
-    # Still undecided on the next run: nothing changed, nothing to say.
     published.clear()
     assert correlate_one_advisory({"vulnerability_id": cve})["undecided"] == 0
     assert published == []
 
-    # Corrected: a match again, with its fix back.
     corrected = _record(ghsa, cve, package)
     corrected["modified"] = "2026-11-13T00:00:00Z"
     upsert_advisory(session, parse(corrected))

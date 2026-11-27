@@ -1,10 +1,3 @@
-"""Envelope encryption for stored secrets.
-
-A per-secret data key (DEK) encrypts the value; the master key wraps the DEK.
-The master key comes from a file or the environment and is never written to the
-database, so a database dump alone discloses nothing.
-"""
-
 from __future__ import annotations
 
 import base64
@@ -24,7 +17,6 @@ class MasterKeyUnavailable(RuntimeError):
 
 
 def generate_master_key() -> str:
-    """A new base64 master key. Print once; store outside the database."""
     return base64.b64encode(os.urandom(KEY_BYTES)).decode("ascii")
 
 
@@ -42,7 +34,6 @@ def _master_key() -> bytes:
 
 
 def seal(plaintext: str, *, aad: str) -> dict[str, bytes]:
-    """Encrypt a value. `aad` binds the ciphertext to its logical name."""
     dek = _secrets.token_bytes(KEY_BYTES)
     nonce = _secrets.token_bytes(NONCE_BYTES)
     ciphertext = AESGCM(dek).encrypt(nonce, plaintext.encode("utf-8"), aad.encode("utf-8"))

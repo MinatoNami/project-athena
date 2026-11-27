@@ -1,20 +1,3 @@
-"""Trivy misconfiguration adapter: Dockerfiles, Kubernetes, Terraform, Compose…
-
-Run with every network-facing option off — no database or check-bundle update, no
-version check, no telemetry — so it uses the checks embedded in the pinned binary
-and reads nothing but the checkout. That is a choice with a cost: check updates
-arrive with image upgrades, not daily. It is the right one for a scanner that parses
-hostile input in a sandbox with no network.
-
-Rule ids are normalised. Trivy moved from `DS002` / `AVD-DS-0002` to `DS-0002` in
-2026, and an id change across an upgrade would otherwise resolve every finding and
-recreate it under a new name, resetting how long each has been open.
-
-`CauseMetadata.Code` — the offending source lines — is dropped. A misconfigured
-config file is exactly where a credential sits next to the misconfiguration, and
-this table is not where secrets are allowed to end up.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -33,7 +16,6 @@ _ID = re.compile(r"^(?:AVD-)?([A-Z]+)-?0*(\d+)$")
 
 
 def canonical_rule(rule_id: str | None) -> str:
-    """`DS002`, `AVD-DS-0002` and `DS-0002` are the same check."""
     rule = (rule_id or "").strip().upper()
     match = _ID.match(rule)
     if not match:
@@ -69,7 +51,6 @@ def scan(path_in_volume: str, *, work_volume: str) -> SandboxResult:
 
 
 def parse(stdout: str) -> tuple[list[CodeObservation], dict[str, Any]]:
-    """Translate a Trivy report. Returns (failures, summary). Raises ValueError."""
     report = json.loads(stdout or "null")
     if not isinstance(report, dict):
         raise ValueError("trivy did not produce a JSON object")
@@ -89,10 +70,6 @@ def parse(stdout: str) -> tuple[list[CodeObservation], dict[str, Any]]:
             cause = m.get("CauseMetadata") or {}
             resource = str(cause.get("Resource") or "")
             line = cause.get("StartLine")
-            # Resource rather than line where there is one: it survives edits above
-            # it. Files with no resource notion (a Dockerfile) fall back to the
-            # rule alone, which is one finding per check per file — the unit a
-            # person fixes.
             identity = f"misconfiguration:{rule}:{target}:{resource}"
             out.append(
                 CodeObservation(
@@ -119,7 +96,6 @@ def parse(stdout: str) -> tuple[list[CodeObservation], dict[str, Any]]:
 
 
 def version_of(stdout: str) -> str | None:
-    """Trivy writes its own version into the report since 0.5x."""
     try:
         report = json.loads(stdout or "null")
     except json.JSONDecodeError:

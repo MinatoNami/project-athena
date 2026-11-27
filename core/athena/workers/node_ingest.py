@@ -1,10 +1,3 @@
-"""Turn node observations into inventory.
-
-Each capability result becomes facts about the host asset, with the scan run that
-produced them attached. A capability that failed leaves the asset stale rather than
-appearing clean, exactly as a failed repository scan does.
-"""
-
 from __future__ import annotations
 
 import re
@@ -34,7 +27,6 @@ from athena.queue.registry import handler
 
 log = structlog.get_logger(__name__)
 
-# Package sources the node reports, mapped to component ecosystems.
 PACKAGE_ECOSYSTEM = {"deb": "deb", "rpm": "rpm", "apk": "apk"}
 
 
@@ -67,7 +59,7 @@ def ingest(payload: dict[str, Any]) -> dict[str, Any]:
         )
         try:
             stats = _apply(session, asset=asset, run=run, capability=capability, data=data)
-        except Exception as exc:  # noqa: BLE001 - record the failure rather than lose it
+        except Exception as exc:  # noqa: BLE001
             finish_scan(session, run, status="failed", error=f"{type(exc).__name__}: {exc}")
             log.warning("node.ingest_failed", capability=capability, error=str(exc))
             return {"status": "failed", "capability": capability}
@@ -91,10 +83,6 @@ def ingest(payload: dict[str, Any]) -> dict[str, Any]:
 def _apply(session, *, asset: Asset, run, capability: str, data: Any) -> dict[str, Any]:
     stats = _dispatch(session, asset=asset, run=run, capability=capability, data=data)
 
-    # Both of these change what can be derived: ports settle a host's exposure, and
-    # the container list settles which images run where. Deriving here rather than on
-    # a timer means a newly-observed container is classified in the same breath as
-    # being discovered, instead of scoring against an unknown until a sweep catches up.
     if capability in ("list_ports", "inspect_docker"):
         stats = {**stats, "derived": derive(session)}
     return stats
@@ -119,19 +107,11 @@ def _dispatch(session, *, asset: Asset, run, capability: str, data: Any) -> dict
 
 
 def _distro_release(data: dict) -> tuple[str | None, str | None]:
-    """(distro, release) from os-release, e.g. ("ubuntu", "24.04").
-
-    Correlation needs this: a fix in Ubuntu 22.04 says nothing about 24.04, and
-    comparing across releases makes a vulnerable host look patched.
-    """
     import re
 
     distro = (data.get("os_id") or "").strip().lower() or None
     release = (data.get("os_version_id") or "").strip() or None
 
-    # Agents predating os_id/os_version_id report only the pretty name. Deriving
-    # both from it keeps an older agent fully correlatable rather than leaving the
-    # distribution unknown, which would silently disable distro-specific matching.
     pretty = (data.get("os_version") or "").strip()
     if distro is None and pretty:
         first = pretty.split()[0].lower()
@@ -185,13 +165,6 @@ def _packages(session, *, asset: Asset, run, data: list) -> dict[str, Any]:
 
 
 def _process_name(raw: str | None) -> str | None:
-    """Pull the process name out of ss's users field.
-
-    ss renders it as users:(("sshd",pid=123,fd=3)); storing that verbatim made a
-    service asset's name unreadable. Returns None when the agent could not see the
-    owner, which is normal for an unprivileged agent and is recorded rather than
-    guessed at.
-    """
     if not raw:
         return None
     import re
@@ -203,12 +176,6 @@ def _process_name(raw: str | None) -> str | None:
 
 
 def _ports(session, *, asset: Asset, data: list) -> dict[str, Any]:
-    """Register listening services as their own assets.
-
-    The bind address is kept rather than collapsed: 127.0.0.1:6379 and 0.0.0.0:6379
-    are entirely different exposure facts, and flattening them would turn a loopback
-    service into a false internet exposure — or hide a real one.
-    """
     exposed = 0
     seen: set[str] = set()
     for entry in data or []:
@@ -236,10 +203,6 @@ def _ports(session, *, asset: Asset, data: list) -> dict[str, Any]:
             session,
             kind=AssetKind.SERVICE,
             identity_key=key,
-            # The bind address is part of the name because it is the exposure fact:
-            # 0.0.0.0:6379 and 127.0.0.1:6379 are very different things to see in a
-            # list. The process name is included when the agent could see it — an
-            # unprivileged agent cannot read other users' socket owners.
             display_name=(
                 f"{process} {protocol}/{port}"
                 if process
@@ -267,22 +230,7 @@ def _ports(session, *, asset: Asset, data: list) -> dict[str, Any]:
 
 
 def _retire_unseen_services(session, *, asset: Asset, seen: set[str], reported: int) -> int:
-    """Tombstone services on this host that the node no longer reports.
-
-    The agent sends its whole listening set each time, so anything absent from it has
-    gone. Without this every socket that ever existed stays in the inventory forever:
-    on the development host 190 of 227 services were ephemeral high ports observed
-    once, six days earlier, and never again — permanently stale, permanently dragging
-    coverage down, and growing with every collection.
-
-    Nothing is deleted. Tombstoned assets leave the active inventory, and observing
-    one again clears the tombstone, so a service that is briefly down comes back
-    rather than vanishing for good.
-    """
     if not reported:
-        # An empty report is far more likely to be a collection that failed than a
-        # host with nothing listening at all, and acting on it would retire the
-        # entire inventory of that host in one pass.
         log.warning("node.empty_port_report", asset=str(asset.id))
         return 0
 
@@ -310,23 +258,10 @@ def _retire_unseen_services(session, *, asset: Asset, seen: set[str], reported: 
     return retired
 
 
-# A 12- or 64-character hex string is an image ID, not a repository name.
 _IMAGE_ID = re.compile(r"^[0-9a-f]{12}$|^[0-9a-f]{64}$")
 
 
 def _normalise_image_ref(ref: str) -> str:
-    """Apply Docker's own default-tag rule so a bare name matches its image.
-
-    `docker ps` prints whatever the container was created with, so a container
-    started from `hello-world` reports exactly that, while the image is inventoried
-    as `hello-world:latest`. Docker resolves the two to the same thing and so should
-    this; without it the container looks like it came from nowhere and its packages
-    go uncounted.
-
-    An image ID is left alone. Appending a tag to one would invent a repository that
-    does not exist. Those are resolved separately, by the ID the agent now reports
-    alongside each image — see `_docker`.
-    """
     ref = (ref or "").strip()
     if not ref or ":" in ref or "@" in ref or _IMAGE_ID.match(ref):
         return ref
@@ -336,11 +271,6 @@ def _normalise_image_ref(ref: str) -> str:
 def _docker(session, *, asset: Asset, data: dict) -> dict[str, Any]:
     data = data or {}
     images_by_ref: dict[str, Asset] = {}
-    # Keyed separately because `docker ps` prints an image ID, not a reference,
-    # whenever the container's image has no usable tag — after a rebuild retags it,
-    # for instance. Sixty-one images looked like images nothing runs for exactly this
-    # reason, which in turn left them unclassified and their findings scored against
-    # a placeholder.
     images_by_id: dict[str, Asset] = {}
 
     for image in data.get("images") or []:
@@ -360,8 +290,6 @@ def _docker(session, *, asset: Asset, data: dict) -> dict[str, Any]:
             display_name=f"{repo}:{tag}",
             attributes={"repository": repo, "tag": tag, "digest": digest},
         )
-        # A repository registered last week should not need revisiting because a
-        # new tag was pushed this morning.
         link_image_source(session, image_asset)
         images_by_ref[f"{repo}:{tag}"] = image_asset
         if image_id:
@@ -381,10 +309,6 @@ def _docker(session, *, asset: Asset, data: dict) -> dict[str, Any]:
             attributes={
                 "image": container.get("image"),
                 "state": container.get("state"),
-                # Recorded verbatim, and only when the agent sent the field at all:
-                # an agent too old to report ports is a different fact from a
-                # container that publishes none, and conflating them would let
-                # "we did not ask" read as "nothing is exposed".
                 **(
                     {"published_ports": container["ports"]}
                     if "ports" in container
@@ -395,9 +319,6 @@ def _docker(session, *, asset: Asset, data: dict) -> dict[str, Any]:
         containers += 1
         link(session, src=container_asset, dst=asset, relation="runs_on")
 
-        # repository → image → container → host becomes traversable here. The image
-        # link is by reference because the runtime reports a tag; where the tag has
-        # moved, provenance is genuinely unknown rather than assumed.
         raw_ref = (container.get("image") or "").strip()
         image_asset = images_by_ref.get(_normalise_image_ref(raw_ref))
         if image_asset is None and _IMAGE_ID.match(raw_ref):

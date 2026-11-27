@@ -1,9 +1,3 @@
-"""Authentication.
-
-No default credentials, ever. First run mints a single-use bootstrap token that is
-printed once to the log; the admin account is created interactively from it.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -42,19 +36,11 @@ def verify_password(password_hash: str, password: str) -> bool:
     return True
 
 
-# --- bootstrap ------------------------------------------------------------------
-
-
 def any_user_exists(session: Session) -> bool:
     return session.execute(select(User.id).limit(1)).first() is not None
 
 
 def live_bootstrap_token_exists(session: Session) -> bool:
-    """A previously minted token that is still usable.
-
-    `athena bootstrap` runs on every deploy, so it must not mint a fresh token each
-    time — that would leave a trail of valid admin-creation credentials.
-    """
     return (
         session.execute(
             select(BootstrapToken.id).where(
@@ -96,9 +82,6 @@ def consume_bootstrap_token(session: Session, token: str) -> BootstrapToken | No
     return row
 
 
-# --- sessions -------------------------------------------------------------------
-
-
 def create_session(session: Session, user: User) -> str:
     settings = get_settings()
     token = secrets.token_urlsafe(32)
@@ -113,7 +96,6 @@ def create_session(session: Session, user: User) -> str:
 
 
 def resolve_session(session: Session, token: str | None) -> tuple[User, Session_] | None:
-    """Return the live session, applying both idle and absolute timeouts."""
     if not token:
         return None
     row = session.execute(

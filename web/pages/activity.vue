@@ -1,15 +1,4 @@
 <script setup lang="ts">
-/**
- * Activity — the audit trail, read as a timeline.
- *
- * The shell linked here before this page existed, which produced a raw Nuxt 404.
- * The link is worth keeping rather than removing: the hash-chained trail is a real
- * feature and there was no way to see it, so "who changed what" was answerable only
- * from the database.
- *
- * The chain's integrity is stated at the top rather than assumed. A trail nobody can
- * verify is a log, not an audit trail.
- */
 useHead({ title: 'Activity' })
 
 const { data: me } = await useMe()
@@ -34,11 +23,6 @@ watchEffect(() => {
   collected.value.sort((a, b) => b.seq - a.seq)
 })
 
-/**
- * Actions in the operator's words. Anything unmapped falls back to the raw verb
- * rather than a friendly guess — inventing a description for an action nobody
- * anticipated is how an audit trail starts lying.
- */
 const VERBS: Record<string, string> = {
   ASSET_CLASSIFIED: 'classified an asset',
   ASSET_REGISTERED: 'registered an asset',
@@ -74,14 +58,6 @@ function loadMore() {
 
 const { theme } = useChartTheme()
 
-/**
- * What has been happening, over the entries actually loaded.
- *
- * The audit API pages backwards and has no aggregate, so this counts what is on
- * screen. Said in the caption rather than left for the reader to assume it covers
- * the whole trail — an audit page that overstates its own scope is the wrong page
- * to be loose on.
- */
 const byAction = computed(() => {
   const counts = new Map<string, { n: number; failure: boolean }>()
   for (const e of collected.value) {
@@ -113,7 +89,6 @@ const byAction = computed(() => {
       </div>
     </div>
 
-    <!-- Integrity is the claim this page rests on, so it is stated rather than assumed. -->
     <div v-if="chain" class="chain" :class="{ broken: !chain.intact }">
       <span class="dot" :class="chain.intact ? 'live' : 'down'" />
       <span>

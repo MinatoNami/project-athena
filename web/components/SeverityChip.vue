@@ -1,12 +1,4 @@
 <script setup lang="ts">
-/**
- * Severity as a single-hue ordinal ramp: lightness carries the signal, so the bands
- * stay distinguishable under any colour vision deficiency. Always chip + label,
- * never colour alone.
- *
- * Named "provisional" throughout because before M3 this is the advisory's own view
- * with no environmental context — not assessed risk.
- */
 defineProps<{ severity: string; kev?: boolean }>()
 </script>
 
@@ -27,10 +19,6 @@ defineProps<{ severity: string; kev?: boolean }>()
 .critical { --sev-bg: var(--sev-critical); --sev-ink: var(--sev-on-dark); }
 .high     { --sev-bg: var(--sev-high);     --sev-ink: var(--sev-on-dark); }
 .medium   { --sev-bg: var(--sev-medium);   --sev-ink: var(--sev-on-dark); }
-/* The two quietest bands keep neutral text and carry the ramp in a swatch. As
-   filled chips their colours sit too close to the surface to hold readable text,
-   and INFORMATIONAL had no rule at all — it rendered as plain ink, which in dark
-   mode is pure white: the loudest chip in the list for the mildest band. */
 .low, .informational {
   --sev-bg: transparent; border-color: var(--rule) !important;
 }

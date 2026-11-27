@@ -1,12 +1,4 @@
 <script setup lang="ts">
-/**
- * Suppressing a finding.
- *
- * The form asks for the two things that make this a decision rather than a delete:
- * why, and how far it reaches. Both are shown back on the finding when it returns,
- * so the copy here is written for whoever reads it months from now rather than for
- * whoever is clicking today.
- */
 const props = defineProps<{
   findingId: string
   vulnerabilityId: string
@@ -41,13 +33,10 @@ const until = ref('')
 const saving = ref(false)
 const failed = ref<string | null>(null)
 
-/** Accepted risk is an appetite, not a fact, so nothing else will prompt a review. */
 const expiryRequired = computed(() => reasonCode.value === 'accepted_risk')
 const hint = computed(() => REASONS.find(r => r.code === reasonCode.value)?.hint ?? '')
 const tooShort = computed(() => reason.value.trim().length < 8)
 
-// A modal moves focus into itself, keeps it there, and gives it back on close.
-// Without this a keyboard user opened the dialog and stayed on the page beneath it.
 const dialog = ref<HTMLElement | null>(null)
 let returnTo: HTMLElement | null = null
 function focusables(): HTMLElement[] {
@@ -90,7 +79,6 @@ async function submit() {
     })
     emit('done')
   } catch (e: any) {
-    // The API writes these for the operator, so they are shown as sent.
     failed.value = e?.data?.detail ?? e?.message ?? 'The suppression was not saved.'
   } finally {
     saving.value = false
@@ -108,8 +96,6 @@ async function submit() {
         deleted — it stays counted, and comes back if what you are relying on changes.
       </p>
 
-      <!-- A group of buttons is a fieldset, not a label: a label wrapping five buttons
-           made a click on its text press the first reason. -->
       <fieldset class="field">
         <legend class="lbl">Why</legend>
         <div class="reasons">

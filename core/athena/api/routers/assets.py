@@ -30,13 +30,8 @@ from athena.remediation import link_built_images
 
 router = APIRouter(tags=["inventory"])
 
-# How many of an asset's packages its detail response lists. Totals are counted
-# over all of them regardless.
 COMPONENT_LIST_LIMIT = 1000
 
-# Findings the list can show at all: not from a withdrawn advisory, and still
-# supported by a published range. Counts set beside the list (the baseline preview
-# is subtracted from its total) or ranked by it must leave out what it leaves out.
 _LISTED = (Vulnerability.withdrawn_at.is_(None), Finding.state != "unmatched")
 
 TIERS = {"production", "staging", "development", "personal", "unknown"}
@@ -49,10 +44,6 @@ class RegisterRepository(BaseModel):
     default_branch: str | None = None
     tier: str = "unknown"
     owner: str | None = None
-    # The images this repository builds, named the way the runtime reports them
-    # (`lumaindex-frontend`, no tag). Nothing in an image records the source that
-    # produced it, so this is the only way the two are ever connected — and it is
-    # what turns an image finding from "upgrade this somewhere" into a file to edit.
     builds: list[str] = Field(default_factory=list, max_length=200)
 
 
@@ -82,11 +73,7 @@ def _serialise(asset: Asset, *, component_count: int | None = None) -> dict[str,
         "display_name": asset.display_name,
         "tier": asset.tier,
         "exposure": asset.exposure,
-        # Why each holds its value. "Athena worked it out" and "somebody decided" are
-        # different claims and the page must not present them alike.
         "classification": asset.attributes.get("classification") or {},
-        # Explicitly null rather than 0 — nobody has set it, which is not the same as
-        # "unimportant". The UI surfaces this as a configuration gap.
         "criticality": asset.criticality,
         "owner": asset.owner,
         "first_seen": asset.first_seen,
@@ -130,7 +117,6 @@ def register_repository(
     principal: Principal = Depends(current_principal),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
-    """Register a repository and queue its first scan."""
     try:
         key = identity_for(AssetKind.REPOSITORY, url=body.url)
     except IdentityError as exc:
@@ -158,10 +144,6 @@ def register_repository(
         subject=f"asset:{asset.id}",
         detail={"kind": "repository", "identity_key": key},
     )
-    # Reported rather than left silent. Matching is exact on the image name, so a
-    # name that does not match the runtime's spelling links nothing — and the only
-    # moment anybody can correct that is now, while they are looking at what they
-    # typed. A zero here against a non-empty `builds` is the whole signal.
     linked = link_built_images(session, asset)
     enqueue(
         session,
@@ -173,31 +155,15 @@ def register_repository(
     return {"created": created, "images_linked": linked, **_serialise(asset)}
 
 
-# ── classification ───────────────────────────────────────────────────────────
-
-
 def _family(asset: Asset) -> tuple[str, str]:
-    """Which classification group an asset belongs to, and what to call it.
-
-    Eight tags of one image are one decision, not eight. Grouping is what turns
-    "classify 308 assets" into something a person will actually finish, so it is
-    computed here rather than left to the browser — the client should not have to
-    fetch every asset to work out that they are the same thing.
-    """
     if asset.kind == "image":
-        # `repo:tag` and `repo@sha256:…` both reduce to the repository.
         name = asset.display_name
         for sep in ("@", ":"):
             if sep in name:
                 name = name.rsplit(sep, 1)[0]
         return f"image:{name}", name
     if asset.kind in ("service", "container"):
-        # Individually numerous and individually uninteresting; they inherit their
-        # host's consequence far more often than they have their own.
         return f"kind:{asset.kind}", f"All {asset.kind}s"
-    # Keyed on identity_key rather than id: identity is what the inventory assigned,
-    # and it exists before the row does. Keying on the primary key made the group of
-    # an unflushed asset "asset:None", which is only ever wrong.
     return f"asset:{asset.identity_key}", asset.display_name
 
 
@@ -206,12 +172,6 @@ def unclassified(
     _: Principal = Depends(current_principal),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
-    """Assets with no tier or exposure set, grouped into decisions.
-
-    Unknown is scored as middling rather than harmless, so nothing is hidden by this
-    gap — but importance is a placeholder in every score until it is filled in, and
-    that is worth showing as a number.
-    """
     assets = session.execute(
         select(Asset).where(
             Asset.tombstoned_at.is_(None),
@@ -244,12 +204,7 @@ def unclassified(
                 "finding_count": 0,
                 "tier": asset.tier,
                 "exposure": asset.exposure,
-                # What Athena settled on its own, so the page can show a decision as
-                # already made rather than asking for it a second time.
                 "classification": asset.attributes.get("classification") or {},
-                # Exposure is deliberately not derived for containers and images: one
-                # bound to loopback may still be reached through a reverse proxy on the
-                # same host. So the observations go to the person making the call.
                 "evidence": [],
                 "mixed": False,
             },
@@ -260,8 +215,6 @@ def unclassified(
         group["asset_ids"].append(str(asset.id))
         group["asset_count"] += 1
         group["finding_count"] += finding_counts.get(asset.id, 0)
-        # A group whose members already disagree must say so rather than show one
-        # member's value as if it spoke for the rest.
         if group["tier"] != asset.tier or group["exposure"] != asset.exposure:
             group["mixed"] = True
 
@@ -277,20 +230,11 @@ def unclassified(
 
 
 def _exposure_evidence(session: Session, assets: list[Asset]) -> dict[Any, list[str]]:
-    """What was observed about how each asset can be reached.
-
-    Assembled here rather than left to the browser: answering "is this internet-facing"
-    means knowing what runs the image, where, and what it publishes, which is three
-    joins the client should not have to make to answer one question.
-    """
     ids = {a.id for a in assets}
     if not ids:
         return {}
     out: dict[Any, list[str]] = {}
 
-    # Which containers run these images, and where each of those runs. Two passes
-    # rather than one wide join: the second hop is optional, and a container whose
-    # host is unknown still tells you what it publishes.
     runs = session.execute(
         select(AssetEdge.src_id, Asset.display_name)
         .join(Asset, Asset.id == AssetEdge.dst_id)
@@ -298,10 +242,6 @@ def _exposure_evidence(session: Session, assets: list[Asset]) -> dict[Any, list[
     ).all()
     host_of = dict(runs)
 
-    # Oldest first, so a later observation of the same container overwrites an
-    # earlier one. A container recreated under the same name, or observed once by an
-    # agent too old to report ports, would otherwise contribute two contradictory
-    # lines about the same thing — and a reader has no way to tell which is current.
     rows = session.execute(
         select(AssetEdge.dst_id, Asset)
         .join(Asset, Asset.id == AssetEdge.src_id)
@@ -317,7 +257,6 @@ def _exposure_evidence(session: Session, assets: list[Asset]) -> dict[Any, list[
         where = f" on {host_of[container.id]}" if container.id in host_of else ""
         ports = container.attributes.get("published_ports")
         if ports is None:
-            # An agent too old to report ports is not a container that publishes none.
             how = "ports not reported by this host's agent"
         elif not ports.strip():
             how = "publishing no ports"
@@ -327,7 +266,6 @@ def _exposure_evidence(session: Session, assets: list[Asset]) -> dict[Any, list[
     for (image_id, _), line in latest.items():
         out.setdefault(image_id, []).append(line)
 
-    # A host speaks for itself: its own listening sockets were observed directly.
     for host in (a for a in assets if a.kind == "host"):
         seen = session.execute(
             select(Asset.display_name, Asset.exposure)
@@ -367,9 +305,6 @@ def get_asset(
         .order_by(Component.ecosystem, Component.name)
         .limit(COMPONENT_LIST_LIMIT)
     ).all()
-    # Totals over everything installed, not over the listed page: the package tile
-    # and the ecosystem chart are totals, and a total that stops at the page size
-    # (and, sorted by ecosystem, drops whole ecosystems past it) undercounts quietly.
     by_ecosystem = session.execute(
         select(Component.ecosystem, func.count())
         .join(AssetComponent, AssetComponent.component_id == Component.id)
@@ -407,8 +342,6 @@ def get_asset(
             }
             for c, scope, observed_at in components
         ],
-        # Every scan attempt, including the ones that failed. An asset whose scans keep
-        # failing must look uncovered here, not clean.
         "scan_runs": [
             {
                 "id": str(r.id),
@@ -470,27 +403,14 @@ def update_asset(
     return _serialise(asset)
 
 
-# ── scanning on demand ───────────────────────────────────────────────────────
-
-# The kinds that have a scan of their own, and the job that performs it.
 SCAN_JOBS = {
     AssetKind.REPOSITORY: "scan.repository",
     AssetKind.IMAGE: "scan.image",
 }
 
-# A host is not in that table because nothing here scans a host: its inventory is
-# whatever its node reports, so the manual equivalent is to bring the next sweep
-# forward rather than to queue a scan.
 COLLECT = "collect"
 
-# Why the remaining kinds have no scan to run. Each is a deliberate decision made
-# elsewhere in the system, and the page has to be able to state it — an asset that
-# is covered by another route and an asset nobody looks at read identically when
-# the only answer is silence.
 NOT_SCANNED_DIRECTLY = {
-    # `_inherited_inventory` already counts a container as covered by the image it
-    # was built from, so a scan here would claim a second, weaker observation of
-    # the same packages.
     AssetKind.CONTAINER: (
         "A container's packages come from the image it was built from — scan that image instead."
     ),
@@ -510,7 +430,6 @@ UNREFERENCABLE_IMAGE = (
 
 
 def _image_is_referencable(asset: Asset) -> bool:
-    """The worker's own test (`workers.image`): a repository, and a tag or digest."""
     attrs = asset.attributes or {}
     repository, tag, digest = attrs.get("repository"), attrs.get("tag"), attrs.get("digest")
     if not repository or repository == "<none>":
@@ -519,14 +438,6 @@ def _image_is_referencable(asset: Asset) -> bool:
 
 
 class ScanOffer(NamedTuple):
-    """What asking for a scan right now would do, and when it would do nothing, why.
-
-    One rule, read twice: the asset page consults it to decide whether to offer the
-    button, and the endpoint consults it again to decide what to run. Expressed
-    separately the two would drift, and the drift reads as a button that fails when
-    pressed — which is what it did on every asset that was not a repository.
-    """
-
     action: str | None
     reason: str | None = None
     node: Node | None = None
@@ -546,8 +457,6 @@ def _scan_offer(session: Session, asset: Asset) -> ScanOffer:
         ).scalars().first()
         return ScanOffer(COLLECT, node=node) if node is not None else ScanOffer(None, NO_NODE)
     if asset.kind == AssetKind.IMAGE and not _image_is_referencable(asset):
-        # Offered, it was the button that fails when pressed: the worker refuses
-        # dangling `<none>` images before it starts.
         return ScanOffer(None, UNREFERENCABLE_IMAGE)
     if (job_kind := SCAN_JOBS.get(asset.kind)) is not None:
         return ScanOffer(job_kind)
@@ -590,9 +499,6 @@ def rescan(
     return {
         "queued": job is not None,
         "job_id": job.id if job else None,
-        # Deduplication is on pending jobs, so a second press in the same second
-        # finds the first still queued. Said plainly, because "queued" twice over
-        # would promise two scans where there is one.
         "message": "Scan queued." if job else "A scan is already queued for this asset.",
     }
 
@@ -600,7 +506,6 @@ def rescan(
 def _collect_from_host(
     session: Session, asset: Asset, node: Node, principal: Principal
 ) -> dict[str, Any]:
-    """Bring this host's next observe sweep forward."""
     created = enqueue_collection(session, node)
     record(
         session,
@@ -612,8 +517,6 @@ def _collect_from_host(
     return {
         "queued": created > 0,
         "tasks": created,
-        # Nothing created means every capability already has a task the node has not
-        # answered: a sweep in flight, which is not the same as a refusal.
         "message": (
             f"Collection queued: {created} task(s) for {node.display_name}."
             if created
@@ -627,7 +530,6 @@ def get_coverage(
     _: Principal = Depends(current_principal),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
-    """The honest view: what has been inventoried, what is stale, what was never seen."""
     return coverage(session)
 
 
@@ -637,13 +539,6 @@ def classify(
     principal: Principal = Depends(current_principal),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
-    """Set tier and exposure across many assets, then rescore what it changed.
-
-    Rescoring is enqueued here rather than left to the operator. Tier and exposure are
-    scoring inputs, but the re-investigation guard declines to re-ask a model about an
-    advisory that has not moved — so without this the classification would land and
-    every score would sit unchanged, which reads as the feature not working.
-    """
     for group in body.groups:
         if group.tier is not None and group.tier not in TIERS:
             raise HTTPException(
@@ -678,8 +573,6 @@ def classify(
             if before == after:
                 continue
             changed += 1
-            # Per asset, not per batch: "who decided this host was production" is a
-            # question the audit trail should be able to answer on its own.
             record(
                 session,
                 actor=principal.actor,
@@ -703,19 +596,12 @@ def classify(
     return {"assets_changed": changed, "rescore_queued": job is not None}
 
 
-# ── baselines ────────────────────────────────────────────────────────────────
-
-
 class BaselineRequest(BaseModel):
     asset_id: str | None = None
-    # Refuses by default when a line has already been drawn: moving a baseline
-    # forward accepts everything found since, which is a different decision from
-    # drawing one for the first time and should be asked for on purpose.
     move_existing: bool = False
 
 
 def _baseline_preview(session: Session, asset_id: str | None) -> dict[str, Any]:
-    """What a baseline would accept, counted before it is drawn."""
     from athena.findings.query import _is_new
 
     stmt = (
@@ -734,9 +620,6 @@ def _baseline_preview(session: Session, asset_id: str | None) -> dict[str, Any]:
     )
     if asset_id:
         assets = assets.where(Asset.id == asset_id)
-    # What a person is actually deciding about is what leaves their screen. The
-    # totals above count every finding a baseline would mark, including ones already
-    # held back for having no published fix — true, but not the number being weighed.
     from athena.findings import FindingQuery, query_findings
 
     before = query_findings(
@@ -747,18 +630,12 @@ def _baseline_preview(session: Session, asset_id: str | None) -> dict[str, Any]:
         "findings": findings,
         "assets_without_baseline": session.execute(assets).scalar_one(),
         "default_view_now": before,
-        # Everything currently visible that is not exempt by the escape clause.
         "would_leave_default_view": max(0, before - _exempt_count(session, asset_id)),
         "stays_visible": _exempt_count(session, asset_id),
     }
 
 
 def _exempt_count(session: Session, asset_id: str | None) -> int:
-    """Groups the escape clause keeps in view whatever the baseline says.
-
-    Known-exploited, or measured at high or above. Reported alongside the preview so
-    the offer is not read as "this makes everything go away".
-    """
     from athena.findings.query import _BAND_RANK
 
     stmt = (
@@ -784,7 +661,6 @@ def baseline_status(
     _: Principal = Depends(current_principal),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
-    """What is currently baselined, and what drawing one now would accept."""
     baselined = session.execute(
         select(func.count())
         .select_from(Asset)
@@ -806,13 +682,6 @@ def capture_baseline(
     principal: Principal = Depends(current_principal),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
-    """Draw a line under what is already here.
-
-    Nothing is hidden or deleted: pre-existing findings stay listed, counted, and one
-    filter away. Known-exploited findings and anything measured at high or above stay
-    in the default view regardless — a baseline that swallowed those would be doing
-    the wall of red's job quietly.
-    """
     stmt = select(Asset).where(Asset.tombstoned_at.is_(None))
     if body.asset_id:
         stmt = stmt.where(Asset.id == body.asset_id)
@@ -855,7 +724,6 @@ def clear_baseline(
     principal: Principal = Depends(current_principal),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
-    """Undo it. Everything previously set aside as pre-existing comes back."""
     stmt = select(Asset).where(Asset.tombstoned_at.is_(None), Asset.baseline_at.is_not(None))
     if asset_id:
         stmt = stmt.where(Asset.id == asset_id)

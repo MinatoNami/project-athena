@@ -1,7 +1,3 @@
-"""Inventory: assets, components, scan provenance, merge candidates.
-
-Revision ID: 0004
-"""
 from __future__ import annotations
 
 import sqlalchemy as sa
@@ -33,7 +29,6 @@ def upgrade() -> None:
         sa.UniqueConstraint("kind", "identity_key", name="asset_identity_uniq"),
     )
     op.create_index("asset_kind_idx", "asset", ["kind"])
-    # Coverage queries ask "what is stale or never inventoried?" on every dashboard load.
     op.execute(
         "CREATE INDEX asset_freshness_idx ON asset (last_inventoried_at NULLS FIRST) "
         "WHERE tombstoned_at IS NULL"
@@ -59,8 +54,6 @@ def upgrade() -> None:
         sa.Column("version", sa.Text, nullable=False),
         sa.UniqueConstraint("ecosystem", "name", "version", name="component_identity_uniq"),
     )
-    # Reverse correlation (M2) looks components up by ecosystem+name when an advisory
-    # arrives, rather than rescanning assets.
     op.create_index("component_lookup_idx", "component", ["ecosystem", "name"])
     op.create_index("component_purl_idx", "component", ["purl"])
 
@@ -91,8 +84,6 @@ def upgrade() -> None:
     )
     op.create_index("scan_run_asset_idx", "scan_run", ["asset_id", "started_at"])
 
-    # A scan is running, or it succeeded, or it partly failed, or it failed. There is
-    # no state that means "we did not look but assume it is fine".
     op.create_check_constraint(
         "scan_run_status_known",
         "scan_run",

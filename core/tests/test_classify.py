@@ -1,11 +1,3 @@
-"""Deriving classification from the asset graph.
-
-165 of 192 live assets carried neither a tier nor an exposure, so every finding on
-them scored against a placeholder. Most of that is not a judgement anybody needs to
-make — a container on the production host is production — and the property under test
-is that the derivable part is derived without the guessable part being guessed.
-"""
-
 from __future__ import annotations
 
 from athena.db.models import AssetEdge
@@ -25,12 +17,7 @@ def _host(session, name="alena-server", tier="production"):
     return _asset(session, AssetKind.HOST, name, tier=tier)
 
 
-# ── tier flows from where a thing runs ───────────────────────────────────────
-
-
 def test_a_container_takes_the_tier_of_its_host(session):
-    """An ownership fact, not a security opinion. Asking a person to confirm it 73
-    times is how a classification queue stops being used."""
     host = _host(session)
     container = _asset(session, AssetKind.CONTAINER, "athena-api-1")
     link(session, src=container, dst=host, relation="runs_on")
@@ -42,8 +29,6 @@ def test_a_container_takes_the_tier_of_its_host(session):
 
 
 def test_an_image_takes_the_tier_of_the_worst_place_it_runs(session):
-    """The consequence of a flaw in an image is the consequence of the worst place
-    that image runs, not the average of them."""
     prod, dev = _host(session), _host(session, "laptop", tier="development")
     image = _asset(session, AssetKind.IMAGE, "athena-core:dev")
     for name, host in (("c-prod", prod), ("c-dev", dev)):
@@ -57,8 +42,6 @@ def test_an_image_takes_the_tier_of_the_worst_place_it_runs(session):
 
 
 def test_an_image_nothing_runs_stays_unknown(session):
-    """Nothing is derived from absence. An image no container uses is unclassified,
-    not safe."""
     image = _asset(session, AssetKind.IMAGE, "postgres:16-alpine")
     session.flush()
     derive(session)
@@ -67,13 +50,12 @@ def test_an_image_nothing_runs_stays_unknown(session):
 
 
 def test_an_unclassified_sibling_does_not_drag_a_classified_one_down(session):
-    """Unknown sits at the bottom of the ordering so it can never win a comparison."""
     prod = _host(session)
     image = _asset(session, AssetKind.IMAGE, "web:1")
     known = _asset(session, AssetKind.CONTAINER, "known")
     link(session, src=known, dst=prod, relation="runs_on")
     link(session, src=known, dst=image, relation="built_from")
-    orphan = _asset(session, AssetKind.CONTAINER, "orphan")   # no host, stays unknown
+    orphan = _asset(session, AssetKind.CONTAINER, "orphan")
     link(session, src=orphan, dst=image, relation="built_from")
     session.flush()
 
@@ -81,11 +63,7 @@ def test_an_unclassified_sibling_does_not_drag_a_classified_one_down(session):
     assert image.tier == "production"
 
 
-# ── exposure comes from observation, or not at all ───────────────────────────
-
-
 def test_a_hosts_exposure_comes_from_the_sockets_it_was_seen_listening_on(session):
-    """Direct evidence, not inference — the agent observed them."""
     host = _host(session)
     for name, exposure in (("sshd tcp/22", "internal"), ("pg tcp/5432", "isolated")):
         svc = _asset(session, AssetKind.SERVICE, name)
@@ -111,8 +89,6 @@ def test_a_host_with_only_loopback_services_is_isolated_on_the_evidence(session)
 
 
 def test_a_host_with_no_observed_services_stays_unknown(session):
-    """Seeing nothing is not evidence of safety, and unknown is weighted above
-    internal precisely so that this case is not quietly discounted."""
     host = _host(session)
     session.flush()
     derive(session)
@@ -120,10 +96,6 @@ def test_a_host_with_no_observed_services_stays_unknown(session):
 
 
 def test_exposure_is_never_derived_for_containers_or_images(session):
-    """Left to a person on purpose. A container bound to loopback may still be
-    reached through a reverse proxy on the same host, and this estate runs one — so
-    inferring isolation from a bind address would be wrong in exactly the case that
-    matters."""
     host = _host(session)
     image = _asset(session, AssetKind.IMAGE, "web:1")
     c = _asset(session, AssetKind.CONTAINER, "web-1")
@@ -137,9 +109,6 @@ def test_exposure_is_never_derived_for_containers_or_images(session):
     derive(session)
     assert c.exposure == "unknown"
     assert image.exposure == "unknown"
-
-
-# ── a person's decision is final ─────────────────────────────────────────────
 
 
 def test_a_derivation_never_overwrites_what_a_person_decided(session):
@@ -169,7 +138,6 @@ def test_running_the_pass_twice_changes_nothing_the_second_time(session):
 
 
 def test_a_retired_asset_takes_no_part(session):
-    """A tombstoned container must not go on conferring a tier on an image."""
     from datetime import UTC, datetime
 
     host = _host(session)
@@ -190,8 +158,6 @@ def test_a_retired_asset_takes_no_part(session):
 
 
 def test_edges_are_read_but_never_written(session):
-    """Classification reads the graph. Anything that changed it would be a second
-    place edges come from."""
     host = _host(session)
     c = _asset(session, AssetKind.CONTAINER, "athena-api-1")
     link(session, src=c, dst=host, relation="runs_on")
@@ -201,13 +167,7 @@ def test_edges_are_read_but_never_written(session):
     assert session.query(AssetEdge).count() == before
 
 
-# ── the evidence handed to whoever decides exposure ──────────────────────────
-
-
 def test_the_evidence_names_what_runs_an_image_and_what_it_publishes(session):
-    """The question left open is exposure, and answering it means knowing what runs
-    the image, where, and what it publishes. Three joins the browser should not have
-    to make to answer one question."""
     from athena.api.routers.assets import _exposure_evidence
 
     host = _host(session)
@@ -224,13 +184,11 @@ def test_the_evidence_names_what_runs_an_image_and_what_it_publishes(session):
 
 
 def test_an_agent_that_never_reported_ports_is_not_read_as_publishing_none(session):
-    """"We did not ask" and "nothing is exposed" are different facts, and only one of
-    them is a reason to relax."""
     from athena.api.routers.assets import _exposure_evidence
 
     host = _host(session)
     image = _asset(session, AssetKind.IMAGE, "old:1")
-    c = _asset(session, AssetKind.CONTAINER, "old-1")     # no published_ports key
+    c = _asset(session, AssetKind.CONTAINER, "old-1")
     link(session, src=c, dst=host, relation="runs_on")
     link(session, src=c, dst=image, relation="built_from")
     session.flush()
@@ -255,7 +213,6 @@ def test_a_container_publishing_nothing_says_so_plainly(session):
 
 
 def test_a_host_speaks_for_itself(session):
-    """Its own listening sockets were observed directly — no inference involved."""
     from athena.api.routers.assets import _exposure_evidence
 
     host = _host(session)
@@ -270,9 +227,6 @@ def test_a_host_speaks_for_itself(session):
 
 
 def test_the_same_container_observed_twice_yields_one_current_line(session):
-    """A container recreated under the same name, or seen once by an agent too old to
-    report ports, would otherwise contribute two contradictory lines about the same
-    thing — and a reader has no way to tell which is current."""
     from datetime import UTC, datetime, timedelta
 
     from athena.api.routers.assets import _exposure_evidence

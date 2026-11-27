@@ -1,10 +1,3 @@
-"""Success metrics.
-
-What is tested is the honesty, not the arithmetic. A metrics page that prints a
-confident zero where it means "nothing has happened yet" is worse than no page:
-it is the empty-findings-list-means-clean failure wearing a chart.
-"""
-
 from __future__ import annotations
 
 import uuid
@@ -33,11 +26,7 @@ def _by_id(session):
     return {m["id"]: m for m in all_metrics(session)}
 
 
-# ── refusing to guess ────────────────────────────────────────────────────────
-
-
 def test_unbuilt_features_report_as_unimplemented_never_as_zero(session):
-    """A zero and an absence look identical in a chart and mean opposite things."""
     for metric in (mean_time_to_remediation(session), patch_success_rate(session)):
         assert metric.status is Status.NOT_IMPLEMENTED
         assert metric.value is None, "an unbuilt feature must not report a number"
@@ -52,7 +41,6 @@ def test_investigation_quality_admits_it_needs_ground_truth(session):
 
 
 def test_a_rate_over_a_tiny_denominator_is_refused(session):
-    """A percentage computed over four findings is noise wearing a number."""
     m = false_positive_rate(session)
     if m.denominator < MIN_FOR_RATE:
         assert m.value is None
@@ -67,7 +55,6 @@ def test_every_metric_states_its_denominator(session):
 
 
 def test_every_metric_says_which_direction_is_good(session):
-    """So the UI never has to guess whether a number rising is good news."""
     for metric in all_metrics(session):
         assert isinstance(metric["lower_is_better"], bool)
 
@@ -78,12 +65,7 @@ def test_nothing_reports_a_value_without_a_status(session):
         assert metric["status"] in valid, metric
 
 
-# ── detection latency measures the watch, not the backfill ───────────────────
-
-
 def test_latency_ignores_advisories_older_than_the_watch(session):
-    """An advisory published two years before this system existed did not take two
-    years to detect. Counting it would measure the backfill."""
     source = session.get(IntelSource, "osv") or IntelSource(name="osv")
     source.first_success_at = datetime.now(UTC) - timedelta(days=1)
     source.last_success_at = datetime.now(UTC)
@@ -117,8 +99,6 @@ def test_latency_ignores_advisories_older_than_the_watch(session):
     session.flush()
 
     m = detection_latency(session)
-    # The ancient advisory contributes nothing, so either the sample stays too small
-    # or the median is not measured in years.
     assert m.value is None or m.value < 24 * 30
 
 
@@ -132,11 +112,7 @@ def test_latency_says_so_when_nothing_has_ever_been_fetched(session):
     assert m.note
 
 
-# ── service levels ───────────────────────────────────────────────────────────
-
-
 def test_no_open_findings_is_reported_as_absence_not_compliance(session):
-    """An empty band is not a band meeting its target."""
     report = sla_report(session)
     for band in report["bands"]:
         if band["open"] == 0:
@@ -144,8 +120,6 @@ def test_no_open_findings_is_reported_as_absence_not_compliance(session):
 
 
 def test_sla_targets_are_declared_as_defaults(session):
-    """They are not in the PRD. Pretending otherwise would launder a guess into a
-    requirement."""
     report = sla_report(session)
     assert report["targets_are_defaults"] is True
     assert all(b["target_days"] > 0 for b in report["bands"])
@@ -181,8 +155,6 @@ def test_a_late_finding_is_counted_late(session):
 
 
 def test_dismissed_and_unfixable_findings_are_not_late(session):
-    """They are not waiting on anybody, and counting them as overdue would make the
-    number describe the backlog rather than the work."""
     asset = Asset(
         kind="host", identity_key=f"m:{uuid.uuid4()}", display_name="nofix-host",
         tier="production", exposure="internal", last_inventoried_at=datetime.now(UTC),
@@ -210,8 +182,6 @@ def test_dismissed_and_unfixable_findings_are_not_late(session):
 
 
 def test_a_withdrawn_advisory_is_not_late(session):
-    """Its publisher retracted it, so no list shows the finding and nobody could act
-    on its lateness — a retracted malware record would otherwise stay overdue."""
     asset = Asset(
         kind="host", identity_key=f"m:{uuid.uuid4()}", display_name="withdrawn-host",
         tier="production", exposure="internal", last_inventoried_at=datetime.now(UTC),

@@ -8,12 +8,6 @@ import (
 	"strconv"
 )
 
-// canonicalJSON renders a value the way Python's
-// json.dumps(sort_keys=True, separators=(",", ":")) does.
-//
-// The two sides must agree byte for byte or every signature check fails, so this is
-// written explicitly rather than relying on encoding/json's defaults — Go escapes
-// HTML characters and Python does not.
 func canonicalJSON(value any) ([]byte, error) {
 	var buf bytes.Buffer
 	if err := writeCanonical(&buf, value); err != nil {
@@ -31,8 +25,6 @@ func writeCanonical(buf *bytes.Buffer, value any) error {
 	case string:
 		return writeString(buf, v)
 	case float64:
-		// Python renders integral floats without a decimal point when they came from
-		// integer literals; JSON numbers decoded here are float64 either way.
 		if v == float64(int64(v)) {
 			buf.WriteString(strconv.FormatInt(int64(v), 10))
 		} else {
@@ -77,9 +69,6 @@ func writeCanonical(buf *bytes.Buffer, value any) error {
 	return nil
 }
 
-// writeString matches Python's default json escaping: quotes, backslash, and
-// control characters only. Go's encoder additionally escapes <, >, and &, which
-// would produce a different byte string and break every signature.
 func writeString(buf *bytes.Buffer, s string) error {
 	buf.WriteByte('"')
 	for _, r := range s {

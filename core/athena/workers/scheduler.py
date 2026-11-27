@@ -1,9 +1,3 @@
-"""Periodic work.
-
-Leader-elected through a Postgres advisory lock, so running two scheduler containers
-is safe — the second waits rather than double-scheduling.
-"""
-
 from __future__ import annotations
 
 import signal
@@ -19,13 +13,8 @@ from athena.db.base import session_scope
 log = structlog.get_logger(__name__)
 _stop = threading.Event()
 
-LOCK_ID = 0x4154_4845  # "ATHE"
+LOCK_ID = 0x4154_4845
 
-# (name, interval seconds, job kind, payload)
-#
-# Cadence follows PRD §42. Intelligence is hourly because a newly published advisory
-# should reach correlation in minutes, not on the next full patrol; EPSS is refreshed
-# daily upstream so polling it more often is wasted traffic.
 HOUR = 3600
 DAY = 24 * HOUR
 
@@ -36,33 +25,16 @@ SCHEDULE: list[tuple[str, int, str, dict]] = [
     ],
     ("intel-kev", HOUR, "intel.poll.kev", {}),
     ("intel-epss", DAY, "intel.poll.epss", {}),
-    # CISA's per-CVE SSVC assessments, only for CVEs that matched something here.
-    # Hourly in small batches, so a new estate catches up within a day without one
-    # run making hundreds of requests at once.
     ("intel-vulnrichment", HOUR, "intel.enrich.vulnrichment", {}),
-    # Re-correlate findings whose advisory has been revised since they were
-    # evaluated, including ones previously closed: a corrected range can make a
-    # dismissed finding real again.
     ("correlate-stale", HOUR, "correlate.stale", {}),
-    # Suppressions rest on a premise. When the premise stops holding — an isolated
-    # asset becomes exposed, a flaw joins the known-exploited catalogue — the
-    # dismissal stops applying and the finding returns with a stated reason.
     ("suppression-review", HOUR, "suppression.review", {}),
-    # Frequent, because the throttle is what limits volume rather than the schedule:
-    # an urgent notification should not wait an hour to find out it may send.
     ("notify-dispatch", 5 * 60, "notify.dispatch", {}),
 ]
 
-# Periodic work done directly by the scheduler rather than through the queue,
-# because it is cheap and must not compete with scans for worker slots.
 NODE_SWEEP_INTERVAL = 60
 NONCE_SWEEP_INTERVAL = 300
 CORRELATION_SWEEP_INTERVAL = 300
-# Images change only when something is rebuilt or pulled, and each scan pulls the
-# image, so this is deliberately unhurried.
 IMAGE_SWEEP_INTERVAL = 600
-# Each sweep queues a batch; the queue's fairness cap keeps investigation from
-# occupying every worker slot while it drains.
 TRIAGE_SWEEP_INTERVAL = 120
 
 
@@ -71,7 +43,6 @@ def _acquire_leadership(session) -> bool:
 
 
 def _sweep_nodes(session, last_run: dict[str, float], now: float) -> None:
-    """Issue collection work to nodes that are due for it."""
     if now - last_run.get("node-sweep", 0) < NODE_SWEEP_INTERVAL:
         return
     last_run["node-sweep"] = now
@@ -85,11 +56,6 @@ def _sweep_nodes(session, last_run: dict[str, float], now: float) -> None:
 
 
 def _sweep_correlation(session, last_run: dict[str, float], now: float) -> None:
-    """Correlate assets whose inventory changed since they were last correlated.
-
-    Without this, a freshly scanned host would carry no findings until the next
-    advisory happened to arrive for one of its packages.
-    """
     if now - last_run.get("correlate-assets", 0) < CORRELATION_SWEEP_INTERVAL:
         return
     last_run["correlate-assets"] = now
@@ -98,9 +64,6 @@ def _sweep_correlation(session, last_run: dict[str, float], now: float) -> None:
 
     from athena.queue import enqueue
 
-    # Only assets that actually carry components are worth correlating. A host with
-    # thousands of packages was being crowded out of the batch by hundreds of service
-    # assets that have none, so the one asset with anything to match never ran.
     rows = session.execute(
         text(
             "SELECT a.id::text, extract(epoch FROM a.last_inventoried_at)::bigint AS stamp "
@@ -112,8 +75,6 @@ def _sweep_correlation(session, last_run: dict[str, float], now: float) -> None:
         )
     ).all()
     for asset_id, stamp in rows:
-        # Keyed on the inventory timestamp, so an unchanged asset is not re-correlated
-        # on every sweep but a rescanned one always is.
         enqueue(
             session,
             kind="correlate.asset",
@@ -124,19 +85,6 @@ def _sweep_correlation(session, last_run: dict[str, float], now: float) -> None:
 
 
 def _sweep_triage(session, last_run: dict[str, float], now: float) -> None:
-    """Feed the model loop, most consequential first, subject to the floor.
-
-    Two populations, one sweep. A finding nobody has triaged needs the cheap call that
-    decides whether it earns the expensive one. A finding triage already accepted, and
-    whose investigation never ran, needs the expensive one directly.
-
-    The second case is not hypothetical: 528 findings had been triaged as worth
-    investigating and were waiting for a job that no longer existed. Their
-    `investigate.finding` jobs had exhausted their retries while the budget was spent,
-    and the sweep only ever selected untriaged rows — so nothing would ever have
-    looked at them again. Ordering by exploitation and severity means that when the
-    budget does run out, what got done was the part that mattered.
-    """
     if now - last_run.get("triage-sweep", 0) < TRIAGE_SWEEP_INTERVAL:
         return
     last_run["triage-sweep"] = now
@@ -150,17 +98,12 @@ def _sweep_triage(session, last_run: dict[str, float], now: float) -> None:
 
     budget = current(session)
     if budget.exhausted:
-        # Logged rather than silent: an operator must be able to tell "we stopped
-        # looking" from "there was nothing to find".
         log.warning("scheduler.ai_budget_exhausted", **budget.as_dict())
         return
 
     floor = get_settings().investigation_floor
     batch = min(get_settings().triage_batch, budget.remaining)
 
-    # Selected wider than the batch and filtered in Python, because the floor is one
-    # rule and it is written once. Expressing it a second time in SQL is how the
-    # scheduler and the finding page come to disagree about what was skipped.
     rows = session.execute(
         text(
             """
@@ -205,8 +148,6 @@ def _sweep_triage(session, last_run: dict[str, float], now: float) -> None:
         if not decide(facts, floor=floor).investigate:
             deferred += 1
             continue
-        # Untriaged findings need the cheap decision first; ones triage already
-        # accepted go straight to the loop it never got to run.
         kind = "triage.finding" if row.triage_disposition is None else "investigate.finding"
         enqueue(
             session, kind=kind, key=row[0],
@@ -222,12 +163,6 @@ def _sweep_triage(session, last_run: dict[str, float], now: float) -> None:
 
 
 def _sweep_images(session, last_run: dict[str, float], now: float) -> None:
-    """Queue image scans for images not yet inventoried, or stale.
-
-    Images are registered by the node's Docker inventory but carry no components
-    until something scans them — until then they are correctly reported as unknown,
-    which is honest but not useful.
-    """
     if now - last_run.get("image-sweep", 0) < IMAGE_SWEEP_INTERVAL:
         return
     last_run["image-sweep"] = now
@@ -258,7 +193,6 @@ def _sweep_images(session, last_run: dict[str, float], now: float) -> None:
 
 
 def _sweep_nonces(session, last_run: dict[str, float], now: float) -> None:
-    """Drop replay nonces that can no longer be replayed."""
     if now - last_run.get("nonce-sweep", 0) < NONCE_SWEEP_INTERVAL:
         return
     last_run["nonce-sweep"] = now

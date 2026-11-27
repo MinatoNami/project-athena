@@ -1,5 +1,3 @@
-"""The normalised advisory model every adapter produces."""
-
 from __future__ import annotations
 
 import hashlib
@@ -22,9 +20,6 @@ class NormalisedRange:
     authority: Authority = Authority.UPSTREAM_ADVISORY
     distro: str | None = None
     distro_release: str | None = None
-    # How the fix is delivered. "esm" and "fips" are only installable with an Ubuntu
-    # Pro entitlement, so recommending one without saying so is advice the operator
-    # may be unable to follow.
     channel: str = "standard"
 
 
@@ -44,27 +39,12 @@ class NormalisedAdvisory:
     references: list[dict[str, Any]] = field(default_factory=list)
     ranges: list[NormalisedRange] = field(default_factory=list)
     source: str = "osv"
-    # The originating record id (UBUNTU-CVE-…, GHSA-…). Several records converge on
-    # one CVE, and each owns its own ranges — this is what keeps them apart.
     source_record: str = ""
-    # Set by the adapter from the record's own id and true aliases. Outside
-    # `content_hash` for the same reason as `scoring_vector`: it is derived from ids
-    # already hashed.
     malicious: bool = False
-    # This source record was withdrawn while the id it merged under was not (a
-    # duplicate GHSA under a CVE other sources describe). Ingest clears its ranges
-    # and nothing else; see `upsert_advisory`.
     source_withdrawn_at: datetime | None = None
-    # The vector the base score is computed from, when the record publishes several
-    # (v3.1 and v4.0 side by side is common). Deliberately outside `content_hash`:
-    # the score is a function of a vector already hashed, and adding a field to the
-    # hash would mark every advisory in the corpus revised on the next poll — which
-    # re-correlates the estate and breaks every suppression's premise at once.
     scoring_vector: str | None = None
 
 
-# Only fields that could change a verdict. A reworded summary must not re-correlate
-# the whole estate, but a changed range or severity must.
 def content_hash(advisory: NormalisedAdvisory) -> str:
     material = {
         "id": advisory.id,
@@ -74,8 +54,6 @@ def content_hash(advisory: NormalisedAdvisory) -> str:
         "cvss_score": advisory.cvss_score,
         "severity": advisory.severity,
         "withdrawn": advisory.withdrawn_at.isoformat() if advisory.withdrawn_at else None,
-        # Sorted so the hash is order-independent. Bounds are frequently absent, so
-        # the key coerces None rather than comparing None against str.
         "ranges": sorted(
             (
                 [r.ecosystem, r.package, r.introduced, r.fixed, r.last_affected,
@@ -85,8 +63,6 @@ def content_hash(advisory: NormalisedAdvisory) -> str:
             key=lambda row: tuple("" if v is None else str(v) for v in row),
         ),
     }
-    # Added only when set, so every other record's hash — and so the corpus's
-    # revision state — is unchanged by the field existing.
     if advisory.source_withdrawn_at is not None:
         material["source_withdrawn"] = advisory.source_withdrawn_at.isoformat()
     encoded = json.dumps(material, sort_keys=True, separators=(",", ":"), default=str)

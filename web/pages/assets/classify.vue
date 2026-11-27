@@ -1,14 +1,4 @@
 <script setup lang="ts">
-/**
- * Classify assets.
- *
- * The highest-leverage action in the product and there was no way to do it. Tier and
- * exposure are scoring inputs; while they are unknown, importance is a placeholder in
- * every score on every other page.
- *
- * Grouped server-side so this is a handful of decisions rather than several hundred,
- * and the consequence of each is shown before it is committed rather than after.
- */
 useHead({ title: 'Classify assets' })
 
 const { data: me } = await useMe()
@@ -23,14 +13,6 @@ const { data, pending, error, refresh } = await useAsyncData('unclassified', () 
 
 const picks = reactive<Record<string, { tier?: string; exposure?: string }>>({})
 
-/**
- * A field Athena already worked out is not a question. Tier flows along the graph —
- * a container on the production host is production — so most groups arrive with it
- * settled, and asking again is how a queue of decisions stops being worked through.
- * Exposure is not derived for images and containers on purpose: one bound to loopback
- * may still be reached through a reverse proxy on the same host, and this estate runs
- * one. That is the question left, and the evidence for it is shown beside it.
- */
 function settled(g: any, field: 'tier' | 'exposure'): string | null {
   const why = g.classification?.[field]
   const value = field === 'tier' ? g.tier : g.exposure
@@ -48,11 +30,6 @@ function why(g: any, field: 'tier' | 'exposure'): string {
 }
 const { theme } = useChartTheme()
 
-/**
- * What each pending decision is worth, in findings currently scored against a
- * placeholder. Groups already answered drop out — the chart is a worklist, so a
- * decision already taken is not still waiting on anybody.
- */
 const atStake = computed(() =>
   (data.value?.groups ?? [])
     .filter((g: any) => !answered(g))
@@ -77,9 +54,6 @@ function set(key: string, field: 'tier' | 'exposure', value: string) {
 }
 
 const groups = computed(() => data.value?.groups ?? [])
-// A group counts as complete when everything still open has been answered — not
-// when every field has been clicked. Re-answering what is already settled is work
-// without a decision in it.
 const complete = computed(() =>
   groups.value.filter((g: any) => answered(g) && Object.keys(picks[g.key] ?? {}).length),
 )
@@ -90,11 +64,6 @@ const progress = computed(() =>
   groups.value.length ? Math.round((complete.value.length / groups.value.length) * 100) : 0,
 )
 
-/**
- * What this choice does, said before it is applied. "production + internet" raises
- * consequence; "development" or "isolated" lowers it. Anything else is a real answer
- * replacing a placeholder, which is worth saying even when the number barely moves.
- */
 function impact(g: any) {
   const p = picks[g.key]
   const tier = p?.tier ?? (settled(g, 'tier') ? g.tier : undefined)
@@ -119,8 +88,6 @@ async function apply() {
     const body = {
       groups: complete.value.map((g: any) => ({
         asset_ids: g.asset_ids,
-        // Only what was actually decided here. Sending back a derived value would
-        // stamp it as an operator decision and freeze it against future evidence.
         tier: picks[g.key]?.tier,
         exposure: picks[g.key]?.exposure,
       })),
@@ -178,8 +145,6 @@ async function apply() {
       </span>
     </div>
 
-    <!-- Which group to do first. The leverage is the findings behind it, and a
-         column of counts does not rank itself the way a bar does. -->
     <ChartFrame
       v-if="atStake.length"
       title="Findings waiting on each decision"
@@ -226,9 +191,6 @@ async function apply() {
               <span v-if="g.mixed" class="mixed" title="Members do not currently agree">mixed</span>
             </span>
 
-            <!-- What was observed about reachability, since that is the question left
-                 open. Shown rather than acted on: whether loopback means unreachable
-                 depends on what else runs on the host, which Athena cannot see. -->
             <ul v-if="g.evidence?.length && needs(g, 'exposure')" class="ev">
               <li v-for="(line, n) in g.evidence.slice(0, 4)" :key="n">
                 <UntrustedText :text="line" />

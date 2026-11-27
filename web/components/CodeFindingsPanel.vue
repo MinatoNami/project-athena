@@ -1,18 +1,6 @@
 <script setup lang="ts">
-/**
- * Secrets and misconfigurations in repositories — on one asset, or across all.
- *
- * Coverage leads, before the list: "no secrets found" means something only next to
- * how many repositories were actually searched, and a list with no denominator
- * reads as a clean bill of health for everything it does not mention (rule 3).
- *
- * Secret values are never here. They are redacted inside the scanner's sandbox and
- * the adapter refuses to keep even the redacted line; what is shown is the rule,
- * the file and the line, which is enough to find it and nothing an onlooker can use.
- */
 const props = defineProps<{ assetId?: string; compact?: boolean }>()
 
-// Filters live in the URL (§4): a filtered view is a link someone can send.
 const route = useRoute()
 const KINDS = ['all', 'secret', 'misconfiguration'] as const
 const kind = ref<(typeof KINDS)[number]>(
@@ -55,7 +43,6 @@ function ago(at: string) {
     <div class="head">
       <div class="cov">
         <template v-for="k in (['secret', 'misconfiguration'] as const)" :key="k">
-          <!-- Unscanned is hatched "not checked yet", never a bold 0 (rule 1). -->
           <div class="covtile">
             <StatTile
               :label="k === 'secret' ? 'Secrets' : 'Misconfigurations'"
@@ -66,9 +53,6 @@ function ago(at: string) {
                 ? (cov[k].failing ? `last scan failed` : undefined)
                 : `${cov[k].scanned} of ${plural(cov.repositories, 'repository', 'repositories')} checked${cov[k].failing ? ` · ${cov[k].failing} failing` : ''}`"
             />
-            <!-- The stalest repository's last good scan bounds how fresh this list
-                 is. The newest one said "checked 5m ago" beside a repository last
-                 searched three months back. -->
             <span v-if="cov?.[k]?.oldest_success" class="checked">
               {{ cov[k].scanned > 1 ? 'oldest check' : 'checked' }}
               <FreshnessIndicator :at="cov[k].oldest_success" />
@@ -105,8 +89,6 @@ function ago(at: string) {
       repository patrol.
     </StateBlock>
 
-    <!-- No repositories is no denominator: "every repository counted above" would
-         be every one of none. -->
     <StateBlock
       v-else-if="data && !data.findings.length && cov && !cov.repositories"
       kind="never" title="No repositories"
@@ -133,8 +115,6 @@ function ago(at: string) {
             <code class="loc"><UntrustedText :text="`${f.path}${f.line ? `:${f.line}` : ''}`" /></code>
           </span>
           <span v-if="!assetId" class="on">{{ f.asset.display_name }}</span>
-          <!-- Stated in UTC: rendered on the server, a local time would be the
-               server's zone with no zone shown. -->
           <span class="when" :title="utcStamp(f.resolved_at || f.first_seen)">
             {{ f.resolved_at ? `resolved ${ago(f.resolved_at)}` : `since ${ago(f.first_seen)}` }}
           </span>

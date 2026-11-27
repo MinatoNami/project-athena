@@ -1,5 +1,3 @@
-"""Intelligence ingestion and correlation jobs."""
-
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -25,14 +23,11 @@ from athena.queue.registry import handler
 
 log = structlog.get_logger(__name__)
 
-# Advisories are ingested in batches so one ecosystem does not hold a transaction
-# open for minutes.
 BATCH = 500
 
 
 @handler("intel.poll.osv")
 def poll_osv(payload: dict[str, Any]) -> dict[str, Any]:
-    """Ingest one OSV ecosystem archive, then correlate what changed."""
     ecosystem = payload.get("ecosystem") or "PyPI"
     limit = payload.get("limit")
 
@@ -53,9 +48,6 @@ def poll_osv(payload: dict[str, Any]) -> dict[str, Any]:
         pending.clear()
 
     try:
-        # Committed in batches as the archive streams, so a backfill of tens of
-        # thousands of advisories makes visible progress and never holds one
-        # transaction open for the whole download.
         for record_ in feeds.fetch_osv_ecosystem(ecosystem, limit=limit):
             records += 1
             parsed, skipped_here = parse_many([record_])
@@ -81,8 +73,6 @@ def poll_osv(payload: dict[str, Any]) -> dict[str, Any]:
             succeeded=True,
             advisories=counts["new"],
         )
-        # Only advisories that actually changed are re-correlated. Correlating
-        # everything on every poll would be enormous and pointless.
         for advisory_id in changed[:5000]:
             enqueue(
                 session,
@@ -134,29 +124,17 @@ def poll_epss(payload: dict[str, Any]) -> dict[str, Any]:
     with session_scope() as session:
         record_source_result(
             session, name="epss", succeeded=True, advisories=len(scores),
-            # The cursor carries the model, so the intel page can say which EPSS the
-            # scores on every finding came from. Written even when the file did not
-            # name one: an empty cursor is not stored, and the page then credited
-            # these scores to whichever model the previous fetch named.
             cursor=f"{model or 'unknown'}@{meta.get('score_date', '')}",
         )
     log.info("intel.epss", scored=len(scores), matched=updated, model=model)
     return {"status": "ok", "scored": len(scores), "matched": updated, "model": model}
 
 
-# How long CISA's answer is trusted before asking again. Vulnrichment updates about
-# twice a day, but an assessment, once written, rarely moves.
 VULNRICHMENT_RECHECK_DAYS = 7
 VULNRICHMENT_BATCH = 200
 
 
 def vulnrichment_due(session: Any, *, limit: int) -> list[str]:
-    """CVEs to ask CISA about: eligible, and with no answer or a stale one.
-
-    Eligibility is shared with the coverage figure on /intel/sources
-    (`athena.intel.enrichment`); the recheck window is this job's alone. Unchecked
-    first, then known-exploited.
-    """
     from datetime import timedelta
 
     from sqlalchemy import or_, select
@@ -186,16 +164,6 @@ def vulnrichment_due(session: Any, *, limit: int) -> list[str]:
 
 @handler("intel.enrich.vulnrichment")
 def enrich_vulnrichment(payload: dict[str, Any]) -> dict[str, Any]:
-    """Fetch CISA's SSVC assessment for CVEs that have findings here.
-
-    Only those: the corpus holds hundreds of thousands of CVEs and CISA's file for
-    each is a separate request, while the ones that matter are the few hundred that
-    matched something in this estate. Unchecked ones go first.
-
-    A CISA "poc" or "active" sets `exploit_public` — the one risk input nothing else
-    in Athena could establish — and a rescore follows, because that input moves the
-    exploitation factor.
-    """
     batch = int(payload.get("limit") or VULNRICHMENT_BATCH)
     with session_scope() as session:
         ids = vulnrichment_due(session, limit=batch)
@@ -227,9 +195,6 @@ def enrich_vulnrichment(payload: dict[str, Any]) -> dict[str, Any]:
                 absent += 1
 
     with session_scope() as session:
-        # A run that could not reach CISA at all is a failure; one where some
-        # lookups failed is recorded as a success with the error kept, because the
-        # rest of the batch is real data and its age must not read as stale.
         succeeded = not ids or failed < len(ids)
         record_source_result(
             session, name="vulnrichment", succeeded=succeeded, advisories=found,
@@ -251,7 +216,6 @@ def enrich_vulnrichment(payload: dict[str, Any]) -> dict[str, Any]:
 
 @handler("correlate.advisory")
 def correlate_one_advisory(payload: dict[str, Any]) -> dict[str, Any]:
-    """Match a new or revised advisory against everything already inventoried."""
     vulnerability_id = payload["vulnerability_id"]
     with session_scope() as session:
         result = correlate_advisory(session, vulnerability_id)
@@ -268,21 +232,15 @@ def correlate_one_advisory(payload: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-# What a correlation run reports that a connected page shows. Not only new
-# findings: a run that only closed findings a retracted range supported, reopened
-# one, or withdrew or restored a match's fix left a connected page showing what was
-# no longer so. Each of those is audited on its own finding.
 FINDING_CHANGES = ("created", "reopened", "unmatched", "undecided", "decided")
 
 
 def changed_findings(result: dict[str, Any]) -> bool:
-    """Whether a correlation run changed anything a findings page shows."""
     return any(result.get(change) for change in FINDING_CHANGES)
 
 
 @handler("correlate.asset")
 def correlate_one_asset(payload: dict[str, Any]) -> dict[str, Any]:
-    """Match one asset's components against every known advisory."""
     asset_id = payload["asset_id"]
     with session_scope() as session:
         asset = session.get(Asset, asset_id)
@@ -304,7 +262,6 @@ def correlate_one_asset(payload: dict[str, Any]) -> dict[str, Any]:
 
 @handler("correlate.stale")
 def correlate_stale(payload: dict[str, Any]) -> dict[str, Any]:
-    """Re-correlate findings whose advisory has been revised since evaluation."""
     with session_scope() as session:
         advisory_ids = stale_findings(session)
         for advisory_id in advisory_ids:

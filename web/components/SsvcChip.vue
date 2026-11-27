@@ -1,12 +1,4 @@
 <script setup lang="ts">
-/**
- * An SSVC outcome — Track, Track*, Attend, Act.
- *
- * Not severity-coloured on purpose: the red ramp belongs to risk bands (§8), and an
- * SSVC outcome is a recommended *response*, which is a different axis. Built on the
- * shared `.tag`, with tone carried by the word and the border weight, never by
- * colour alone. The meaning is in screen-reader text, not only in a tooltip.
- */
 const props = defineProps<{ outcome: string | null | undefined; compact?: boolean }>()
 
 const LABEL: Record<string, string> = {
@@ -24,8 +16,6 @@ const tone = computed(() =>
 </script>
 
 <template>
-  <!-- The text is the accessible name. An aria-label on a span with no role is
-       ignored by screen readers, and with both children hidden they read nothing. -->
   <span
     v-if="outcome" class="tag" :class="tone"
     :title="`SSVC ${LABEL[outcome] ?? outcome}: ${MEANING[outcome] ?? ''}`"

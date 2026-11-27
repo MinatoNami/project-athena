@@ -1,14 +1,9 @@
-"""OSV record translation."""
-
 from __future__ import annotations
 
 from athena.intel.osv import parse
 
 
 def test_distribution_records_converge_on_the_cve():
-    """Ubuntu puts the CVE in `upstream`, not `aliases`. Without reading it, the
-    Ubuntu record and the upstream advisory for the same flaw stay two separate
-    rows — and the authority rule never gets to compare their ranges."""
     advisory = parse(
         {
             "id": "UBUNTU-CVE-2014-3613",
@@ -31,8 +26,6 @@ def test_distribution_records_converge_on_the_cve():
 
 
 def test_distribution_severity_words_are_read():
-    """Distro trackers ship a word, not a CVSS vector. Reading only the vector left
-    every Ubuntu finding unlabelled."""
     advisory = parse(
         {
             "id": "UBUNTU-CVE-1",
@@ -77,7 +70,6 @@ def test_cvss_vector_is_preferred_over_a_word():
 
 
 def test_the_distribution_release_is_kept():
-    """A fix in 22.04 says nothing about 24.04, so the release must survive parsing."""
     advisory = parse(
         {
             "id": "UBUNTU-CVE-2",
@@ -93,7 +85,6 @@ def test_the_distribution_release_is_kept():
 
 
 def test_git_ranges_are_skipped():
-    """A commit range cannot be compared against an installed package version."""
     advisory = parse(
         {
             "id": "GHSA-y",
@@ -106,9 +97,6 @@ def test_git_ranges_are_skipped():
 
 
 def test_esm_ecosystems_still_yield_a_release():
-    """Ubuntu ESM advisories arrive as "Ubuntu:Pro:18.04:LTS". Taking the second
-    segment yielded a release of "Pro", which matched no host — so every ESM range
-    was silently inert."""
     advisory = parse(
         {
             "id": "UBUNTU-CVE-3",
@@ -134,11 +122,7 @@ def test_an_ecosystem_with_no_release_keeps_none():
     assert advisory.ranges[0].distro_release is None
 
 
-# ── fix delivery channel ─────────────────────────────────────────────────────
-
 def test_ubuntu_pro_ecosystems_are_marked_esm():
-    """A fix only shipped through Ubuntu Pro is not an upgrade every operator can
-    perform. Presenting it as an ordinary one is advice they cannot follow."""
     advisory = parse(
         {
             "id": "UBUNTU-CVE-10",
@@ -152,7 +136,6 @@ def test_ubuntu_pro_ecosystems_are_marked_esm():
 
 
 def test_an_esm_version_is_detected_without_a_pro_ecosystem():
-    """Some records carry the channel only in the version string."""
     advisory = parse(
         {
             "id": "UBUNTU-CVE-11",
@@ -180,9 +163,6 @@ def test_an_ordinary_fix_is_the_standard_channel():
 
 
 def test_two_records_for_one_cve_do_not_collide():
-    """A Debian record and an Ubuntu record for the same flaw both canonicalise to
-    the CVE, so one ingest batch routinely holds several records for one id.
-    Read-then-insert raced itself and killed the whole batch on a duplicate key."""
     shared = {
         "upstream": ["CVE-2013-6393"],
         "affected": [{"package": {"name": "libyaml", "ecosystem": "Ubuntu:24.04:LTS"},
@@ -195,8 +175,6 @@ def test_two_records_for_one_cve_do_not_collide():
 
 
 def test_each_source_record_is_identified_separately():
-    """Records converging on one CVE must stay distinguishable, or ingesting one
-    deletes the other's ranges."""
     ubuntu = parse({
         "id": "UBUNTU-CVE-2014-3613",
         "upstream": ["CVE-2014-3613"],
@@ -214,8 +192,6 @@ def test_each_source_record_is_identified_separately():
     assert ubuntu.id == debian.id == "CVE-2014-3613"
     assert ubuntu.source_record == "UBUNTU-CVE-2014-3613"
     assert debian.source_record == "DEBIAN-CVE-2014-3613"
-    # Different source records must hash differently, or one is treated as the
-    # other's revision and they flip the advisory back and forth on every poll.
     from athena.intel.model import content_hash
 
     assert content_hash(ubuntu) != content_hash(debian)

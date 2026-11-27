@@ -1,12 +1,7 @@
-# ─── secrets ─────────────────────────────────────────────────────────────────
-# Generated on the deployment host and never committed. Losing deploy/secrets/
-# master_key makes every stored secret unrecoverable, so it is backed up out of
-# band rather than tracked here.
 deploy/secrets/
 deploy/.env
 deploy/.env.*
 !deploy/.env.example
-# Names the machine you deploy to. Local to whoever is deploying.
 deploy/.deploy-host
 *.key
 *.pem
@@ -14,7 +9,6 @@ deploy/.deploy-host
 *.pfx
 secrets/
 
-# ─── python ──────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
@@ -32,7 +26,6 @@ coverage.xml
 build/
 dist/
 
-# ─── node / nuxt ─────────────────────────────────────────────────────────────
 node_modules/
 .nuxt/
 .output/
@@ -43,9 +36,6 @@ node_modules/
 npm-debug.log*
 yarn-error.log*
 
-# ─── go ──────────────────────────────────────────────────────────────────────
-# The agent binary is built per target architecture and shipped, never committed.
-# deploy/node/athena-node is what the installer expects to find beside it.
 node/athena-node
 node/cmd/athena-node/athena-node
 deploy/node/athena-node
@@ -53,7 +43,6 @@ deploy/node/athena-node-*
 *.test
 vendor/
 
-# ─── runtime and local state ─────────────────────────────────────────────────
 *.log
 *.pid
 *.sock
@@ -63,16 +52,13 @@ vendor/
 .env.local
 .env.*.local
 
-# Intelligence bundles for air-gapped import: large, regenerated, never tracked.
 athena-intel-*.tar.zst
 *.zip
 
-# Scratch space for local experiments.
 scratch/
 tmp/
 .tmp/
 
-# ─── editors and operating systems ───────────────────────────────────────────
 .vscode/
 !.vscode/extensions.json
 .idea/
@@ -86,8 +72,5 @@ tmp/
 Thumbs.db
 desktop.ini
 
-# ─── agent tooling ───────────────────────────────────────────────────────────
-# Per-developer Claude Code state. .claude/settings.json is shared when a project
-# chooses to track it; local overrides never are.
 .claude/settings.local.json
 .claude/state/

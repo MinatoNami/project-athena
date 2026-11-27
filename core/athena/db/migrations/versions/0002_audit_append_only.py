@@ -1,10 +1,3 @@
-"""Enforce append-only audit at the database level.
-
-The application must not be able to rewrite history even with a bug, so this is a
-trigger rather than a convention.
-
-Revision ID: 0002
-"""
 from __future__ import annotations
 
 from alembic import op

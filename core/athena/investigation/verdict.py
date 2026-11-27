@@ -1,10 +1,3 @@
-"""The structured verdict a model must return, and the rules it must satisfy.
-
-The model produces schema-validated claims; code decides what they mean. Enforcement
-is here rather than in the prompt, because a prompt is a request and this is a
-requirement.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -57,21 +50,14 @@ VERDICT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-# A signal asserted above this confidence must cite the tool output that supports it.
 GROUNDING_THRESHOLD = 0.5
 
-# Claims about how the flaw works. No tool in the registry inspects configuration or
-# code, so these can only ever be read out of the advisory — which makes them
-# ungroundable when the advisory says nothing about the flaw.
 MECHANISM_SIGNALS = frozenset({
     "vulnerable_feature_enabled",
     "reachable_in_code",
     "authentication_required",
 })
 
-# What it takes for `not_applicable` to mean anything. A dismissal has to rest on
-# something that actually establishes non-applicability; otherwise it is a guess
-# wearing a verdict's clothes, and it is the guess that gets a real finding closed.
 DISMISSING: dict[str, Any] = {
     "component_present": (False,),
     "version_in_range": (False,),
@@ -114,35 +100,6 @@ def parse_verdict(
     established: dict[str, Any] | None = None,
     advisory_describes_flaw: bool = True,
 ) -> Verdict:
-    """Validate a model reply into a Verdict, correcting what must be corrected.
-
-    These rules are enforced here rather than requested in the prompt, because a
-    prompt is a request and these are requirements.
-
-    A signal asserted with real confidence but citing no tool output is downgraded to
-    unknown. Otherwise the model can assert anything and have it treated as a fact —
-    which is precisely how an unfounded conclusion becomes a finding.
-
-    A signal citing a tool that was never called is treated the same way. A model that
-    names a tool it did not use is not reporting evidence, it is guessing.
-
-    A signal the system already determined is taken from the system, not the model.
-    `established` carries those: whether the component is installed is an inventory
-    observation, and whether the version falls in the affected range is what
-    correlation computed to create this finding at all. The model was contradicting
-    both — asserting `version_in_range=False` about a finding that exists precisely
-    because the version is in range — and citing a tool it really had called, so
-    citation-checking could never catch it.
-
-    Claims about how the flaw works are downgraded when the advisory does not describe
-    the flaw. No tool inspects configuration or code, so the advisory is the only
-    possible source; when it carries no rating, no weakness class and no detail, there
-    is nothing for such a claim to have come from.
-
-    Finally, `not_applicable` is refused unless something survives that establishes
-    it. Dismissal is the one direction where being wrong is silent, so it is the one
-    that has to earn its place.
-    """
     established = established or {}
     if not isinstance(payload, dict):
         raise MalformedVerdict("Verdict was not an object")
@@ -212,8 +169,6 @@ def parse_verdict(
 
     uncertainties = [str(u)[:500] for u in (payload.get("uncertainties") or [])][:10]
 
-    # A verdict resting on downgraded signals cannot be more trustworthy than they
-    # are. Half the signals corrected means the conclusion is not well-founded.
     if len(corrections) >= len(SIGNAL_NAMES) / 2 and verdict != "uncertain":
         corrections.append(
             f"{len(corrections)} of {len(SIGNAL_NAMES)} signals were unfounded — "
@@ -221,10 +176,6 @@ def parse_verdict(
         )
         verdict, verdict_confidence = "uncertain", min(verdict_confidence, 0.3)
 
-    # Dismissal is the asymmetric direction. An `applicable` that should have been
-    # `not_applicable` costs somebody an hour; a `not_applicable` that should have
-    # been `applicable` closes a real finding and nobody ever looks again. So it is
-    # the direction required to show its working.
     if verdict == "not_applicable" and not _supports_dismissal(signals):
         corrections.append(
             "verdict was not_applicable, but no signal survived that establishes it — "
@@ -247,7 +198,6 @@ def parse_verdict(
 
 
 def _supports_dismissal(signals: dict[str, Signal]) -> bool:
-    """Did anything survive grounding that actually rules this finding out?"""
     return any(
         (signal := signals.get(name)) is not None
         and signal.confidence > 0.0

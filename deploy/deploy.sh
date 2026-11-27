@@ -1,40 +1,11 @@
 #!/usr/bin/env bash
-#
-# Athena deployment over SSH.
-#
-# Syncs this repository to a remote host, builds the images there, and brings the
-# stack up. Building remotely avoids cross-architecture image transfer and keeps the
-# deployment reproducible from source.
-#
-#   ./deploy/deploy.sh                     deploy to the default host
-#   ./deploy/deploy.sh status              what is running, and at which commit
-#   ./deploy/deploy.sh logs api            follow one service
-#   ./deploy/deploy.sh doctor              run athena doctor remotely
-#   ./deploy/deploy.sh bootstrap           mint an admin bootstrap token
-#   ./deploy/deploy.sh down                stop the stack (database volume preserved)
-#   ./deploy/deploy.sh --host box deploy   target another host
-#
-# Options: --dry-run  --allow-dirty  --no-build  --yes  --remote-dir PATH
-#
-# Secrets are generated on the remote on first deploy, never overwritten, never
-# transferred, never committed. Back up deploy/secrets/master_key out of band: without
-# it, every stored secret is unrecoverable.
-
 set -euo pipefail
 
-# The target host is deliberately not committed: it names somebody's machine, and
-# this repository is public. Resolution order is env var, then an untracked
-# deploy/.deploy-host, then --host. There is no default — a deploy script that
-# guesses which machine to touch is a deploy script that eventually touches the
-# wrong one.
 _host_file="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.deploy-host"
-# Read in an if, not a command substitution inside the assignment: under `set -e` a
-# substitution that exits non-zero takes the whole script with it, and the first
-# thing this script does on a machine with no host file would be to die silently.
 _host_from_file=""
 if [[ -r "$_host_file" ]]; then _host_from_file="$(tr -d '[:space:]' < "$_host_file")"; fi
 HOST="${ATHENA_DEPLOY_HOST:-$_host_from_file}"
-REMOTE_DIR="${ATHENA_REMOTE_DIR:-athena}"     # relative to the remote user's home
+REMOTE_DIR="${ATHENA_REMOTE_DIR:-athena}"
 DRY_RUN=0; ALLOW_DIRTY=0; NO_BUILD=0; ASSUME_YES=0
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -49,10 +20,33 @@ info() { printf "    %s\n" "$*"; }
 warn() { printf "%s !!  %s%s\n" "$YLW" "$*" "$RST"; }
 ok()   { printf "%s ✓   %s%s\n" "$GRN" "$*" "$RST"; }
 die()  { printf "%s ✗   %s%s\n" "$RED" "$*" "$RST" >&2; exit 1; }
+usage() {
+  cat <<'EOF'
+Athena deployment over SSH.
+
+Syncs this repository to a remote host, builds the images there, and brings the
+stack up. Building remotely avoids cross-architecture image transfer and keeps the
+deployment reproducible from source.
+
+  ./deploy/deploy.sh                     deploy to the default host
+  ./deploy/deploy.sh status              what is running, and at which commit
+  ./deploy/deploy.sh logs api            follow one service
+  ./deploy/deploy.sh doctor              run athena doctor remotely
+  ./deploy/deploy.sh bootstrap           mint an admin bootstrap token
+  ./deploy/deploy.sh down                stop the stack (database volume preserved)
+  ./deploy/deploy.sh --host box deploy   target another host
+
+Options: --dry-run  --allow-dirty  --no-build  --yes  --remote-dir PATH
+
+Secrets are generated on the remote on first deploy, never overwritten, never
+transferred, never committed. Back up deploy/secrets/master_key out of band: without
+it, every stored secret is unrecoverable.
+
+EOF
+}
 
 SSH=(ssh -o BatchMode=yes -o ConnectTimeout=10)
 
-# Run a command on the remote, inside the deploy directory.
 remote() {
   if (( DRY_RUN )); then
     printf "%s[dry-run] %s%s\n" "$DIM" "$*" "$RST"
@@ -61,7 +55,6 @@ remote() {
   "${SSH[@]}" "$HOST" "cd ~/$REMOTE_DIR/deploy && $*"
 }
 
-# Pipe a local script to the remote shell.
 remote_script() {
   local script="$1"
   if (( DRY_RUN )); then
@@ -71,7 +64,6 @@ remote_script() {
   "${SSH[@]}" "$HOST" "bash -s" < "$script"
 }
 
-# ── arguments ─────────────────────────────────────────────────────────────────
 COMMAND=""
 declare -a EXTRA=()
 while [[ $# -gt 0 ]]; do
@@ -82,7 +74,7 @@ while [[ $# -gt 0 ]]; do
     --allow-dirty) ALLOW_DIRTY=1; shift ;;
     --no-build)    NO_BUILD=1; shift ;;
     --yes|-y)      ASSUME_YES=1; shift ;;
-    -h|--help)     sed -n '3,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)     usage; exit 0 ;;
     deploy|status|logs|doctor|bootstrap|down|secrets)
                    COMMAND="$1"; shift; [[ $# -gt 0 ]] && EXTRA=("$@"); break ;;
     *)             die "Unknown argument: $1 (try --help)" ;;
@@ -90,7 +82,6 @@ while [[ $# -gt 0 ]]; do
 done
 COMMAND="${COMMAND:-deploy}"
 
-# ── preflight ─────────────────────────────────────────────────────────────────
 preflight() {
   step "Preflight"
   command -v rsync >/dev/null || die "rsync not found locally"
@@ -150,7 +141,7 @@ sync_source() {
   local args=(-az --delete --human-readable
     --exclude '.git/' --exclude '__pycache__/' --exclude '*.pyc' --exclude '.pytest_cache/'
     --exclude 'node_modules/' --exclude '.venv/' --exclude '.nuxt/' --exclude '.output/'
-    --exclude 'deploy/secrets/'    # secrets never traverse the network, in either direction
+    --exclude 'deploy/secrets/'
     --exclude 'deploy/.env')
   (( DRY_RUN )) && args+=(--dry-run)
 
@@ -189,13 +180,11 @@ do_deploy() {
   remote "docker compose exec -T api athena doctor" || warn "athena doctor reported failures (above)"
 
   step "Admin account"
-  # No-op once an account exists, so re-deploying never mints a second token.
   remote "docker compose exec -T api athena bootstrap"
 
   local bind port base
   bind="$("${SSH[@]}" "$HOST" "grep -E '^ATHENA_WEB_BIND=' ~/$REMOTE_DIR/deploy/.env | cut -d= -f2" 2>/dev/null || echo 127.0.0.1)"
   port="$("${SSH[@]}" "$HOST" "grep -E '^ATHENA_WEB_PORT=' ~/$REMOTE_DIR/deploy/.env | cut -d= -f2" 2>/dev/null || echo 8080)"
-  # Nuxt answers only under its base path, so a URL without it 404s.
   base="$("${SSH[@]}" "$HOST" "grep -E '^ATHENA_BASE_PATH=' ~/$REMOTE_DIR/deploy/.env | cut -d= -f2" 2>/dev/null || echo /)"
 
   step "Done"
