@@ -206,3 +206,46 @@ def test_set_role_disable_and_reset_mfa_are_applied_and_audited(app, session):
     ).scalar_one()
     assert reset_event.actor == f"user:{admin.id}"
     assert reset_event.detail["was_active"] is True
+
+
+@pytest.mark.parametrize("change", ["demote", "disable"])
+def test_the_last_active_admin_cannot_be_demoted_or_disabled(engine, session, change):
+    from datetime import UTC, datetime
+
+    from fastapi import HTTPException
+    from sqlalchemy import update
+
+    from athena.api.deps import Principal
+    from athena.api.routers import users
+
+    actor = _make_user(session, "admin")
+    target = _make_user(session, "admin")
+    session.execute(
+        update(User)
+        .where(User.role == "admin", User.id != target.id, User.disabled_at.is_(None))
+        .values(disabled_at=datetime.now(UTC))
+    )
+    principal = Principal(actor, None)
+
+    with pytest.raises(HTTPException) as refused:
+        if change == "demote":
+            users.set_role(target.id, users.RoleRequest(role="viewer"), principal, session)
+        else:
+            users.disable_user(target.id, principal, session)
+    assert refused.value.status_code == 409
+    assert session.get(User, target.id).role == "admin"
+    assert session.get(User, target.id).disabled_at is None
+    session.rollback()
+
+
+def test_an_admin_can_be_demoted_while_another_stays_active(engine, session):
+    from athena.api.deps import Principal
+    from athena.api.routers import users
+
+    actor = _make_user(session, "admin")
+    target = _make_user(session, "admin")
+    view = users.set_role(
+        target.id, users.RoleRequest(role="viewer"), Principal(actor, None), session
+    )
+    assert view["role"] == "viewer"
+    session.rollback()
