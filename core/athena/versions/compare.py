@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from athena.versions import debian, pep440, rpm, semver
+from athena.versions import apk, debian, maven, pep440, rpm, semver
 
 Comparator = Callable[[str, str], int]
 
@@ -39,10 +39,10 @@ COMPARATORS: dict[str, Comparator] = {
     "composer": semver.compare,
     "nuget": semver.compare,
     "gem": semver.compare,
-    "maven": _generic,
+    "maven": maven.compare,
     "deb": debian.compare,
     "rpm": rpm.compare,
-    "apk": debian.compare,
+    "apk": apk.compare,
     "generic": _generic,
 }
 

@@ -339,11 +339,6 @@ def test_semver_matches_spec_precedence(lower: str, higher: str) -> None:
     assert compare("npm", higher, lower) == 1
 
 
-HEURISTIC_COMPARATOR_GAP = pytest.mark.xfail(
-    strict=True, reason="heuristic comparator does not implement this ordering"
-)
-
-
 @pytest.mark.parametrize(
     ("lower", "higher"),
     [
@@ -351,20 +346,78 @@ HEURISTIC_COMPARATOR_GAP = pytest.mark.xfail(
         ("1.0", "1.0.1"),
         ("1.0-alpha1", "1.0-beta1"),
         ("1.0", "1.0-sp1"),
-        pytest.param("1.0-alpha-1", "1.0", marks=HEURISTIC_COMPARATOR_GAP),
-        pytest.param("1.0-SNAPSHOT", "1.0", marks=HEURISTIC_COMPARATOR_GAP),
-        pytest.param("1.0-RC1", "1.0", marks=HEURISTIC_COMPARATOR_GAP),
-        pytest.param("1.0-beta1", "1.0-RC1", marks=HEURISTIC_COMPARATOR_GAP),
+        ("1.0-alpha-1", "1.0"),
+        ("1.0-SNAPSHOT", "1.0"),
+        ("1.0-RC1", "1.0"),
+        ("1.0-beta1", "1.0-RC1"),
+        ("2.0-rc1", "2.0"),
+        ("1", "1.1"),
+        ("1-snapshot", "1"),
+        ("1", "1-sp"),
+        ("1-foo2", "1-foo10"),
+        ("1-foo", "1-1"),
+        ("1-1", "1.1"),
+        ("1-ga", "1-sp"),
+        ("1-ga.1", "1-sp.1"),
+        ("1-sp-1", "1-ga-1"),
+        ("1.K", "1.7"),
+        ("5.aardvark", "5.zebra"),
+        ("1.b", "1.α"),
+        ("1-alpha", "1-a1"),
+        ("1-a1", "1-beta"),
+        ("1-beta", "1-b1"),
+        ("1-b1", "1-milestone"),
+        ("1-milestone", "1-m1"),
+        ("1-m1", "1-rc"),
+        ("1-rc", "1-snapshot"),
+        ("1-sp", "1-foo"),
+        ("1-foo", "1-zebra"),
+        ("1.0-alpha", "1.0-alpha-1"),
     ],
 )
-def test_maven_common_orderings(lower: str, higher: str) -> None:
+def test_maven_matches_the_version_order_specification(lower: str, higher: str) -> None:
     assert compare("maven", lower, higher) == -1, f"{lower} should sort below {higher}"
     assert compare("maven", higher, lower) == 1
 
 
-@pytest.mark.xfail(strict=True, reason="heuristic comparator does not drop trailing zeros")
-def test_maven_trailing_zero_is_equal() -> None:
-    assert compare("maven", "1.0", "1.0.0") == 0
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        ("1.0", "1.0.0"),
+        ("1.foo", "1-foo"),
+        ("1.ga", "1"),
+        ("1-ga", "1"),
+        ("1-0", "1"),
+        ("1_0", "1"),
+        ("1.0", "1"),
+        ("1.final", "1"),
+        ("1.release", "1"),
+        ("1.", "1"),
+        ("1-", "1"),
+        ("1_", "1"),
+        ("1.0.0-foo.0.0", "1-foo"),
+        ("1.0.0-0.0.0", "1"),
+        ("1-a1", "1-alpha-1"),
+        ("1.0-alpha1", "1.0-ALPHA1"),
+        ("3.2-ALPHA1", "3.2-alpha1"),
+        ("1-rc1", "1-cr1"),
+        ("1-1.foo-bar1baz-.1", "1-1.foo-bar-1-baz-0.1"),
+    ],
+)
+def test_maven_equal_under_the_version_order_specification(a: str, b: str) -> None:
+    assert compare("maven", a, b) == 0
+
+
+def test_maven_range_includes_a_release_candidate_of_the_fixed_version() -> None:
+    assert in_affected_range("maven", "2.0-rc1", introduced="1.0", fixed="2.0")
+    assert not in_affected_range("maven", "2.0", introduced="1.0", fixed="2.0")
+    assert not in_affected_range("maven", "2.17.1", introduced="2.0-beta9", fixed="2.15.0")
+    assert in_affected_range("maven", "2.15.0-rc1", introduced="2.0-beta9", fixed="2.15.0")
+
+
+def test_maven_rejects_an_empty_version() -> None:
+    with pytest.raises(UncomparableVersions):
+        compare("maven", "", "1.0")
 
 
 @pytest.mark.parametrize(
@@ -375,10 +428,45 @@ def test_maven_trailing_zero_is_equal() -> None:
         ("1.0-r9", "1.0.1-r0"),
         ("1.0_beta1", "1.0_rc1"),
         ("1.0", "1.0_p1"),
-        pytest.param("1.0_alpha1", "1.0", marks=HEURISTIC_COMPARATOR_GAP),
-        pytest.param("1.0_rc1", "1.0", marks=HEURISTIC_COMPARATOR_GAP),
+        ("1.0_alpha1", "1.0"),
+        ("1.0_rc1", "1.0"),
+        ("1.0_alpha", "1.0_beta"),
+        ("1.0_beta", "1.0_pre"),
+        ("1.0_pre", "1.0_rc"),
+        ("1.0_rc", "1.0"),
+        ("1.0", "1.0_cvs"),
+        ("1.0_cvs", "1.0_svn"),
+        ("1.0_svn", "1.0_git"),
+        ("1.0_git", "1.0_hg"),
+        ("1.0_hg", "1.0_p"),
+        ("1.0_rc1", "1.0_rc2"),
+        ("1.0_rc", "1.0_rc1"),
+        ("1.0", "1.0a"),
+        ("1.0a", "1.0b"),
+        ("1.0b", "1.0.1"),
+        ("1.0_p1", "1.0_p1-r1"),
+        ("1.0-r5", "1.0_p1"),
+        ("1.0", "1.0-r0"),
+        ("1.0_rc1-r9", "1.0-r0"),
+        ("1.01", "1.1"),
+        ("1.0~abc", "1.0~abd"),
+        ("1.0", "1.0.0"),
     ],
 )
-def test_apk_common_orderings(lower: str, higher: str) -> None:
+def test_apk_matches_apk_tools(lower: str, higher: str) -> None:
     assert compare("apk", lower, higher) == -1, f"{lower} should sort below {higher}"
     assert compare("apk", higher, lower) == 1
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [("1.10", "1.10"), ("1.0-r1", "1.0-r01"), ("1.0_rc1", "1.0_rc01")],
+)
+def test_apk_equal_under_apk_tools(a: str, b: str) -> None:
+    assert compare("apk", a, b) == 0
+
+
+@pytest.mark.parametrize("bad", ["", "1.0_foo1", "1.0-1", "1.0A", "1.0-r1_p1", "v1.0", "1.0_"])
+def test_apk_rejects_versions_apk_tools_does_not_parse(bad: str) -> None:
+    with pytest.raises(UncomparableVersions):
+        compare("apk", bad, "1.0")
