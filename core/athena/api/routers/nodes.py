@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, select, text
 from sqlalchemy.orm import Session
 
-from athena.api.deps import Principal, current_principal, db
+from athena.api.deps import Principal, administer_with_step_up, can_operate, can_read, db
 from athena.audit import record, record_isolated
 from athena.db.models import Node, NodeEnrolmentToken, NodeNonce, NodeTask
 from athena.nodes.keys import task_signing_key, task_signing_public_key
@@ -54,7 +54,7 @@ class EnrolRequest(BaseModel):
 @router.post("/enrol-token", status_code=status.HTTP_201_CREATED)
 def mint_enrol_token(
     body: EnrolTokenRequest,
-    principal: Principal = Depends(current_principal),
+    principal: Principal = Depends(administer_with_step_up),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     token = secrets.token_urlsafe(32)
@@ -317,7 +317,7 @@ def submit_result(
 
 @router.get("")
 def list_nodes(
-    _: Principal = Depends(current_principal), session: Session = Depends(db)
+    _: Principal = Depends(can_read), session: Session = Depends(db)
 ) -> dict[str, Any]:
     nodes = session.execute(select(Node).order_by(Node.display_name)).scalars().all()
     now = datetime.now(UTC)
@@ -344,7 +344,7 @@ def list_nodes(
 @router.post("/{node_id}/collect", status_code=status.HTTP_202_ACCEPTED)
 def collect_now(
     node_id: str,
-    principal: Principal = Depends(current_principal),
+    principal: Principal = Depends(can_operate),
     session: Session = Depends(db),
 ) -> dict:
     from athena.nodes.dispatch import enqueue_collection
@@ -367,7 +367,7 @@ def collect_now(
 @router.delete("/{node_id}")
 def revoke_node(
     node_id: str,
-    principal: Principal = Depends(current_principal),
+    principal: Principal = Depends(administer_with_step_up),
     session: Session = Depends(db),
 ) -> dict:
     node = session.get(Node, uuid.UUID(node_id))

@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from athena.api.deps import Principal, current_principal, db
+from athena.api.deps import Principal, can_operate, can_read, db
 from athena.audit import record
 from athena.db.models import Job
 from athena.queue import (
@@ -52,7 +52,7 @@ def _serialise(j: Job) -> dict:
 @router.get("")
 def list_jobs(
     limit: int = Query(default=50, le=200),
-    _: Principal = Depends(current_principal),
+    _: Principal = Depends(can_read),
     session: Session = Depends(db),
 ) -> dict:
     rows = session.execute(select(Job).order_by(Job.id.desc()).limit(limit)).scalars().all()
@@ -62,7 +62,7 @@ def list_jobs(
 @router.post("", status_code=status.HTTP_202_ACCEPTED)
 def create_job(
     body: EnqueueRequest,
-    principal: Principal = Depends(current_principal),
+    principal: Principal = Depends(can_operate),
     session: Session = Depends(db),
 ) -> dict:
     if body.kind not in known_kinds():
@@ -87,7 +87,7 @@ def create_job(
 @router.get("/{job_id}")
 def get_job(
     job_id: int,
-    _: Principal = Depends(current_principal),
+    _: Principal = Depends(can_read),
     session: Session = Depends(db),
 ) -> dict:
     job = session.get(Job, job_id)

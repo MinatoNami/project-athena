@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from athena.api.deps import Principal, current_principal, db
+from athena.api.deps import Principal, can_read, db
 from athena.api.routers.exports import is_uuid
 from athena.codefindings import GUIDANCE
 from athena.db.models import Asset, CodeFinding, ScanRun
@@ -91,7 +91,7 @@ def list_code_findings(
     kind: str | None = None,
     include_resolved: bool = False,
     limit: int = Query(default=200, le=1000),
-    _: Principal = Depends(current_principal),
+    _: Principal = Depends(can_read),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     if asset_id is not None and not is_uuid(asset_id):

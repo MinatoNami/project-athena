@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from athena.api.deps import Principal, current_principal, db
+from athena.api.deps import Principal, can_operate, db
 from athena.audit import record
 from athena.db.models import Asset
 from athena.export import sbom_for, vex_document
@@ -34,7 +34,7 @@ def _download(document: dict[str, Any], filename: str, media_type: str) -> JSONR
 @router.get("/assets/{asset_id}/sbom")
 def asset_sbom(
     asset_id: str,
-    principal: Principal = Depends(current_principal),
+    principal: Principal = Depends(can_operate),
     session: Session = Depends(db),
 ) -> JSONResponse:
     asset = session.get(Asset, asset_id) if is_uuid(asset_id) else None
@@ -58,7 +58,7 @@ def asset_sbom(
 def export_openvex(
     asset_id: str | None = None,
     vulnerability_id: str | None = None,
-    principal: Principal = Depends(current_principal),
+    principal: Principal = Depends(can_operate),
     session: Session = Depends(db),
 ) -> JSONResponse:
     if asset_id is not None and (not is_uuid(asset_id) or session.get(Asset, asset_id) is None):

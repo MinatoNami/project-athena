@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from athena.api import auth as A
-from athena.api.deps import Principal, current_principal, db
+from athena.api.deps import Principal, can_read, current_principal, db
 from athena.api.types import AccountEmail
 from athena.audit import record, record_isolated
 from athena.config import get_settings
@@ -116,7 +116,7 @@ def logout(request: Request, response: Response, session: Session = Depends(db))
 
 
 @router.get("/me")
-def me(principal: Principal = Depends(current_principal)) -> dict:
+def me(principal: Principal = Depends(can_read)) -> dict:
     return {
         "id": str(principal.user.id),
         "email": principal.user.email,

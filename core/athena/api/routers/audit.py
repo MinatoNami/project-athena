@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from athena.api.deps import Principal, current_principal, db
+from athena.api.deps import Principal, can_read, db
 from athena.audit import verify_chain
 from athena.db.models import AuditEvent
 
@@ -17,7 +17,7 @@ router = APIRouter(prefix="/audit", tags=["audit"])
 def list_events(
     limit: int = Query(default=100, le=500),
     before_seq: int | None = None,
-    _: Principal = Depends(current_principal),
+    _: Principal = Depends(can_read),
     session: Session = Depends(db),
 ) -> dict:
     stmt = select(AuditEvent).order_by(AuditEvent.seq.desc()).limit(limit)
@@ -69,7 +69,7 @@ def list_events(
 
 @router.get("/verify")
 def verify(
-    _: Principal = Depends(current_principal),
+    _: Principal = Depends(can_read),
     session: Session = Depends(db),
 ) -> dict:
     return verify_chain(session)

@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
-from athena.api.deps import Principal, current_principal
+from athena.api.deps import Principal, can_read
 from athena.api.events import broker, event_stream
 
 router = APIRouter(tags=["events"])
@@ -12,7 +12,7 @@ router = APIRouter(tags=["events"])
 @router.get("/events")
 async def events(
     topics: str = Query(default="", description="Comma-separated topic filter"),
-    _: Principal = Depends(current_principal),
+    _: Principal = Depends(can_read),
 ) -> StreamingResponse:
     wanted = {t.strip() for t in topics.split(",") if t.strip()}
     queue = broker.subscribe()
