@@ -8,6 +8,7 @@
 | [Milestones and Checkpoints](MILESTONES.md) | What gets built when, and how each stage is proven |
 | [Security Agent Implementation Plan](SECURITY_AGENT_PLAN.md) | How Athena grows to identify, mitigate and resolve threats |
 | [Security Tooling Research, Nov 2026](RESEARCH_2026-11.md) | Which tools, standards and threats from 27 Oct to 27 Nov 2026 shape that plan |
+| [Decision 0001: Amend the PRD scope](decisions/0001-prd-scope-amendment.md) | Whether detection, telemetry, runtime control and cloud posture come into scope, and on what terms (proposed) |
 
 ### Reading order
 

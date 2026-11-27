@@ -1,6 +1,6 @@
 # Athena — Milestones and Checkpoints
 
-**Status:** Draft · **Version:** 0.2 · **Date:** 19 August 2026
+**Status:** Draft · **Version:** 0.3 · **Date:** 28 November 2026
 **Related:** [PRD](../Athena%20—%20Product%20Requirements%20Document.md) · [Technical Design](TECHNICAL_DESIGN.md) · [Web UI](WEB_UI.md)
 
 ---
@@ -56,6 +56,8 @@ No product value, entirely enabling. The security boundaries go in from the firs
 
 **Decision point.** *Can a stranger run this?* If M0 already needs a written runbook, the self-hosted premise is in trouble.
 
+**Status, 28 November 2026.** Largely built: the queue, scheduler leadership, the hash-chained audit log and the executor image. Landed on `feat/phase-0-foundations`: the Go 1.27.3 build (bab8e2b), CI running the evals, web and executor tests (aaaa7aa, 332e211), TOTP MFA (b7d200d), the executor boundary tests (3c0793b) and the fixture estate (e51d187). Open: the executor's own database role is not in effect, because core connects as the Postgres superuser (plan 0.3).
+
 ---
 
 # M1 — Inventory · 4w
@@ -78,6 +80,8 @@ Athena knows what exists, with honest freshness. No vulnerabilities yet.
 **Risk.** Container-to-repository provenance may be unresolvable without build-time attestation. Display the gap rather than guessing.
 
 **Decision point.** *Is the inventory trustworthy enough to build conclusions on?* Shaky identity here is inherited by everything downstream.
+
+**Status, 28 November 2026.** Built: inventory, Syft SBOMs, the Go node agent and `scan_run`. Landed: Syft and git images pinned by version and digest (6899a8f), correlation after every repository scan and package ingest (5e2b6be), and closing findings only after a complete scan no longer sees their component (891ab47). Open: egress allowlists for the networked git and Syft sandboxes (plan 0.10).
 
 ---
 
@@ -102,6 +106,8 @@ The highest-correctness-risk milestone.
 
 **Decision point.** *What is the raw candidate false-positive rate?* This number is the bar M3 must clear to justify the AI layer at all.
 
+**Status, 28 November 2026.** Built: OSV (including Debian and Ubuntu), KEV, EPSS and Vulnrichment feeds, and correlation. Landed: comparators that match rpmvercmp, dpkg and packaging on reference vectors (22a1037), configurable deadline windows with KEV's own due date winning when earlier (968857d, 54d37fb). Open: NVD and GHSA have no adapter of their own.
+
 ---
 
 # M3 — Investigation and Risk · 5w
@@ -124,6 +130,8 @@ The differentiator.
 10. **Injection test:** a hostile README changes no verdict and reaches no privileged path.
 
 **Decision point.** *Is investigation better than raw correlation, and at what cost per environment per month?* If the FP rate is not materially better than M2's baseline, the AI layer is not earning its place — rework before M4.
+
+**Status, 28 November 2026.** About complete: the bounded loop, six read-only tools, grounded verdicts, the gateway with policy, budget and egress logging, deterministic risk scoring and the eval harness. Landed: a compromise assessment on every malware match (f7cbef1, 4520651, 804c5f7), a behavioural read-only test for every registry tool (8b66132), and the deterministic evals in CI (aaaa7aa).
 
 ---
 
@@ -148,6 +156,8 @@ From knowing to doing.
 **Risk.** Build environments vary enormously. Report "patch failed" and "we could not build this project" as different outcomes.
 
 **Decision point.** *Is reviewing a prepared patch faster than doing it by hand?* If not, the loop stops here and the value proposition narrows to investigation.
+
+**Status, 28 November 2026.** Only a class plan exists (`plan_for` in `core/athena/remediation/classify.py`). The patch workspace, validation and blast radius are not started; they are Phase 1 of the security agent plan.
 
 ---
 
@@ -182,6 +192,8 @@ Plus the assertions that matter more than the happy path:
 
 **Decision point.** *Would we run this against our own production?* If no, name the specific reason and fix that before M6.
 
+**Status, 28 November 2026.** Absent. Groundwork landed: the executor action registry, plan-hash runner and grant checks (1684834), its audit writer (8cbdb05), and step-up on sensitive mutations (9c6e747, a3ba2f9). Open: the signer (plan 0.4), grant claiming, approvals, verification, and the `resolved` state, which is never set.
+
 ---
 
 # M6 — Operability and Trust · 5w
@@ -205,6 +217,8 @@ What turns a demo into something usable on a real estate.
 
 **Decision point.** *Would a real user keep this running after week one?* This is the churn milestone; if notifications are noisy or the first patrol is overwhelming, nothing later matters.
 
+**Status, 28 November 2026.** Slices built: suppression, baselines, in-app notifications, metrics, and CycloneDX 1.6 and OpenVEX exports. Landed: a role on every route (9c6e747, 5ed85db) and admin user management (e0ace1f, cf23d01). Open: separation of duties, which needs M5's approvals; the other checkpoint items have not been assessed against this code.
+
 ---
 
 # M7 — Breadth · 8w
@@ -227,6 +241,8 @@ Extend surface coverage now the loop is trustworthy — and not before.
 
 **Decision point.** *Which of these earned its place?* Network patrol is a large surface with uncertain differentiation (PRD §52, Q5). Be willing to cut it.
 
+**Status, 28 November 2026.** A slice is built: Gitleaks and Trivy scans of the repository working tree. Landed: flagging `.pth` files whose import lines run at every Python start-up (993a130, 5a774dd). The security agent plan adds more identify breadth (its Phase 2) in parallel with closing the trust loop; see [decision 0001](decisions/0001-prd-scope-amendment.md) for the proposed scope change.
+
 ---
 
 # M8 — Scale and Hardening · 8w
@@ -243,6 +259,8 @@ Extend surface coverage now the loop is trustworthy — and not before.
 6. The expanded prompt-injection corpus passes.
 7. Node auto-update rolls out to development tier and is **blocked pending approval** on production.
 8. An air-gapped install runs a full patrol from an imported bundle with no internet access.
+
+**Status, 28 November 2026.** Not started.
 
 ---
 
