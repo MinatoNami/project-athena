@@ -23,8 +23,10 @@ const dlText = computed(() => {
   const d = dl.value
   if (!d) return null
   if (d.on_upgrade) return 'Fix in the next system upgrade'
+  if (dlBasis.value?.setByKev) return `${dueText(d.due)} · CISA KEV due date, ${d.due}`
   return `${dueText(d.due)} · ${d.days}-day deadline, ${d.due}`
 })
+const dlBasis = computed(() => deadlineBasis(dl.value))
 const epss = computed(() => props.p?.epss)
 
 function pointValue(v: string | undefined) {
@@ -128,6 +130,10 @@ function pct(v: number | null | undefined, digits = 1) {
         <div>
           <div class="lbl">Remediation deadline</div>
           <p class="dltext" :class="{ crit: dl.days_left != null && dl.days_left <= 0 }">{{ dlText }}</p>
+          <p v-if="dlBasis" class="dlbasis">
+            <span class="tag caps" :class="{ bad: dlBasis.setByKev }">{{ dlBasis.label }}</span>
+            <span v-if="dlBasis.overridden" class="basis">{{ dlBasis.overridden }}</span>
+          </p>
         </div>
         <span class="fine framework">{{ dl.framework }}</span>
       </div>
@@ -171,8 +177,9 @@ function pct(v: number | null | undefined, digits = 1) {
           <div class="kv"><span>Ransomware use</span>
             <span class="muted">{{ kev.ransomware ? 'known' : 'not known' }}</span></div>
           <p class="fine">
-            CISA's catalogue date for federal agencies. The deadline Athena shows for
-            this asset is BOD 26-04's, above.
+            CISA's catalogue date for federal agencies.
+            <template v-if="dlBasis?.setByKev">It is earlier than BOD 26-04's table, so it sets the deadline above.</template>
+            <template v-else>The deadline Athena shows for this asset is BOD 26-04's, above.</template>
           </p>
         </template>
         <template v-else>
@@ -268,6 +275,7 @@ function pct(v: number | null | undefined, digits = 1) {
 .val { font-weight: 640; font-size: .92rem; padding: 0 .15rem;
        align-self: flex-start; border-radius: 3px; }
 .basis { font-size: .72rem; color: var(--ink-muted); line-height: 1.4; }
+.dlbasis { display: flex; flex-wrap: wrap; align-items: baseline; gap: .4rem; margin: .3rem 0 0; }
 .dltext { margin: .3rem 0 0; font-size: .92rem; font-weight: 600; }
 .dlinputs { display: grid; grid-template-columns: repeat(4, 1fr); gap: .5rem; margin: .75rem 0 .2rem; }
 .dlrow { border: 1px solid var(--rule); border-radius: var(--r-md); padding: .45rem .6rem;
