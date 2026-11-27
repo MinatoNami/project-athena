@@ -277,7 +277,7 @@ class CompromiseAnswers(BaseModel):
 def answer_compromise(
     finding_id: str,
     body: CompromiseAnswers,
-    principal: Principal = Depends(current_principal),
+    principal: Principal = Depends(can_operate),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     if not is_uuid(finding_id):
