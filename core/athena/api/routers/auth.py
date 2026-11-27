@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from athena.api import auth as A
+from athena.api import totp
 from athena.api.deps import Principal, can_read, current_principal, db
 from athena.api.types import AccountEmail
 from athena.audit import record, record_isolated
@@ -14,6 +15,8 @@ from athena.config import get_settings
 from athena.db.models import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+PASSWORD_CHANGE_REQUIRED = "Password change required"  # noqa: S105
 
 
 class BootstrapRequest(BaseModel):
@@ -25,6 +28,12 @@ class BootstrapRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: AccountEmail
     password: str
+    totp_code: str | None = Field(default=None, max_length=16)
+    new_password: str | None = Field(default=None, max_length=1024)
+
+
+class MfaCodeRequest(BaseModel):
+    code: str = Field(min_length=totp.DIGITS, max_length=16)
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -103,9 +112,57 @@ def login(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
 
     assert user is not None
-    record(session, actor=f"user:{user.id}", action="LOGIN", subject=f"user:{user.id}", detail={})
+    if user.mfa_enabled and not A.verify_totp(session, user, body.totp_code):
+        record_isolated(
+            actor="anonymous",
+            action="MFA_FAILED",
+            subject=f"user:{user.id}",
+            detail={
+                "stage": "login",
+                "code_supplied": bool(body.totp_code),
+                "ip": request.client.host if request.client else None,
+            },
+        )
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
+
+    if user.password_change_required:
+        _replace_single_use_password(session, user, body)
+
+    record(
+        session,
+        actor=f"user:{user.id}",
+        action="LOGIN",
+        subject=f"user:{user.id}",
+        detail={"mfa": user.mfa_enabled},
+    )
     _set_session_cookie(response, A.create_session(session, user))
     return {"id": str(user.id), "email": user.email, "role": user.role}
+
+
+def _replace_single_use_password(session: Session, user: User, body: LoginRequest) -> None:
+    if not body.new_password:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, PASSWORD_CHANGE_REQUIRED)
+    session.flush()
+    session.refresh(user, with_for_update=True)
+    if not user.password_change_required or not A.verify_password(
+        user.password_hash, body.password
+    ):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
+    if (problem := A.validate_password_strength(body.new_password)) is not None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, problem)
+    if body.new_password == body.password:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "The new password must differ from the old one."
+        )
+    user.password_hash = A.hash_password(body.new_password)
+    user.password_change_required = False
+    record(
+        session,
+        actor=f"user:{user.id}",
+        action="PASSWORD_CHANGED",
+        subject=f"user:{user.id}",
+        detail={"reason": "single-use credential replaced"},
+    )
 
 
 @router.post("/logout")
@@ -143,6 +200,17 @@ def step_up(
         )
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Re-authentication failed")
 
+    if principal.user.mfa_enabled and not A.verify_totp(
+        session, principal.user, body.totp_code
+    ):
+        record_isolated(
+            actor=principal.actor,
+            action="MFA_FAILED",
+            subject=f"user:{principal.user.id}",
+            detail={"stage": "step_up", "code_supplied": bool(body.totp_code)},
+        )
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Re-authentication failed")
+
     principal.session_row.step_up_at = datetime.now(UTC)
     record(
         session,
@@ -152,3 +220,57 @@ def step_up(
         detail={},
     )
     return {"ok": True, "expires_in": get_settings().step_up_ttl_seconds}
+
+
+@router.post("/mfa/enrol")
+def mfa_enrol(
+    principal: Principal = Depends(can_read),
+    session: Session = Depends(db),
+) -> dict:
+    user = principal.user
+    if user.mfa_enabled:
+        raise HTTPException(status.HTTP_409_CONFLICT, "MFA is already active; reset it first")
+    if not A.has_fresh_step_up(principal.session_row):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Fresh step-up required")
+
+    secret = totp.generate_secret()
+    user.mfa_secret = totp.seal_secret(user.id, secret)
+    user.mfa_last_counter = None
+    record(
+        session,
+        actor=principal.actor,
+        action="MFA_ENROL_STARTED",
+        subject=f"user:{user.id}",
+        detail={"method": "totp"},
+    )
+    return {"provisioning_uri": totp.provisioning_uri(secret, user.email)}
+
+
+@router.post("/mfa/confirm")
+def mfa_confirm(
+    body: MfaCodeRequest,
+    principal: Principal = Depends(can_read),
+    session: Session = Depends(db),
+) -> dict:
+    user = principal.user
+    if user.mfa_enabled or not user.mfa_secret:
+        raise HTTPException(status.HTTP_409_CONFLICT, "No pending MFA enrolment")
+
+    if not A.verify_totp(session, user, body.code):
+        record_isolated(
+            actor=principal.actor,
+            action="MFA_FAILED",
+            subject=f"user:{user.id}",
+            detail={"stage": "confirm", "code_supplied": True},
+        )
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid authenticator code")
+
+    user.mfa_enabled = True
+    record(
+        session,
+        actor=principal.actor,
+        action="MFA_ENABLED",
+        subject=f"user:{user.id}",
+        detail={"method": "totp"},
+    )
+    return {"mfa_enabled": True}

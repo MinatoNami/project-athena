@@ -9,6 +9,7 @@ from argon2.exceptions import VerifyMismatchError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from athena.api import totp
 from athena.audit import record
 from athena.config import get_settings
 from athena.db.models import BootstrapToken, Session_, User
@@ -141,3 +142,23 @@ def validate_password_strength(password: str) -> str | None:
     if len(password) < MIN_PASSWORD_LENGTH:
         return f"Password must be at least {MIN_PASSWORD_LENGTH} characters."
     return None
+
+
+def verify_totp(session: Session, user: User, code: str | None) -> bool:
+    if not user.mfa_secret or not code:
+        return False
+    session.refresh(user, with_for_update=True)
+    if not user.mfa_secret:
+        return False
+    key = totp.decode_secret(totp.unseal_secret(user.id, user.mfa_secret))
+    counter = totp.matching_counter(key, code, last_counter=user.mfa_last_counter)
+    if counter is None:
+        return False
+    user.mfa_last_counter = counter
+    return True
+
+
+def clear_mfa(user: User) -> None:
+    user.mfa_secret = None
+    user.mfa_enabled = False
+    user.mfa_last_counter = None

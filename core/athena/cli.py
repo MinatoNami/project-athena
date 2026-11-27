@@ -66,6 +66,130 @@ def _bootstrap() -> int:
     return 0
 
 
+BREAK_GLASS_ACTOR = "system:break-glass"
+
+
+def _operator() -> str:
+    import getpass
+    import os
+
+    try:
+        name = getpass.getuser()
+    except (KeyError, OSError):
+        name = "unknown"
+    return f"{name} (uid {os.getuid()})"
+
+
+def _break_glass(*, email: str, reason: str | None, confirm: bool, create: bool) -> int:
+    import secrets as _secrets
+    import socket
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select, update
+
+    from athena.api.auth import clear_mfa, hash_password
+    from athena.audit import record
+    from athena.db.base import session_scope
+    from athena.db.models import Session_, User
+
+    reason = (reason or "").strip()
+    if not confirm or not reason:
+        print(
+            "break-glass refused: pass --confirm and a non-empty --reason; "
+            "both are recorded in the audit chain.",
+            file=sys.stderr,
+        )
+        return 2
+
+    from pydantic import TypeAdapter, ValidationError
+
+    from athena.api.types import AccountEmail
+
+    try:
+        email = TypeAdapter(AccountEmail).validate_python(email)
+    except ValidationError:
+        print(f"break-glass refused: {email!r} is not a valid email address.", file=sys.stderr)
+        return 2
+
+    credential = _secrets.token_urlsafe(24)
+    now = datetime.now(UTC)
+
+    with session_scope() as session:
+        user = session.execute(
+            select(User).where(User.email == email).with_for_update()
+        ).scalar_one_or_none()
+        if user is None and not create:
+            print(
+                f"break-glass refused: no account for {email}; pass --create to create one.",
+                file=sys.stderr,
+            )
+            return 1
+
+        if user is None:
+            user = User(
+                email=email,
+                password_hash=hash_password(credential),
+                role="admin",
+                password_change_required=True,
+            )
+            session.add(user)
+            session.flush()
+            outcome = {"outcome": "created", "previous_role": None, "was_disabled": False}
+            mfa_was_active = False
+            revoked = 0
+        else:
+            outcome = {
+                "outcome": "reset",
+                "previous_role": user.role,
+                "was_disabled": user.disabled_at is not None,
+            }
+            mfa_was_active = user.mfa_enabled
+            user.password_hash = hash_password(credential)
+            user.password_change_required = True
+            user.role = "admin"
+            user.disabled_at = None
+            clear_mfa(user)
+            revoked = session.execute(
+                update(Session_)
+                .where(Session_.user_id == user.id, Session_.revoked_at.is_(None))
+                .values(revoked_at=now)
+            ).rowcount
+
+        if mfa_was_active:
+            record(
+                session,
+                actor=BREAK_GLASS_ACTOR,
+                action="MFA_RESET",
+                subject=f"user:{user.id}",
+                detail={"via": "break-glass", "reason": reason},
+            )
+        record(
+            session,
+            actor=BREAK_GLASS_ACTOR,
+            action="BREAK_GLASS",
+            subject=f"user:{user.id}",
+            detail={
+                **outcome,
+                "email": email,
+                "reason": reason,
+                "mfa_reset": mfa_was_active,
+                "sessions_revoked": revoked,
+                "operator": _operator(),
+                "host": socket.gethostname(),
+            },
+        )
+
+    print("\n" + "=" * 68, file=sys.stderr)
+    print("  ATHENA BREAK-GLASS CREDENTIAL (single use, shown once)", file=sys.stderr)
+    print("=" * 68, file=sys.stderr)
+    print(f"\n  account   {email}", file=sys.stderr)
+    print(f"  password  {credential}\n", file=sys.stderr)
+    print("  MFA is cleared and every session for this account is revoked.", file=sys.stderr)
+    print("  The first sign-in must set a new password; then enrol MFA again.", file=sys.stderr)
+    print("=" * 68 + "\n", file=sys.stderr)
+    return 0
+
+
 def _node_token(tier: str = "unknown") -> int:
     import hashlib
     import secrets as _secrets
@@ -237,6 +361,7 @@ def main(argv: list[str] | None = None) -> int:
             "    athena migrate     apply database migrations\n"
             "    athena bootstrap   mint a single-use admin bootstrap token\n"
             "    athena node-token  mint a single-use node enrolment token\n"
+            "    athena break-glass restore an admin (needs --confirm and --reason)\n"
             "    athena doctor      check schema, keys, connectivity, queue health\n"
             "    athena keygen      generate a master key\n"
         ),
@@ -247,6 +372,17 @@ def main(argv: list[str] | None = None) -> int:
         sub.add_parser(name)
     node_token = sub.add_parser("node-token")
     node_token.add_argument("--tier", default="unknown")
+    break_glass = sub.add_parser(
+        "break-glass", help="restore an admin account from the host; audited"
+    )
+    break_glass.add_argument("--email", required=True)
+    break_glass.add_argument("--reason", help="why; recorded in the audit chain")
+    break_glass.add_argument(
+        "--confirm", action="store_true", help="required: acknowledge this is a recovery action"
+    )
+    break_glass.add_argument(
+        "--create", action="store_true", help="create the admin if no account has this email"
+    )
     rescore = sub.add_parser("rescore")
     rescore.add_argument("--dry-run", action="store_true",
                          help="report what would move without writing anything")
@@ -267,6 +403,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "node-token":
         return _node_token(args.tier)
+
+    if args.command == "break-glass":
+        return _break_glass(
+            email=args.email, reason=args.reason, confirm=args.confirm, create=args.create
+        )
 
     if args.command == "rescore":
         return _rescore(dry_run=args.dry_run)
