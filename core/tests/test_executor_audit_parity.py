@@ -4,6 +4,7 @@ import hashlib
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import text
 
 from athena.audit import record, verify_chain
 from athena.audit.chain import GENESIS, _canonical
@@ -97,3 +98,48 @@ def test_interleaved_writers_keep_the_chain_intact(session):
     result = verify_chain(session)
     assert result["intact"] is True
     assert result["head"] == fourth.hash.hex()
+
+
+SINGAPORE = timezone(timedelta(hours=8))
+
+
+def test_the_same_instant_hashes_the_same_in_any_offset():
+    instant = datetime(2026, 11, 28, 4, 30, 0, 250000, tzinfo=UTC)
+    fields = {"actor": "executor", "action": "NOOP", "subject": "s", "detail": {}}
+    utc_form = _canonical(at=instant, prev=GENESIS, **fields)
+    singapore_form = _canonical(at=instant.astimezone(SINGAPORE), prev=GENESIS, **fields)
+    executor_form = executor_audit.canonical(
+        at=instant.astimezone(SINGAPORE), prev=GENESIS, **fields
+    )
+
+    assert singapore_form == utc_form
+    assert executor_form == utc_form
+    assert b'"at":"2026-11-28T04:30:00.250000+00:00"' in utc_form
+
+
+def _in_singapore(session) -> None:
+    session.execute(text("SET LOCAL TIME ZONE 'Asia/Singapore'"))
+    assert session.execute(text("SHOW TimeZone")).scalar_one() == "Asia/Singapore"
+
+
+def test_a_chain_written_and_verified_in_a_non_utc_session_stays_intact(session):
+    _in_singapore(session)
+    connection = session.connection()
+    first = record(session, actor="core", action="TZ_A", subject="s:1", detail={"i": 1})
+    second = executor_audit.record(connection, actor="executor", action="TZ_B", subject="s:2")
+    third = record(session, actor="core", action="TZ_C", subject="s:3")
+    session.commit()
+
+    assert first.at.utcoffset() == timedelta(hours=8)
+    assert second.at.utcoffset() == timedelta(hours=8)
+    assert second.prev_hash == bytes(first.hash)
+    assert bytes(third.prev_hash) == second.hash
+
+    in_utc = verify_chain(session)
+    session.rollback()
+    _in_singapore(session)
+    in_singapore = verify_chain(session)
+
+    assert in_utc["intact"] is True
+    assert in_singapore == in_utc
+    assert in_utc["head"] == bytes(third.hash).hex()
