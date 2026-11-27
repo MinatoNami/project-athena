@@ -1,6 +1,6 @@
 # Athena as a general security agent: implementation plan
 
-**Status:** Draft · **Version:** 0.2 · **Date:** 28 November 2026
+**Status:** Draft · **Version:** 0.3 · **Date:** 28 November 2026
 **Related:** [Research, Nov 2026](RESEARCH_2026-11.md) · [PRD](../Athena%20—%20Product%20Requirements%20Document.md) · [Technical Design](TECHNICAL_DESIGN.md) · [Milestones](MILESTONES.md)
 
 ---
@@ -59,16 +59,16 @@ The README says M0. The code is about M3 complete, with slices of M4, M6 and M7;
 
 ## 2. Do now (this week)
 
-| Item | Reason |
-|---|---|
-| Build the node agent with Go 1.27.3 or later. Add a `toolchain go1.27.3` directive to `node/go.mod` and raise `go-version` in `.github/workflows/ci.yml`; both say 1.23 today. | Eight eMudhra intermediate CA keys were compromised in October 2026. Only Go 1.27.3 and 1.26.10 or later distrust them, and Go 1.25 and older get no fix. |
-| Pin every scanner image by version and digest. Trivy is already pinned at 0.76.2 in `core/athena/config.py`; the eMudhra mitigation first shipped in v0.76.1. Pin Syft to 1.57.x (`core/athena/scanners/syft.py` uses `anchore/syft:latest`) and the git image (`alpine/git:latest`, `core/athena/scanners/git.py`). | Unpinned images break the sandbox's pinning invariant. The git image also clones untrusted repositories with network access. |
-| Check KEV due-date handling against BOD 26-04. `_TABLE` in `core/athena/risk/deadline.py` hard-codes 3/14/60-day windows. Confirm them against CISA's own text and make them configurable. Make sure the feed's `dueDate` (stored as `kev_due_date` by `core/athena/intel/ingest.py`) wins when it is earlier. | The windows were confirmed only from secondary coverage, and some KEV due dates in November 2026 fell within 3 days. |
-| On every OSV `MAL-` hit, open a compromise-assessment task asking whether the package ran, and what it could reach. Rotation guidance already exists (`_malware_plan` in `core/athena/remediation/classify.py`) and malware is already critical. | The npm campaigns and the `agent-framework` stealer run at install or startup, so removing the package does not undo them. Workstream 3.2 later automates the assessment. |
-| Flag `.pth` files with executable `import` lines in repository scans. Allowlist known-benign ones (setuptools, editable installs) by content hash. Image layers are never extracted today, so the image side waits for 2.4. | The malicious `agent-framework` 1.26.1/1.26.2 ran from a `.pth` hook without ever being imported. |
-| Close findings whose component disappeared, but only when the scan that removed it was complete and successful for that scope. Today `record_components` in `core/athena/inventory/service.py` deletes the component and leaves its findings open. | An upgraded package's finding stays open forever. The completeness condition keeps the rule that not observed never means clean. |
-| Merge `main` into the working branches. `main` is 7 commits ahead: PR #1 refreshes the web lockfile; PR #2 clears lint errors, pins ruff and pytest, stops CI gating on `ruff format --check`, and fixes shellcheck findings. The merge brings back comment lines in `.github/workflows/ci.yml` and `core/pyproject.toml`; strip them again, keeping only functional `# shellcheck` directives. | Without it, CI on the feature branches runs a different gate from `main`. |
-| Update the README status line. | It still says M0. |
+| Item | Reason | Status, 28 November 2026 |
+|---|---|---|
+| Build the node agent with Go 1.27.3 or later. Add a `toolchain go1.27.3` directive to `node/go.mod` and raise `go-version` in `.github/workflows/ci.yml`; both say 1.23 today. | Eight eMudhra intermediate CA keys were compromised in October 2026. Only Go 1.27.3 and 1.26.10 or later distrust them, and Go 1.25 and older get no fix. | **Done:** bab8e2b, aaaa7aa. Open: nothing. |
+| Pin every scanner image by version and digest. Trivy is already pinned at 0.76.2 in `core/athena/config.py`; the eMudhra mitigation first shipped in v0.76.1. Pin Syft to 1.57.x (`core/athena/scanners/syft.py` uses `anchore/syft:latest`) and the git image (`alpine/git:latest`, `core/athena/scanners/git.py`). | Unpinned images break the sandbox's pinning invariant. The git image also clones untrusted repositories with network access. | **Done:** 6899a8f. Open: their egress allowlists, in 0.10. |
+| Check KEV due-date handling against BOD 26-04. `_TABLE` in `core/athena/risk/deadline.py` hard-codes 3/14/60-day windows. Confirm them against CISA's own text and make them configurable. Make sure the feed's `dueDate` (stored as `kev_due_date` by `core/athena/intel/ingest.py`) wins when it is earlier. | The windows were confirmed only from secondary coverage, and some KEV due dates in November 2026 fell within 3 days. | **Done:** 968857d, 54d37fb. Open: nothing. |
+| On every OSV `MAL-` hit, open a compromise-assessment task asking whether the package ran, and what it could reach. Rotation guidance already exists (`_malware_plan` in `core/athena/remediation/classify.py`) and malware is already critical. | The npm campaigns and the `agent-framework` stealer run at install or startup, so removing the package does not undo them. Workstream 3.2 later automates the assessment. | **Done:** f7cbef1, 4520651, 804c5f7, ce4b85c. Open: automating the assessment, in 3.2. |
+| Flag `.pth` files with executable `import` lines in repository scans. Allowlist known-benign ones (setuptools, editable installs) by content hash. Image layers are never extracted today, so the image side waits for 2.4. | The malicious `agent-framework` 1.26.1/1.26.2 ran from a `.pth` hook without ever being imported. | **Done:** 993a130, 5a774dd. Open: the image side, in 2.4. |
+| Close findings whose component disappeared, but only when the scan that removed it was complete and successful for that scope. Today `record_components` in `core/athena/inventory/service.py` deletes the component and leaves its findings open. | An upgraded package's finding stays open forever. The completeness condition keeps the rule that not observed never means clean. | **Done:** 891ab47. Open: nothing. |
+| Merge `main` into the working branches. `main` is 7 commits ahead: PR #1 refreshes the web lockfile; PR #2 clears lint errors, pins ruff and pytest, stops CI gating on `ruff format --check`, and fixes shellcheck findings. The merge brings back comment lines in `.github/workflows/ci.yml` and `core/pyproject.toml`; strip them again, keeping only functional `# shellcheck` directives. | Without it, CI on the feature branches runs a different gate from `main`. | **Done:** 749dafc. Open: `main` has since gained 70e1400 and 35fd768 (PRs #3 and #4), not yet merged. |
+| Update the README status line. | It still says M0. | **Done:** 5fbbde9, abc0cce. Open: nothing. |
 
 ## 3. Phases
 
@@ -113,12 +113,14 @@ Extension patterns used below:
   - A replayed key returns the original response.
   - Break-glass writes an audit entry.
 - **Done when:** two users with different roles exist, and one cannot approve their own request.
+- **Status, 28 November 2026:** **Partial.** Route roles and step-up are done: 9c6e747, a3ba2f9, 5ed85db, ce4b85c, 48afb8b, a2f790f. TOTP (b7d200d), break-glass (7d07b91), user management (e0ace1f, cf23d01) and BFF CSRF protection (f3bce6c) have landed. Open: `Idempotency-Key` handling on mutating POSTs, and the self-approval check, which needs the approvals of 1.1.
 
 **0.2 Allowlist the jobs API.**
 
 - **Build:** `POST /jobs` (`core/athena/api/routers/jobs.py`) currently enqueues any registered kind with any payload. Replace that with an allowlist of user-enqueueable kinds, each with a payload schema and a required role.
 - **Tests:** a registry test that no kind naming a mutation (apply, rotate, block, isolate, revoke) is registered in core.
 - **Done when:** a non-allowlisted kind returns 403.
+- **Status, 28 November 2026:** **Done:** 204da3f. Open: nothing.
 
 **0.3 Least-privilege database roles.**
 
@@ -128,6 +130,7 @@ Extension patterns used below:
   - On existing installs the conditional grants in `core/athena/db/migrations/versions/0003_executor_role.py` already ran as no-ops, and 0003 grants only SELECT on `job` and INSERT on `audit_event` anyway. So migration `0022_roles_and_grants` re-grants explicitly, including SELECT and UPDATE on the new grants table.
 - **Touch:** `deploy/compose.yaml` (per-service credentials), `deploy/scripts/gen-secrets.sh`, and `athena doctor` failing when a role is missing.
 - **Tests:** connecting as each role, forbidden statements fail; for example, api cannot `DROP TRIGGER`, and the executor cannot write `finding`.
+- **Status, 28 November 2026:** **Not started.** Core still connects as the Postgres superuser.
 
 **0.4 A signer service and grants.**
 
@@ -138,6 +141,7 @@ Extension patterns used below:
   - The signer signs the canonical JSON that `GrantVerifier` checks.
 - **Touch:** a new service in `deploy/compose.yaml`; the grants table in migration 0022.
 - **Tests:** a sign and verify round trip; refusal of expired, replayed, wrong-target, wrong-key and dry-run-mismatched grants; the signer refuses an approval row inserted directly into the database without a matching step-up record.
+- **Status, 28 November 2026:** **Not started.** No service loads the grant private key yet.
 
 **0.5 Executor skeleton.**
 
@@ -151,6 +155,7 @@ Extension patterns used below:
   - A new `executor/tests/` suite.
   - A cross-implementation test in `core/tests/`, with the executor package installed as a test dependency, that hashes the same records both ways and requires identical chains.
 - **Done when:** a `noop` grant runs end to end with audit entries, `GET /audit/verify` passes, and the executor still imports without core.
+- **Status, 28 November 2026:** **Partial.** The action registry, plan-hash runner and stricter grant checks (1684834), the audit writer that extends core's chain (8cbdb05) and the parity test in CI (332e211) exist. Open: grant claiming and database wiring; `main.py` still idles.
 
 **0.6 Extend the boundary tests.** Extend `core/tests/test_boundaries.py`:
 
@@ -158,6 +163,8 @@ Extension patterns used below:
 - Executor action modules never import `athena`.
 - Only the signer references the private-key paths.
 - The investigation registry stays read-only. Strengthen `core/tests/test_investigation.py`, which checks only names today, to run every tool inside a read-only transaction with outbound network blocked and assert no writes and no remote calls.
+
+**Status, 28 November 2026:** **Partial.** The executor-side checks (3c0793b) and the registry's read-only behaviour (8b66132) are done. Open: the approval and remediation import checks, and the private-key path check, which waits for the signer in 0.4.
 
 **0.7 Kill switch and pause.**
 
@@ -168,8 +175,11 @@ Extension patterns used below:
 - **Why:** CrowdStrike's AI Kill Switch.
 - **Touch:** migration `0023_control_state`.
 - **Tests:** while halted, refusals are logged and queued work stays queued, never dropped.
+- **Status, 28 November 2026:** **In progress.** Nothing has landed yet.
 
 **0.8 CI coverage.** Run `python -m evals.harness --deterministic-only` (`core/evals/harness.py`) against CI Postgres; `core/evals/README.md` says it runs in CI, but it does not. Also run `npm test` in `web/` and the executor tests, on Go 1.27.3.
+
+**Status, 28 November 2026:** **Done:** aaaa7aa, 332e211. Open: nothing.
 
 **0.9 Fixture estate.** A reproducible compose profile beside `deploy/compose.yaml`, with known ground truth for every later acceptance test:
 
@@ -178,7 +188,11 @@ Extension patterns used below:
 - an inert sample of a malicious package;
 - a host profile for the node agent.
 
+**Status, 28 November 2026:** **Done:** e51d187. Open: nothing.
+
 **0.10 Sandbox egress.** Give each networked sandbox (the git clone and the Syft image scan) an explicit egress allowlist and record its connections. Any later networked scanner must follow the same pattern.
+
+**Status, 28 November 2026:** **Not started.**
 
 ### Phase 1: Close the trust loop
 
