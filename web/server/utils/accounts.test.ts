@@ -8,6 +8,7 @@ import {
   roleHint,
   roleLabel,
   showsAdminNav,
+  stepUpReady,
   totpSecretFromUri,
 } from '../../utils/accounts.ts'
 
@@ -64,4 +65,14 @@ test('the secret is read from a provisioning URI', () => {
   assert.equal(totpSecretFromUri(uri), 'JBSWY3DPEHPK3PXP')
   assert.equal(totpSecretFromUri('otpauth://totp/Athena:a?issuer=Athena'), null)
   assert.equal(totpSecretFromUri('not a uri'), null)
+})
+
+test('step-up needs a password, and a six-digit code only when MFA is on', () => {
+  assert.equal(stepUpReady('', '', false), false)
+  assert.equal(stepUpReady('pw', '', false), true)
+  assert.equal(stepUpReady('pw', '', true), false)
+  assert.equal(stepUpReady('pw', '12345', true), false)
+  assert.equal(stepUpReady('pw', '12a456', true), false)
+  assert.equal(stepUpReady('pw', ' 123456 ', true), true)
+  assert.equal(stepUpReady('', '123456', true), false)
 })

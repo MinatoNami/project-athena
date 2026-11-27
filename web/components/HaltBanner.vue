@@ -117,10 +117,10 @@ function resume() {
       </label>
       <label v-if="props.mfaEnabled">
         Authenticator code
-        <input v-model="totpCode" class="mono" inputmode="numeric" autocomplete="one-time-code" maxlength="8" />
+        <input v-model="totpCode" class="mono" inputmode="numeric" autocomplete="one-time-code" maxlength="6" />
       </label>
       <div class="actions">
-        <button class="btn primary" :disabled="busy || !password || (props.mfaEnabled && !totpCode)"
+        <button class="btn primary" :disabled="busy || !stepUpReady(password, totpCode, props.mfaEnabled)"
                 @click="confirmIdentity">Confirm</button>
         <button class="btn" :disabled="busy" @click="cancelIdentity">Cancel</button>
       </div>

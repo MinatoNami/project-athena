@@ -40,6 +40,13 @@ export function isStepUpRequired(e: any): boolean {
   return e?.statusCode === 403 && STEP_UP_DETAILS.has(e?.data?.detail)
 }
 
+const TOTP_CODE = /^\d{6}$/
+
+export function stepUpReady(password: string, totpCode: string, mfaEnabled: boolean): boolean {
+  if (!password) return false
+  return !mfaEnabled || TOTP_CODE.test(totpCode.trim())
+}
+
 export function errorDetail(e: any, fallback: string): string {
   const detail = e?.data?.detail
   return typeof detail === 'string' && detail ? detail : fallback
