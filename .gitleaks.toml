@@ -8,3 +8,7 @@ paths = ['''core/tests/test_egress\.py''']
 [[allowlists]]
 description = "Test-only database password, labelled as such, used by CI"
 regexes = ['''test-only-not-a-secret''']
+
+[[allowlists]]
+description = "Inert fake secrets planted in the fixture estate for Athena to find"
+paths = ['''deploy/fixtures/repo/''']

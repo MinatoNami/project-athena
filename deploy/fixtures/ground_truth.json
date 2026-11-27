@@ -1,0 +1,41 @@
+{
+  "estate": "athena-fixture-estate",
+  "version": 1,
+  "assets": {
+    "repo": {"kind": "repository", "path": "deploy/fixtures/repo"},
+    "host": {"kind": "host", "identity_key": "host:fixture-focal-01", "profile": "deploy/fixtures/host/profile.json"},
+    "image-nginx": {"kind": "image", "service": "fixture-nginx", "reference": "nginx:1.18.0", "digest": "sha256:e90ac5331fe095cea01b121a3627174b2e33e06e83720e9a934c7b8ccc9c55a0"},
+    "image-python": {"kind": "image", "service": "fixture-python", "reference": "python:3.8.0-slim-buster", "digest": "sha256:8e243f41e500238f78f7a29a81656114d3fe603d5c34079a462d090f71c4b225"}
+  },
+  "manifests": [
+    {"asset": "repo", "path": "requirements.txt", "ecosystem": "pypi", "declared": 4},
+    {"asset": "repo", "path": "package.json", "ecosystem": "npm", "declared": 2}
+  ],
+  "findings": [
+    {"asset": "repo", "kind": "vulnerability", "id": "GHSA-x84v-xcm2-53pg", "aliases": ["CVE-2018-18074"], "component": {"ecosystem": "pypi", "name": "requests", "version": "2.19.1"}, "path": "requirements.txt", "fixed": "2.20.0", "classification": "affected"},
+    {"asset": "repo", "kind": "vulnerability", "id": "GHSA-mh33-7rrq-662w", "aliases": ["CVE-2019-11324"], "component": {"ecosystem": "pypi", "name": "urllib3", "version": "1.24.1"}, "path": "requirements.txt", "fixed": "1.24.2", "classification": "affected"},
+    {"asset": "repo", "kind": "vulnerability", "id": "GHSA-6757-jp84-gxfx", "aliases": ["CVE-2020-1747"], "component": {"ecosystem": "pypi", "name": "pyyaml", "version": "5.3"}, "path": "requirements.txt", "fixed": "5.3.1", "classification": "affected"},
+    {"asset": "repo", "kind": "malware", "id": "MAL-2026-20101", "aliases": [], "component": {"ecosystem": "pypi", "name": "agent-framework", "version": "1.26.1"}, "path": "requirements.txt", "fixed": null, "classification": "malicious"},
+    {"asset": "repo", "kind": "vulnerability", "id": "GHSA-p6mc-m468-83gw", "aliases": ["CVE-2020-8203"], "component": {"ecosystem": "npm", "name": "lodash", "version": "4.17.15"}, "path": "package-lock.json", "fixed": "4.17.19", "classification": "affected"},
+    {"asset": "repo", "kind": "vulnerability", "id": "GHSA-vh95-rmgr-6w4m", "aliases": ["CVE-2020-7598"], "component": {"ecosystem": "npm", "name": "minimist", "version": "1.2.0"}, "path": "package-lock.json", "fixed": "1.2.3", "classification": "affected"},
+    {"asset": "repo", "kind": "secret", "id": "aws-access-token", "aliases": [], "component": null, "path": "config/settings.ini", "line": 2, "fixed": null, "classification": "inert_fake_secret"},
+    {"asset": "repo", "kind": "secret", "id": "github-pat", "aliases": [], "component": null, "path": "config/settings.ini", "line": 5, "fixed": null, "classification": "inert_fake_secret"},
+    {"asset": "repo", "kind": "pth_hook", "id": "pth-executable-import", "aliases": [], "component": null, "path": "site-packages/fixture_startup_hook.pth", "line": 1, "fixed": null, "classification": "suspicious"},
+    {"asset": "repo", "kind": "pth_hook", "id": "pth-path-entry", "aliases": [], "component": null, "path": "site-packages/fixture_vendor_paths.pth", "line": 1, "fixed": null, "classification": "benign"},
+    {"asset": "host", "kind": "vulnerability", "id": "CVE-2021-3156", "aliases": ["USN-4705-1"], "component": {"ecosystem": "deb", "name": "sudo", "version": "1.8.31-1ubuntu1"}, "fixed": "1.8.31-1ubuntu1.2", "classification": "affected"},
+    {"asset": "host", "kind": "vulnerability", "id": "CVE-2021-23017", "aliases": ["USN-4967-1"], "component": {"ecosystem": "deb", "name": "nginx", "version": "1.18.0-0ubuntu1"}, "fixed": "1.18.0-0ubuntu1.2", "classification": "affected"},
+    {"asset": "host", "kind": "vulnerability", "id": "CVE-2022-0778", "aliases": ["USN-5328-1"], "component": {"ecosystem": "deb", "name": "openssl", "version": "1.1.1f-1ubuntu2.16"}, "fixed": "1.1.1f-1ubuntu2.12", "classification": "not_affected_backport"},
+    {"asset": "image-nginx", "kind": "vulnerability", "id": "CVE-2021-23017", "aliases": [], "component": {"ecosystem": "deb", "name": "nginx", "version": "1.18.0-1~buster"}, "fixed": "1.20.1", "classification": "affected"},
+    {"asset": "image-python", "kind": "vulnerability", "id": "CVE-2020-8492", "aliases": [], "component": {"ecosystem": "generic", "name": "python", "version": "3.8.0"}, "fixed": "3.8.2", "classification": "affected"}
+  ],
+  "host_expectations": {
+    "listening": [
+      {"port": 22, "process": "sshd", "exposure": "internal"},
+      {"port": 80, "process": "nginx", "exposure": "internal"},
+      {"port": 5432, "process": "postgres", "exposure": "isolated"},
+      {"port": 18080, "process": "docker-proxy", "exposure": "isolated"}
+    ],
+    "containers": ["athena-fixture-nginx-1", "athena-fixture-python-1"],
+    "images": ["image-nginx", "image-python"]
+  }
+}
