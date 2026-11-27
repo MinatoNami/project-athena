@@ -102,7 +102,7 @@ Every data-bound component renders four distinct states: loading, empty, error, 
 /assets[/id]          inventory, graph, components, freshness, relationships
 /patrols              runs, schedules, coverage report
 /intel                advisories, feed health and age
-/code                 secrets and misconfigurations in repositories, with coverage
+/code                 secrets, misconfigurations and start-up hooks in repositories, with coverage
 /metrics              §7
 /chat                 natural-language interface, cited
 /audit                trail + hash-chain verification
