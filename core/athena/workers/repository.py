@@ -15,7 +15,7 @@ from athena.inventory.service import (
     record_components,
     start_scan,
 )
-from athena.queue import publish
+from athena.queue import enqueue, publish
 from athena.queue.registry import handler
 from athena.scanners import manifests, misconfig, secrets, startup_hooks, syft
 from athena.scanners.git import CheckoutError, clone, remove_checkout
@@ -109,6 +109,13 @@ def scan_repository(payload: dict[str, Any]) -> dict[str, Any]:
             detail={"components": count, "status": status, "commit": commit[:12]},
         )
         publish(session, topic="assets", subject_id=str(asset_id))
+        enqueue(
+            session,
+            kind="correlate.asset",
+            key=f"{asset_id}:repository-scan",
+            payload={"asset_id": str(asset_id)},
+            priority=4,
+        )
 
     log.info(
         "repository.scanned", asset=display, components=count, status=status,

@@ -99,6 +99,8 @@ def open_compromise_assessments(
     *,
     vulnerability_id: str | None = None,
     asset_id: Any = None,
+    states: tuple[str, ...] | None = None,
+    limit: int | None = None,
 ) -> int:
     candidates = (
         select(Finding.id)
@@ -115,6 +117,10 @@ def open_compromise_assessments(
         candidates = candidates.where(Finding.vulnerability_id == vulnerability_id)
     if asset_id is not None:
         candidates = candidates.where(Finding.asset_id == asset_id)
+    if states is not None:
+        candidates = candidates.where(Finding.state.in_(states))
+    if limit is not None:
+        candidates = candidates.order_by(Finding.first_seen, Finding.id).limit(limit)
 
     opened = 0
     for finding_id in session.execute(candidates).scalars().all():

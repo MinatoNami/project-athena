@@ -36,6 +36,8 @@ NONCE_SWEEP_INTERVAL = 300
 CORRELATION_SWEEP_INTERVAL = 300
 IMAGE_SWEEP_INTERVAL = 600
 TRIAGE_SWEEP_INTERVAL = 120
+COMPROMISE_SWEEP_INTERVAL = 600
+COMPROMISE_SWEEP_BATCH = 50
 
 
 def _acquire_leadership(session) -> bool:
@@ -192,6 +194,21 @@ def _sweep_images(session, last_run: dict[str, float], now: float) -> None:
         log.info("scheduler.image_scans", queued=len(rows))
 
 
+def _sweep_compromise_assessments(session, last_run: dict[str, float], now: float) -> None:
+    if now - last_run.get("compromise-sweep", 0) < COMPROMISE_SWEEP_INTERVAL:
+        return
+    last_run["compromise-sweep"] = now
+
+    from athena.correlation.engine import OPEN_STATES
+    from athena.investigation.compromise import open_compromise_assessments
+
+    opened = open_compromise_assessments(
+        session, states=OPEN_STATES, limit=COMPROMISE_SWEEP_BATCH
+    )
+    if opened:
+        log.info("scheduler.compromise_assessments_opened", opened=opened)
+
+
 def _sweep_nonces(session, last_run: dict[str, float], now: float) -> None:
     if now - last_run.get("nonce-sweep", 0) < NONCE_SWEEP_INTERVAL:
         return
@@ -231,6 +248,7 @@ def run() -> None:
                 _sweep_correlation(session, last_run, now)
                 _sweep_images(session, last_run, now)
                 _sweep_triage(session, last_run, now)
+                _sweep_compromise_assessments(session, last_run, now)
                 for name, interval, kind, payload in SCHEDULE:
                     if now - last_run.get(name, 0) < interval:
                         continue
