@@ -19,9 +19,12 @@ remediation while keeping a human in control of every change.
 
 ## Status
 
-**M0 — Foundations.** The deployable skeleton with its security boundaries in place.
-Inventory (M1), correlation (M2), investigation (M3), remediation (M4), and the
-approval loop (M5) follow. See [MILESTONES.md](docs/MILESTONES.md).
+**About M3 complete, with slices of M4, M6 and M7.** Inventory, intel, correlation,
+risk scoring and grounded investigation are built, with suppression, exports and
+repository secret and misconfiguration scans; remediation (M4) is only a plan per
+finding class, and the approval loop (M5) is absent, so Athena cannot yet change
+anything. See [MILESTONES.md](docs/MILESTONES.md) and the
+[security agent plan](docs/SECURITY_AGENT_PLAN.md).
 
 ## Layout
 
