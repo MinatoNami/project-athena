@@ -103,7 +103,42 @@ def test_identity_survives_lines_moving_within_the_file():
     assert before.fingerprint == after.fingerprint and after.line == 3
 
 
-def test_a_tree_walk_finds_hooks_skips_allowlisted_and_never_follows_links(tmp_path):
+@pytest.mark.parametrize(
+    ("name", "content", "shape"),
+    [
+        ("distutils-precedence.pth", DISTUTILS_PRECEDENCE, "distutils-precedence"),
+        ("__editable__.demo_pkg-0.1.0.pth", EDITABLE_FINDER, "editable-install finder"),
+    ],
+)
+def test_a_known_hook_shape_is_still_reported_as_low(name, content, shape):
+    reason = startup_hooks.benign_reason(name, content)
+    found = startup_hooks.observations_for(f"site/{name}", content, known_hook=reason)
+    assert len(found) == 1
+    obs = found[0]
+    assert obs.kind == "startup-hook" and obs.severity == "low"
+    assert obs.rule_id == "pth-known-hook"
+    assert shape in obs.detail["expected_benign_shape"]
+    assert obs.detail["file_sha256"] == hashlib.sha256(content).hexdigest()
+
+
+def test_a_known_hook_never_shares_an_identity_with_a_high_finding():
+    low = startup_hooks.observations_for("a.pth", EDITABLE_FINDER, known_hook="finder")[0]
+    high = startup_hooks.observations_for("a.pth", EDITABLE_FINDER)[0]
+    assert low.fingerprint != high.fingerprint and high.severity == "high"
+
+
+def test_a_malicious_hook_named_like_an_editable_install_stays_high(tmp_path):
+    (tmp_path / "__editable__.evil-1.pth").write_bytes(MALICIOUS)
+    (tmp_path / "distutils-precedence.pth").write_bytes(DISTUTILS_PRECEDENCE + b"import os\n")
+    found = startup_hooks.scan_tree(tmp_path)
+    assert {(o.path, o.severity, o.rule_id) for o in found.observations} == {
+        ("__editable__.evil-1.pth", "high", "pth-executable-import"),
+        ("distutils-precedence.pth", "high", "pth-executable-import"),
+    }
+    assert found.allowlisted == []
+
+
+def test_a_tree_walk_reports_known_hooks_low_and_never_follows_links(tmp_path):
     site = tmp_path / ".venv" / "lib" / "site-packages"
     site.mkdir(parents=True)
     (site / "distutils-precedence.pth").write_bytes(DISTUTILS_PRECEDENCE)
@@ -118,7 +153,11 @@ def test_a_tree_walk_finds_hooks_skips_allowlisted_and_never_follows_links(tmp_p
 
     found = startup_hooks.scan_tree(tmp_path)
 
-    assert [o.path for o in found.observations] == [".venv/lib/site-packages/evil.pth"]
+    assert sorted((o.path, o.severity, o.rule_id) for o in found.observations) == [
+        (".venv/lib/site-packages/__editable__.demo_pkg-0.1.0.pth", "low", "pth-known-hook"),
+        (".venv/lib/site-packages/distutils-precedence.pth", "low", "pth-known-hook"),
+        (".venv/lib/site-packages/evil.pth", "high", "pth-executable-import"),
+    ]
     assert sorted(found.allowlisted) == [
         ".venv/lib/site-packages/__editable__.demo_pkg-0.1.0.pth",
         ".venv/lib/site-packages/distutils-precedence.pth",

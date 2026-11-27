@@ -15,7 +15,7 @@ _stop = threading.Event()
 
 def main() -> int:
     settings = ExecutorSettings()
-    verifier = GrantVerifier(settings.grant_public_key)
+    verifier = GrantVerifier(settings.grant_public_key, max_lifetime=settings.grant_max_lifetime)
     registry = default_registry()
 
     def handle(signum, _frame):

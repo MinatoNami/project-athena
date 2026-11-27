@@ -16,6 +16,7 @@ from athena_executor.canonical import canonical_json
 Clock = Callable[[], datetime]
 
 DEFAULT_CLOCK_SKEW = timedelta(seconds=30)
+DEFAULT_MAX_LIFETIME = timedelta(minutes=15)
 
 
 class GrantRejected(Exception):
@@ -53,13 +54,17 @@ class GrantVerifier:
         key_id: str | None = None,
         clock: Clock = utc_now,
         clock_skew: timedelta = DEFAULT_CLOCK_SKEW,
+        max_lifetime: timedelta = DEFAULT_MAX_LIFETIME,
     ) -> None:
+        if max_lifetime <= timedelta(0):
+            raise ValueError("max_lifetime must be positive")
         self._key = Ed25519PublicKey.from_public_bytes(public_key) if public_key else None
         if key_id is None and public_key:
             key_id = key_fingerprint(public_key)
         self.key_id = key_id
         self._clock = clock
         self._clock_skew = clock_skew
+        self._max_lifetime = max_lifetime
         self._seen_nonces: dict[str, datetime] = {}
         self._nonce_lock = threading.Lock()
 
@@ -85,6 +90,8 @@ class GrantVerifier:
         now = self._now()
         if verified.expires_at <= verified.issued_at:
             raise GrantRejected("grant expires before it is issued")
+        if verified.expires_at - verified.issued_at > self._max_lifetime:
+            raise GrantRejected("grant lifetime exceeds the executor maximum")
         if verified.issued_at > now + self._clock_skew:
             raise GrantRejected("grant is issued in the future")
         if now >= verified.expires_at:

@@ -179,3 +179,44 @@ def test_a_naive_clock_is_refused(signing_key):
     grant = grant_for(signing_key)
     with pytest.raises(GrantRejected, match="clock"):
         verifier.admit(grant, sign(signing_key, grant))
+
+
+def test_a_grant_living_longer_than_the_maximum_is_rejected(verifier, signing_key):
+    grant = grant_for(signing_key, expires_at=(NOW + timedelta(minutes=15)).isoformat())
+    with pytest.raises(GrantRejected, match="lifetime exceeds"):
+        verifier.admit(grant, sign(signing_key, grant))
+
+
+def test_a_grant_living_exactly_the_maximum_is_admitted(verifier, signing_key):
+    grant = grant_for(signing_key, expires_at=(NOW + timedelta(minutes=14)).isoformat())
+    assert verifier.verify(grant, sign(signing_key, grant)) is True
+
+
+def test_the_maximum_lifetime_is_configurable(signing_key, clock):
+    verifier = GrantVerifier(
+        raw_public(signing_key), clock=clock, max_lifetime=timedelta(minutes=5)
+    )
+    grant = grant_for(signing_key)
+    with pytest.raises(GrantRejected, match="lifetime exceeds"):
+        verifier.admit(grant, sign(signing_key, grant))
+
+
+def test_a_rejected_lifetime_does_not_spend_its_nonce(verifier, signing_key):
+    too_long = grant_for(signing_key, expires_at=(NOW + timedelta(hours=1)).isoformat())
+    assert verifier.verify(too_long, sign(signing_key, too_long)) is False
+    grant = grant_for(signing_key)
+    assert verifier.verify(grant, sign(signing_key, grant)) is True
+
+
+def test_a_non_positive_maximum_lifetime_is_refused(signing_key):
+    with pytest.raises(ValueError):
+        GrantVerifier(raw_public(signing_key), max_lifetime=timedelta(0))
+
+
+def test_the_executor_settings_carry_the_maximum_lifetime(monkeypatch):
+    from athena_executor.config import ExecutorSettings
+
+    monkeypatch.delenv("ATHENA_GRANT_MAX_LIFETIME_SECONDS", raising=False)
+    assert ExecutorSettings().grant_max_lifetime == timedelta(minutes=15)
+    monkeypatch.setenv("ATHENA_GRANT_MAX_LIFETIME_SECONDS", "120")
+    assert ExecutorSettings().grant_max_lifetime == timedelta(minutes=2)

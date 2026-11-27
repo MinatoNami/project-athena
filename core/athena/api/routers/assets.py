@@ -467,6 +467,10 @@ def _scan_offer(session: Session, asset: Asset) -> ScanOffer:
     )
 
 
+def scan_job_key(asset: Asset) -> str:
+    return f"{asset.id}:{datetime.now(UTC).isoformat(timespec='seconds')}"
+
+
 @router.post("/assets/{asset_id}/scan", status_code=status.HTTP_202_ACCEPTED)
 def rescan(
     asset_id: str,
@@ -487,7 +491,7 @@ def rescan(
     job = enqueue(
         session,
         kind=offer.action,
-        key=f"{asset.id}:{datetime.now(UTC).isoformat(timespec='seconds')}",
+        key=scan_job_key(asset),
         payload={"asset_id": str(asset.id)},
         priority=3,
     )

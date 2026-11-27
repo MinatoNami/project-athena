@@ -9,9 +9,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from athena.api.deps import OPERATE_ROLES, Principal, can_operate, can_read, db
-from athena.api.routers.assets import SCAN_JOBS
+from athena.api.routers.assets import SCAN_JOBS, _scan_offer, scan_job_key
 from athena.audit import record, record_isolated
-from athena.db.models import Job
+from athena.db.models import Asset, Job
 from athena.queue import (
     enqueue,
     handlers,  # noqa: F401
@@ -51,7 +51,6 @@ USER_ENQUEUEABLE: dict[str, Enqueueable] = {
 
 class EnqueueRequest(BaseModel):
     kind: str = Field(min_length=1, max_length=100)
-    key: str = Field(min_length=1, max_length=200)
     payload: dict = Field(default_factory=dict)
     priority: int = Field(default=5, ge=0, le=9)
 
@@ -129,15 +128,39 @@ def create_job(
             exc.errors(include_url=False, include_context=False, include_input=False),
         ) from None
 
+    asset = session.get(Asset, payload.asset_id)
+    if asset is None:
+        raise _refuse(
+            principal, body.kind, "no such asset", status.HTTP_404_NOT_FOUND, "No such asset"
+        )
+    if asset.tombstoned_at is not None:
+        raise _refuse(
+            principal,
+            body.kind,
+            "asset tombstoned",
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "This asset is tombstoned, so it is not scanned",
+        )
+    offer = _scan_offer(session, asset)
+    if offer.action != body.kind:
+        raise _refuse(
+            principal,
+            body.kind,
+            "kind does not fit the asset",
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            offer.reason or f"Job kind {body.kind!r} does not scan a {asset.kind} asset",
+        )
+
+    key = scan_job_key(asset)
     job = enqueue(
         session,
         kind=body.kind,
-        key=body.key,
+        key=key,
         payload=payload.model_dump(mode="json"),
         priority=body.priority,
     )
     if job is None:
-        return {"deduplicated": True, "kind": body.kind, "key": body.key}
+        return {"deduplicated": True, "kind": body.kind, "key": key}
 
     record(
         session,
