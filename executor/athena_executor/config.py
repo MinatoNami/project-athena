@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,6 +17,7 @@ class ExecutorSettings(BaseSettings):
     db_password_file: str | None = None
 
     grant_public_key_file: str | None = None
+    grant_max_lifetime_seconds: int = Field(default=900, gt=0)
 
     @property
     def grant_public_key(self) -> bytes | None:
@@ -22,3 +25,7 @@ class ExecutorSettings(BaseSettings):
             return None
         p = Path(self.grant_public_key_file)
         return p.read_bytes() if p.exists() else None
+
+    @property
+    def grant_max_lifetime(self) -> timedelta:
+        return timedelta(seconds=self.grant_max_lifetime_seconds)
