@@ -343,6 +343,7 @@ const tabs = [
         v-if="canOperateInvestigations(me)"
         :finding-id="String(route.params.id)"
         :mfa-enabled="!!me?.mfa_enabled"
+        :held="data?.investigation_held === true"
         @changed="refresh()"
       />
 

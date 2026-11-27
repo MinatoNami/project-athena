@@ -3,6 +3,8 @@ import { test } from 'node:test'
 import {
   canOperateInvestigations,
   haltAttribution,
+  investigationActions,
+  investigationHoldStatus,
   isHaltReasonValid,
   parseHaltState,
 } from '../../utils/control.ts'
@@ -56,4 +58,14 @@ test('the attribution survives a missing actor or an unreadable time', () => {
     haltAttribution({ halted: true, reason: null, setBy: 'x', setAt: 'yesterday' }),
     'Set by x at yesterday',
   )
+})
+
+test('a held investigation offers unpause and cancel, never pause', () => {
+  assert.deepEqual(investigationActions(true), ['unpause', 'cancel'])
+  assert.equal(investigationHoldStatus(true), 'Investigation is paused.')
+})
+
+test('an investigation that is not held offers pause and cancel, never unpause', () => {
+  assert.deepEqual(investigationActions(false), ['pause', 'cancel'])
+  assert.equal(investigationHoldStatus(false), 'Investigation is not paused.')
 })
