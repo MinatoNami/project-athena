@@ -1,8 +1,21 @@
 export default defineEventHandler(async (event) => {
   const config = useRuntimeConfig()
+  const method = event.method
+
+  const refusal = crossSiteRefusal({
+    method,
+    origin: getHeader(event, 'origin'),
+    referer: getHeader(event, 'referer'),
+    requestedBy: getHeader(event, REQUESTED_BY_HEADER),
+    expectedOrigin: expectedOrigin(config.dashboardOrigin, getRequestURL(event).origin),
+  })
+  if (refusal) {
+    setResponseStatus(event, 403)
+    return { detail: refusal }
+  }
+
   const path = getRouterParam(event, 'path') || ''
   const target = `${config.athenaApiUrl}/api/v1/${path}${getRequestURL(event).search}`
-  const method = event.method
 
   const cookie = getHeader(event, 'cookie')
   const body =
