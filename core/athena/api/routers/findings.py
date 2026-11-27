@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from athena.api.deps import Principal, current_principal, db
+from athena.api.deps import Principal, can_operate, can_read, db
 from athena.api.routers.exports import is_uuid
 from athena.audit import record
 from athena.config import get_settings
@@ -69,7 +69,7 @@ def list_findings(
     sort: str = "risk",
     cursor: str | None = None,
     limit: int = Query(default=DEFAULT_LIMIT, le=MAX_LIMIT),
-    _: Principal = Depends(current_principal),
+    _: Principal = Depends(can_read),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     if sort not in SORTS:
@@ -146,7 +146,7 @@ def list_findings(
 @router.get("/findings/{finding_id}")
 def get_finding(
     finding_id: str,
-    _: Principal = Depends(current_principal),
+    _: Principal = Depends(can_read),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     row = session.execute(
@@ -454,7 +454,7 @@ def _investigation_of(session: Session, finding: Finding) -> dict[str, Any] | No
 
 @router.get("/intel/sources")
 def intel_sources(
-    _: Principal = Depends(current_principal), session: Session = Depends(db)
+    _: Principal = Depends(can_read), session: Session = Depends(db)
 ) -> dict[str, Any]:
     sources = source_health(session)
     total = session.execute(select(func.count()).select_from(Vulnerability)).scalar_one()
@@ -493,7 +493,7 @@ def intel_sources(
 
 @router.get("/ai/status")
 def ai_status(
-    _: Principal = Depends(current_principal), session: Session = Depends(db)
+    _: Principal = Depends(can_read), session: Session = Depends(db)
 ) -> dict[str, Any]:
     from sqlalchemy import func as sqlfunc
 
@@ -543,7 +543,7 @@ def ai_status(
 
 @router.post("/intel/refresh", status_code=status.HTTP_202_ACCEPTED)
 def refresh_intel(
-    principal: Principal = Depends(current_principal),
+    principal: Principal = Depends(can_operate),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     from athena.intel.feeds import DEFAULT_ECOSYSTEMS

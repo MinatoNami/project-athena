@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from athena.api.deps import Principal, current_principal, db
+from athena.api.deps import Principal, can_operate, can_read, db
 from athena.audit import record
 from athena.db.models import (
     Asset,
@@ -90,7 +90,7 @@ def _serialise(asset: Asset, *, component_count: int | None = None) -> dict[str,
 def list_assets(
     kind: str | None = None,
     limit: int = Query(default=100, le=500),
-    _: Principal = Depends(current_principal),
+    _: Principal = Depends(can_read),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     stmt = select(Asset).where(Asset.tombstoned_at.is_(None)).order_by(Asset.display_name)
@@ -114,7 +114,7 @@ def list_assets(
 @router.post("/assets/repositories", status_code=status.HTTP_201_CREATED)
 def register_repository(
     body: RegisterRepository,
-    principal: Principal = Depends(current_principal),
+    principal: Principal = Depends(can_operate),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     try:
@@ -169,7 +169,7 @@ def _family(asset: Asset) -> tuple[str, str]:
 
 @router.get("/assets/unclassified")
 def unclassified(
-    _: Principal = Depends(current_principal),
+    _: Principal = Depends(can_read),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     assets = session.execute(
@@ -291,7 +291,7 @@ def _exposure_evidence(session: Session, assets: list[Asset]) -> dict[Any, list[
 @router.get("/assets/{asset_id}")
 def get_asset(
     asset_id: str,
-    _: Principal = Depends(current_principal),
+    _: Principal = Depends(can_read),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     asset = session.get(Asset, asset_id)
@@ -367,7 +367,7 @@ def get_asset(
 def update_asset(
     asset_id: str,
     body: UpdateAsset,
-    principal: Principal = Depends(current_principal),
+    principal: Principal = Depends(can_operate),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     asset = session.get(Asset, asset_id)
@@ -468,7 +468,7 @@ def _scan_offer(session: Session, asset: Asset) -> ScanOffer:
 @router.post("/assets/{asset_id}/scan", status_code=status.HTTP_202_ACCEPTED)
 def rescan(
     asset_id: str,
-    principal: Principal = Depends(current_principal),
+    principal: Principal = Depends(can_operate),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     asset = session.get(Asset, asset_id)
@@ -527,7 +527,7 @@ def _collect_from_host(
 
 @router.get("/coverage")
 def get_coverage(
-    _: Principal = Depends(current_principal),
+    _: Principal = Depends(can_read),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     return coverage(session)
@@ -536,7 +536,7 @@ def get_coverage(
 @router.post("/assets/classify")
 def classify(
     body: ClassifyRequest,
-    principal: Principal = Depends(current_principal),
+    principal: Principal = Depends(can_operate),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     for group in body.groups:
@@ -658,7 +658,7 @@ def _exempt_count(session: Session, asset_id: str | None) -> int:
 @router.get("/baseline")
 def baseline_status(
     asset_id: str | None = None,
-    _: Principal = Depends(current_principal),
+    _: Principal = Depends(can_read),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     baselined = session.execute(
@@ -679,7 +679,7 @@ def baseline_status(
 @router.post("/baseline")
 def capture_baseline(
     body: BaselineRequest,
-    principal: Principal = Depends(current_principal),
+    principal: Principal = Depends(can_operate),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     stmt = select(Asset).where(Asset.tombstoned_at.is_(None))
@@ -721,7 +721,7 @@ def capture_baseline(
 @router.delete("/baseline")
 def clear_baseline(
     asset_id: str | None = None,
-    principal: Principal = Depends(current_principal),
+    principal: Principal = Depends(can_operate),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     stmt = select(Asset).where(Asset.tombstoned_at.is_(None), Asset.baseline_at.is_not(None))

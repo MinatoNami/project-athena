@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from athena.api.deps import Principal, current_principal, db
+from athena.api.deps import Principal, can_read, db, operate_with_step_up
 from athena.db.models import Asset, Finding, Suppression
 from athena.suppression import (
     REASON_CODES,
@@ -59,7 +59,7 @@ def _serialise(session: Session, s: Suppression) -> dict[str, Any]:
 def list_suppressions(
     active_only: bool = True,
     limit: int = Query(default=100, le=500),
-    _: Principal = Depends(current_principal),
+    _: Principal = Depends(can_read),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     stmt = select(Suppression).order_by(Suppression.created_at.desc()).limit(limit)
@@ -76,7 +76,7 @@ def list_suppressions(
 def suppress(
     finding_id: str,
     body: SuppressRequest,
-    principal: Principal = Depends(current_principal),
+    principal: Principal = Depends(operate_with_step_up),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     finding = session.get(Finding, finding_id)
@@ -102,7 +102,7 @@ def suppress(
 @router.post("/suppressions/{suppression_id}/revoke")
 def revoke(
     suppression_id: str,
-    principal: Principal = Depends(current_principal),
+    principal: Principal = Depends(operate_with_step_up),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     suppression = session.get(Suppression, suppression_id)
@@ -118,7 +118,7 @@ def revoke(
 @router.get("/findings/{finding_id}/suppression")
 def suppression_for_finding(
     finding_id: str,
-    _: Principal = Depends(current_principal),
+    _: Principal = Depends(can_read),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     finding = session.get(Finding, finding_id)

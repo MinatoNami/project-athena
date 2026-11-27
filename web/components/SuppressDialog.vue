@@ -32,6 +32,8 @@ const scope = ref('finding')
 const until = ref('')
 const saving = ref(false)
 const failed = ref<string | null>(null)
+const confirming = ref(false)
+const password = ref('')
 
 const expiryRequired = computed(() => reasonCode.value === 'accepted_risk')
 const hint = computed(() => REASONS.find(r => r.code === reasonCode.value)?.hint ?? '')
@@ -68,6 +70,11 @@ async function submit() {
   saving.value = true
   failed.value = null
   try {
+    if (confirming.value) {
+      await stepUp(password.value)
+      password.value = ''
+      confirming.value = false
+    }
     await api(`findings/${props.findingId}/suppress`, {
       method: 'POST',
       body: {
@@ -79,6 +86,11 @@ async function submit() {
     })
     emit('done')
   } catch (e: any) {
+    if (needsStepUp(e)) {
+      confirming.value = true
+      failed.value = 'Confirm your password to save this suppression.'
+      return
+    }
     failed.value = e?.data?.detail ?? e?.message ?? 'The suppression was not saved.'
   } finally {
     saving.value = false
@@ -142,6 +154,11 @@ async function submit() {
             ? 'Required: an accepted risk with no review date is one nobody revisits.'
             : 'Leave empty to keep it until the premise changes or you revoke it.' }}
         </span>
+      </label>
+
+      <label v-if="confirming" class="field">
+        <span class="lbl">Password</span>
+        <input v-model="password" type="password" autocomplete="current-password" />
       </label>
 
       <p v-if="failed" class="failed">{{ failed }}</p>

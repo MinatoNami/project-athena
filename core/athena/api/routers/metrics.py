@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from athena.api.deps import Principal, current_principal, db
+from athena.api.deps import Principal, can_read, db
 from athena.metrics import all_metrics, sla_report
 
 router = APIRouter(tags=["metrics"])
@@ -13,7 +13,7 @@ router = APIRouter(tags=["metrics"])
 
 @router.get("/metrics")
 def metrics(
-    _: Principal = Depends(current_principal),
+    _: Principal = Depends(can_read),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     computed = all_metrics(session)

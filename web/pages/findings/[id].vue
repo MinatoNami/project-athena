@@ -32,10 +32,29 @@ async function suppressed() {
   await Promise.all([refresh(), refreshSuppression()])
 }
 
+const revokeConfirming = ref(false)
+const revokePassword = ref('')
+const revokeNote = ref<string | null>(null)
+
 async function revoke() {
   if (!suppression.value?.active) return
-  await api(`suppressions/${suppression.value.active.id}/revoke`, { method: 'POST' })
-  await Promise.all([refresh(), refreshSuppression()])
+  revokeNote.value = null
+  try {
+    if (revokeConfirming.value) {
+      await stepUp(revokePassword.value)
+      revokePassword.value = ''
+      revokeConfirming.value = false
+    }
+    await api(`suppressions/${suppression.value.active.id}/revoke`, { method: 'POST' })
+    await Promise.all([refresh(), refreshSuppression()])
+  } catch (e: any) {
+    if (needsStepUp(e)) {
+      revokeConfirming.value = true
+      revokeNote.value = 'Confirm your password to show it again.'
+      return
+    }
+    revokeNote.value = e?.data?.detail ?? e?.message ?? 'The suppression was not revoked.'
+  }
 }
 
 const inv = computed(() => data.value?.investigation)
@@ -285,6 +304,15 @@ const tabs = [
             {{ new Date(suppression.active.expires_at).toLocaleDateString() }}
           </template>
         </span>
+        <input
+          v-if="revokeConfirming"
+          v-model="revokePassword"
+          type="password"
+          autocomplete="current-password"
+          aria-label="Password"
+          style="margin-top:.5rem"
+        />
+        <p v-if="revokeNote" role="alert">{{ revokeNote }}</p>
         <button class="btn" style="margin-top:.5rem" @click="revoke">Show it again</button>
       </div>
 
