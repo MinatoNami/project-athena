@@ -17,5 +17,20 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'app_user' AND column_name = 'password_change_required'
+            ) THEN
+                UPDATE app_user SET disabled_at = now()
+                WHERE password_change_required AND disabled_at IS NULL;
+            END IF;
+        END
+        $$
+        """
+    )
     op.execute("ALTER TABLE app_user DROP COLUMN IF EXISTS password_change_required")
     op.execute("ALTER TABLE app_user DROP COLUMN IF EXISTS mfa_last_counter")

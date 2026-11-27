@@ -188,6 +188,40 @@ def test_an_invite_credential_expires_after_its_ttl(app, session, monkeypatch):
     assert _actions(session, invitee_id)[-1] == "SINGLE_USE_CREDENTIAL_EXPIRED"
 
 
+def test_migration_0021_downgrade_disables_pending_single_use_accounts(engine, session):
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import text
+
+    from tests.conftest import INTEGRATION_DSN
+
+    pending = User(
+        email=f"pending-{uuid.uuid4().hex[:8]}@example.com",
+        password_hash=A.hash_password(PASSWORD),
+        role="viewer",
+        password_change_required=True,
+    )
+    session.add(pending)
+    session.commit()
+    settled = _make_user(session, "viewer")
+    session.close()
+
+    cfg = Config("alembic.ini")
+    cfg.set_main_option("sqlalchemy.url", INTEGRATION_DSN)
+    command.downgrade(cfg, "0020")
+    try:
+        with engine.connect() as conn:
+            disabled = dict(
+                conn.execute(
+                    text("SELECT id, disabled_at IS NOT NULL FROM app_user WHERE id IN (:a, :b)"),
+                    {"a": pending.id, "b": settled.id},
+                ).all()
+            )
+    finally:
+        command.upgrade(cfg, "head")
+    assert disabled == {pending.id: True, settled.id: False}
+
+
 def test_set_role_disable_and_reset_mfa_are_applied_and_audited(app, session):
     admin = _make_user(session, "admin")
     target = _make_user(session, "viewer")
