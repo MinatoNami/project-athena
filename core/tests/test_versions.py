@@ -373,6 +373,10 @@ def test_semver_matches_spec_precedence(lower: str, higher: str) -> None:
         ("1-sp", "1-foo"),
         ("1-foo", "1-zebra"),
         ("1.0-alpha", "1.0-alpha-1"),
+        ("1", "1.sp"),
+        ("1", "1.foo"),
+        ("1.alpha", "1"),
+        ("1.snapshot", "1"),
     ],
 )
 def test_maven_matches_the_version_order_specification(lower: str, higher: str) -> None:

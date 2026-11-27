@@ -102,7 +102,7 @@ def _compare_tokens(a: _Token, b: _Token) -> int:
 
 
 def _padding_for(token: _Token) -> _Token:
-    return _Token(token.separator, 0 if token.separator == DOT else "")
+    return _Token(token.separator, 0 if token.numeric else "")
 
 
 def canonical_tokens(version: str) -> list[_Token]:
