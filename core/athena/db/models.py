@@ -38,6 +38,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="admin")
     mfa_secret: Mapped[str | None] = mapped_column(Text)
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    mfa_last_counter: Mapped[int | None] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
