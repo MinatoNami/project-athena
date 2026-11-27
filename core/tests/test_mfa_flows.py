@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import os
 import uuid
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
@@ -189,3 +190,80 @@ def test_a_code_used_in_one_session_is_refused_in_another(engine, session, accou
     finally:
         first.close()
         second.close()
+
+
+def _wrong_code(secret, at):
+    return "000000" if _code(secret, at) != "000000" else "111111"
+
+
+def _assert_locked(response):
+    assert response.status_code == 429
+    assert int(response.headers["Retry-After"]) > 0
+
+
+def test_login_locks_out_totp_after_repeated_failures(client, session, account, clock):
+    secret = _enrol(client, account, clock)
+    client.cookies.clear()
+    for _ in range(get_settings().mfa_lockout_failures):
+        assert _login(client, account.email, _wrong_code(secret, clock[0])).status_code == 401
+
+    clock[0] += totp.STEP_SECONDS
+    _assert_locked(_login(client, account.email, _code(secret, clock[0])))
+
+    session.expire_all()
+    assert session.get(User, account.id).mfa_last_counter != totp.counter_at(clock[0])
+    actions = _actions(session, account)
+    assert actions[-1] == "MFA_LOCKED_OUT"
+    assert "LOGIN" not in actions[actions.index("MFA_ENABLED") :]
+
+
+def test_step_up_locks_out_totp_after_repeated_failures(client, session, account, clock):
+    secret = _enrol(client, account, clock)
+    client.cookies.clear()
+    clock[0] += totp.STEP_SECONDS
+    assert _login(client, account.email, _code(secret, clock[0])).status_code == 200
+    for _ in range(get_settings().mfa_lockout_failures):
+        assert _step_up(client, account.email, _wrong_code(secret, clock[0])).status_code == 401
+
+    clock[0] += totp.STEP_SECONDS
+    _assert_locked(_step_up(client, account.email, _code(secret, clock[0])))
+    assert _actions(session, account)[-1] == "MFA_LOCKED_OUT"
+
+
+def test_confirm_locks_out_totp_after_repeated_failures(client, session, account, clock):
+    assert _login(client, account.email).status_code == 200
+    assert _step_up(client, account.email).status_code == 200
+    uri = client.post("/api/v1/auth/mfa/enrol").json()["provisioning_uri"]
+    secret = parse_qs(urlsplit(uri).query)["secret"][0]
+    for _ in range(get_settings().mfa_lockout_failures):
+        wrong = client.post(
+            "/api/v1/auth/mfa/confirm", json={"code": _wrong_code(secret, clock[0])}
+        )
+        assert wrong.status_code == 401
+
+    locked = client.post("/api/v1/auth/mfa/confirm", json={"code": _code(secret, clock[0])})
+    _assert_locked(locked)
+    session.expire_all()
+    assert session.get(User, account.id).mfa_enabled is False
+    assert _actions(session, account)[-1] == "MFA_LOCKED_OUT"
+
+
+def test_totp_lockout_ends_once_the_failures_age_out_of_the_window(
+    client, session, account, clock
+):
+    secret = _enrol(client, account, clock)
+    client.cookies.clear()
+    for _ in range(get_settings().mfa_lockout_failures - 1):
+        assert _login(client, account.email, _wrong_code(secret, clock[0])).status_code == 401
+    session.expire_all()
+    user = session.get(User, account.id)
+    assert A.mfa_lockout_retry_after(session, user) is None
+
+    assert _login(client, account.email, _wrong_code(secret, clock[0])).status_code == 401
+    now = datetime.now(UTC)
+    retry_after = A.mfa_lockout_retry_after(session, user, now=now)
+    window = get_settings().mfa_lockout_window_seconds
+    assert retry_after is not None and 0 < retry_after <= window
+
+    later = now + timedelta(seconds=window + 1)
+    assert A.mfa_lockout_retry_after(session, user, now=later) is None

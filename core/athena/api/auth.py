@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import secrets
 from datetime import UTC, datetime, timedelta
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from athena.api import totp
 from athena.audit import record
 from athena.config import get_settings
-from athena.db.models import BootstrapToken, Session_, User
+from athena.db.models import AuditEvent, BootstrapToken, Session_, User
 
 _hasher = PasswordHasher()
 
@@ -142,6 +143,45 @@ def validate_password_strength(password: str) -> str | None:
     if len(password) < MIN_PASSWORD_LENGTH:
         return f"Password must be at least {MIN_PASSWORD_LENGTH} characters."
     return None
+
+
+def mfa_lockout_retry_after(
+    session: Session, user: User, *, now: datetime | None = None
+) -> int | None:
+    settings = get_settings()
+    threshold = settings.mfa_lockout_failures
+    window = timedelta(seconds=settings.mfa_lockout_window_seconds)
+    if threshold <= 0:
+        return None
+    current = now or datetime.now(UTC)
+    since = current - window
+    last_seq_before_window = (
+        select(AuditEvent.seq)
+        .where(AuditEvent.at < since)
+        .order_by(AuditEvent.seq.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+    recent_failures = (
+        session.execute(
+            select(AuditEvent.at)
+            .where(
+                AuditEvent.seq > func.coalesce(last_seq_before_window, 0),
+                AuditEvent.at >= since,
+                AuditEvent.at <= current,
+                AuditEvent.action == "MFA_FAILED",
+                AuditEvent.subject == f"user:{user.id}",
+            )
+            .order_by(AuditEvent.seq.desc())
+            .limit(threshold)
+        )
+        .scalars()
+        .all()
+    )
+    if len(recent_failures) < threshold:
+        return None
+    unlocks_at = min(recent_failures) + window
+    return max(1, math.ceil((unlocks_at - current).total_seconds()))
 
 
 def verify_totp(session: Session, user: User, code: str | None) -> bool:
