@@ -14,6 +14,9 @@ TOOL_VERSION = "1"
 RULE_ID = "pth-executable-import"
 SEVERITY = "high"
 TITLE = "A .pth file runs code at every Python start-up"
+KNOWN_HOOK_RULE_ID = "pth-known-hook"
+KNOWN_HOOK_SEVERITY = "low"
+KNOWN_HOOK_TITLE = "A .pth file in a known tool's shape runs code at every Python start-up"
 
 EVIDENCE_LIMIT = 200
 MAX_BYTES = 1_000_000
@@ -84,20 +87,34 @@ def _evidence(text: str) -> dict[str, object]:
     }
 
 
-def observations_for(path: str, content: bytes) -> list[CodeObservation]:
+def observations_for(
+    path: str, content: bytes, *, known_hook: str | None = None
+) -> list[CodeObservation]:
     file_digest = sha256(content)
     out: list[CodeObservation] = []
     for hit in executable_lines(content):
+        if known_hook is None:
+            identity = f"{KIND}:{path}:{hit.text}"
+            detail = {**_evidence(hit.text), "file_sha256": file_digest}
+            rule_id, title, severity = RULE_ID, TITLE, SEVERITY
+        else:
+            identity = f"{KIND}:{KNOWN_HOOK_RULE_ID}:{path}:{hit.text}"
+            detail = {
+                **_evidence(hit.text),
+                "file_sha256": file_digest,
+                "expected_benign_shape": known_hook,
+            }
+            rule_id, title, severity = KNOWN_HOOK_RULE_ID, KNOWN_HOOK_TITLE, KNOWN_HOOK_SEVERITY
         out.append(
             CodeObservation(
                 kind=KIND,
-                rule_id=RULE_ID,
-                title=TITLE,
-                severity=SEVERITY,
+                rule_id=rule_id,
+                title=title,
+                severity=severity,
                 path=path,
                 line=hit.number,
-                fingerprint=sha256(f"{KIND}:{path}:{hit.text}".encode("utf-8", "replace")),
-                detail={**_evidence(hit.text), "file_sha256": file_digest},
+                fingerprint=sha256(identity.encode("utf-8", "replace")),
+                detail=detail,
             )
         )
     return out
@@ -131,8 +148,8 @@ def scan_tree(root: pathlib.Path) -> HookScan:
         if len(content) > MAX_BYTES:
             result.unread.append(relative)
             continue
-        if benign_reason(path.name, content):
+        known_hook = benign_reason(path.name, content)
+        if known_hook:
             result.allowlisted.append(relative)
-            continue
-        result.observations.extend(observations_for(relative, content))
+        result.observations.extend(observations_for(relative, content, known_hook=known_hook))
     return result
