@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -34,6 +35,8 @@ STEP_UP_ROUTES = {
     ("POST", "/api/v1/nodes/enrol-token"),
     ("DELETE", "/api/v1/nodes/{node_id}"),
 }
+
+MUTATION_WORDS = {"apply", "rotate", "block", "isolate", "revoke", "execute", "delete"}
 
 
 def _api_routes(app) -> list[tuple[str, str, APIRoute]]:
@@ -87,6 +90,24 @@ def test_the_most_sensitive_mutations_require_step_up():
     app = create_app()
     stepped = {(m, p) for m, p, route in _api_routes(app) if _requires_step_up(route)}
     assert stepped == STEP_UP_ROUTES
+
+
+def test_no_registered_job_kind_names_a_mutation():
+    from athena.api.routers import jobs  # noqa: F401
+    from athena.queue import known_kinds
+
+    for kind in known_kinds():
+        words = set(re.split(r"[._\-]", kind.lower()))
+        assert not words & MUTATION_WORDS, kind
+
+
+def test_the_jobs_allowlist_is_exactly_the_scan_jobs():
+    from athena.api.routers.assets import SCAN_JOBS
+    from athena.api.routers.jobs import USER_ENQUEUEABLE
+    from athena.queue import known_kinds
+
+    assert set(USER_ENQUEUEABLE) == set(SCAN_JOBS.values())
+    assert set(USER_ENQUEUEABLE) <= set(known_kinds())
 
 
 @pytest.fixture
@@ -233,3 +254,66 @@ def test_a_stranger_with_step_up_still_lacks_the_role(engine, people):
     response = _client(token).post("/api/v1/nodes/enrol-token", json={})
     assert response.status_code == 403
     assert response.json()["detail"] != STEP_UP_REQUIRED
+
+
+def test_jobs_refuses_a_kind_that_is_not_allowlisted(engine, people):
+    user_id, _, token = people["admin"]
+    response = _client(token).post(
+        "/api/v1/jobs", json={"kind": "system.echo", "key": "k", "payload": {}}
+    )
+    assert response.status_code == 403
+    assert _audited(engine, f"user:{user_id}", "JOB_REFUSED") >= 1
+
+
+def test_jobs_refuses_an_unregistered_kind(people):
+    response = _client(people["admin"][2]).post(
+        "/api/v1/jobs", json={"kind": "remediation.apply", "key": "k", "payload": {}}
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{}, {"asset_id": "not-a-uuid"}, {"asset_id": str(uuid.uuid4()), "command": "rm"}],
+)
+def test_jobs_refuses_a_bad_payload(engine, people, payload):
+    user_id, _, token = people["admin"]
+    before = _audited(engine, f"user:{user_id}", "JOB_REFUSED")
+    response = _client(token).post(
+        "/api/v1/jobs", json={"kind": "scan.image", "key": "k", "payload": payload}
+    )
+    assert response.status_code == 422
+    assert _audited(engine, f"user:{user_id}", "JOB_REFUSED") == before + 1
+
+
+def test_jobs_refuses_a_role_without_access(people):
+    response = _client(people["stranger"][2]).post(
+        "/api/v1/jobs",
+        json={"kind": "scan.image", "key": "k", "payload": {"asset_id": str(uuid.uuid4())}},
+    )
+    assert response.status_code == 403
+
+
+def test_jobs_accepts_an_allowlisted_kind(engine, people):
+    from sqlalchemy import delete
+    from sqlalchemy.orm import Session
+
+    from athena.db.models import Job
+
+    asset_id = str(uuid.uuid4())
+    key = f"authz-test-{uuid.uuid4().hex}"
+    response = _client(people["admin"][2]).post(
+        "/api/v1/jobs",
+        json={"kind": "scan.repository", "key": key, "payload": {"asset_id": asset_id}},
+    )
+    try:
+        assert response.status_code == 202, response.text
+        body = response.json()
+        assert body["kind"] == "scan.repository"
+        with Session(engine) as s:
+            job = s.get(Job, body["id"])
+            assert job.payload == {"asset_id": asset_id}
+    finally:
+        with Session(engine) as s:
+            s.execute(delete(Job).where(Job.key == key))
+            s.commit()
