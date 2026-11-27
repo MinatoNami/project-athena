@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     cookie_secure: bool = True
     session_idle_minutes: int = 30
     step_up_ttl_seconds: int = 300
+    mfa_lockout_failures: int = 5
+    mfa_lockout_window_seconds: int = 900
+    single_use_credential_ttl_hours: int = 72
 
     worker_concurrency: int = 4
     job_lease_seconds: int = 300

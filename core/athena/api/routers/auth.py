@@ -36,6 +36,23 @@ class MfaCodeRequest(BaseModel):
     code: str = Field(min_length=totp.DIGITS, max_length=16)
 
 
+def _refuse_while_mfa_locked(
+    session: Session, user: User, *, actor: str, stage: str, request: Request | None = None
+) -> None:
+    retry_after = A.mfa_lockout_retry_after(session, user)
+    if retry_after is None:
+        return
+    detail: dict = {"stage": stage, "retry_after_seconds": retry_after}
+    if request is not None:
+        detail["ip"] = request.client.host if request.client else None
+    record_isolated(actor=actor, action="MFA_LOCKED_OUT", subject=f"user:{user.id}", detail=detail)
+    raise HTTPException(
+        status.HTTP_429_TOO_MANY_REQUESTS,
+        "Too many failed authenticator codes; try again later",
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
 def _set_session_cookie(response: Response, token: str) -> None:
     response.set_cookie(
         A.SESSION_COOKIE,
@@ -112,6 +129,19 @@ def login(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
 
     assert user is not None
+    if user.password_change_required and A.single_use_credential_expired(session, user):
+        record_isolated(
+            actor="anonymous",
+            action="SINGLE_USE_CREDENTIAL_EXPIRED",
+            subject=f"user:{user.id}",
+            detail={"ip": request.client.host if request.client else None},
+        )
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "This single-use credential has expired; ask an admin for a new one",
+        )
+    if user.mfa_enabled:
+        _refuse_while_mfa_locked(session, user, actor="anonymous", stage="login", request=request)
     if user.mfa_enabled and not A.verify_totp(session, user, body.totp_code):
         record_isolated(
             actor="anonymous",
@@ -200,6 +230,8 @@ def step_up(
         )
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Re-authentication failed")
 
+    if principal.user.mfa_enabled:
+        _refuse_while_mfa_locked(session, principal.user, actor=principal.actor, stage="step_up")
     if principal.user.mfa_enabled and not A.verify_totp(
         session, principal.user, body.totp_code
     ):
@@ -253,6 +285,7 @@ def mfa_confirm(
     if user.mfa_enabled or not user.mfa_secret:
         raise HTTPException(status.HTTP_409_CONFLICT, "No pending MFA enrolment")
 
+    _refuse_while_mfa_locked(session, user, actor=principal.actor, stage="confirm")
     if not A.verify_totp(session, user, body.code):
         record_isolated(
             actor=principal.actor,

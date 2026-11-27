@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import re
 import secrets
 import struct
 import time
@@ -46,7 +47,7 @@ def matching_counter(
     key: bytes, code: str, *, last_counter: int | None, unix_seconds: float | None = None
 ) -> int | None:
     candidate = (code or "").strip().replace(" ", "")
-    if len(candidate) != DIGITS or not candidate.isdigit():
+    if not re.fullmatch(f"[0-9]{{{DIGITS}}}", candidate):
         return None
     now = counter_at(time.time() if unix_seconds is None else unix_seconds)
     matched: int | None = None

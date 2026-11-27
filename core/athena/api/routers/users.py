@@ -41,6 +41,23 @@ def _target(session: Session, principal: Principal, user_id: uuid.UUID) -> User:
     return user
 
 
+def _lock_active_admin_ids(session: Session) -> set[uuid.UUID]:
+    return set(
+        session.execute(
+            select(User.id)
+            .where(User.role == "admin", User.disabled_at.is_(None))
+            .order_by(User.id)
+            .with_for_update()
+        ).scalars()
+    )
+
+
+def _refuse_losing_the_last_admin(active_admin_ids: set[uuid.UUID], user: User) -> None:
+    if active_admin_ids - {user.id}:
+        return
+    raise HTTPException(status.HTTP_409_CONFLICT, "Athena must keep at least one active admin")
+
+
 def _revoke_sessions(session: Session, user: User) -> int:
     return session.execute(
         update(Session_)
@@ -103,7 +120,10 @@ def set_role(
     principal: Principal = Depends(administer_with_step_up),
     session: Session = Depends(db),
 ) -> dict:
+    active_admin_ids = _lock_active_admin_ids(session)
     user = _target(session, principal, user_id)
+    if user.id in active_admin_ids and body.role != "admin":
+        _refuse_losing_the_last_admin(active_admin_ids, user)
     previous = user.role
     user.role = body.role
     record(
@@ -122,7 +142,10 @@ def disable_user(
     principal: Principal = Depends(administer_with_step_up),
     session: Session = Depends(db),
 ) -> dict:
+    active_admin_ids = _lock_active_admin_ids(session)
     user = _target(session, principal, user_id)
+    if user.id in active_admin_ids:
+        _refuse_losing_the_last_admin(active_admin_ids, user)
     if user.disabled_at is None:
         user.disabled_at = datetime.now(UTC)
     revoked = _revoke_sessions(session, user)
