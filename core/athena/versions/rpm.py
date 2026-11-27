@@ -22,7 +22,7 @@ def _compare_fragment(a: str, b: str) -> int:
             continue
         if x == "^" or y == "^":
             if x != y:
-                return 1 if x == "^" else -1
+                return -1 if x == "^" else 1
             continue
 
         x_num, y_num = x.isdigit(), y.isdigit()

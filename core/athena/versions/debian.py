@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 _VERSION = re.compile(
-    r"^(?:(?P<epoch>\d+):)?(?P<upstream>[^:-]*?)(?:-(?P<revision>[^:-]+))?$"
+    r"^(?:(?P<epoch>\d+):)?(?P<upstream>[^:]*?)(?:-(?P<revision>[^:-]+))?$"
 )
 
 
