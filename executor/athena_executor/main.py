@@ -7,6 +7,7 @@ import structlog
 
 from athena_executor.config import ExecutorSettings
 from athena_executor.grants import GrantVerifier
+from athena_executor.registry import default_registry
 
 log = structlog.get_logger(__name__)
 _stop = threading.Event()
@@ -15,6 +16,7 @@ _stop = threading.Event()
 def main() -> int:
     settings = ExecutorSettings()
     verifier = GrantVerifier(settings.grant_public_key)
+    registry = default_registry()
 
     def handle(signum, _frame):
         log.info("executor.shutdown", signal=signum)
@@ -26,7 +28,8 @@ def main() -> int:
     log.info(
         "executor.start",
         verifier_ready=verifier.ready,
-        note="no execution capabilities registered until M5",
+        actions=sorted(registry.names()),
+        note="grant claiming is not wired yet",
     )
 
     while not _stop.is_set():
