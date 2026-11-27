@@ -173,9 +173,9 @@ Extension patterns used below:
   - Pause and cancel for a single investigation.
   - An admin route that requires step-up.
 - **Why:** CrowdStrike's AI Kill Switch.
-- **Touch:** migration `0023_control_state`.
+- **Touch:** migration `0022_control_state`.
 - **Tests:** while halted, refusals are logged and queued work stays queued, never dropped.
-- **Status, 28 November 2026:** **In progress.** Nothing has landed yet.
+- **Status, 28 November 2026:** **Partial:** 67713f4, d0f2b4a, 1a08cb3. The halt, per-finding pause and cancel, and the gateway and claim checks have landed, behind step-up routes. Open: the signer and executor checks (neither is wired to the database yet), and the dashboard banner.
 
 **0.8 CI coverage.** Run `python -m evals.harness --deterministic-only` (`core/evals/harness.py`) against CI Postgres; `core/evals/README.md` says it runs in CI, but it does not. Also run `npm test` in `web/` and the executor tests, on Go 1.27.3.
 
