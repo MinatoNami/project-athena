@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import Connection, text
@@ -37,7 +37,7 @@ def canonical(
 ) -> bytes:
     body = json.dumps(
         {
-            "at": at.isoformat(),
+            "at": at.astimezone(UTC).isoformat(),
             "actor": actor,
             "action": action,
             "subject": subject,
