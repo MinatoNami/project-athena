@@ -37,6 +37,7 @@ CORRELATION_SWEEP_INTERVAL = 300
 IMAGE_SWEEP_INTERVAL = 600
 TRIAGE_SWEEP_INTERVAL = 120
 COMPROMISE_SWEEP_INTERVAL = 600
+IDEMPOTENCY_SWEEP_INTERVAL = 3600
 COMPROMISE_SWEEP_BATCH = 50
 
 
@@ -230,6 +231,18 @@ def _sweep_nonces(session, last_run: dict[str, float], now: float) -> None:
         log.info("scheduler.nonces_swept", removed=removed)
 
 
+def _sweep_idempotency_keys(session, last_run: dict[str, float], now: float) -> None:
+    if now - last_run.get("idempotency-sweep", 0) < IDEMPOTENCY_SWEEP_INTERVAL:
+        return
+    last_run["idempotency-sweep"] = now
+
+    from athena.api.idempotency import sweep_idempotency_keys
+
+    removed = sweep_idempotency_keys(session)
+    if removed:
+        log.info("scheduler.idempotency_keys_swept", removed=removed)
+
+
 def run() -> None:
     def handle(signum, _frame):
         log.info("shutdown.signal", signal=signum)
@@ -254,6 +267,7 @@ def run() -> None:
                 now = time.monotonic()
                 _sweep_nodes(session, last_run, now)
                 _sweep_nonces(session, last_run, now)
+                _sweep_idempotency_keys(session, last_run, now)
                 _sweep_correlation(session, last_run, now)
                 _sweep_images(session, last_run, now)
                 _sweep_triage(session, last_run, now)

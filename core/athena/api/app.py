@@ -11,6 +11,7 @@ from starlette.concurrency import run_in_threadpool
 from athena import __version__
 from athena.api.deps import REQUEST_SESSION_ATTR
 from athena.api.events import broker
+from athena.api.idempotency import idempotent
 from athena.api.routers import (
     assets,
     audit,
@@ -73,6 +74,8 @@ def create_app() -> FastAPI:
 
         await run_in_threadpool(close, response.status_code < 400)
         return response
+
+    app.middleware("http")(idempotent)
 
     app.include_router(health.router)
     for r in (
