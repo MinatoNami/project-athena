@@ -144,7 +144,10 @@ async function logout() {
       </div>
     </nav>
 
-    <main id="main" class="main" tabindex="-1"><slot /></main>
+    <main id="main" class="main" tabindex="-1">
+      <HaltBanner v-if="me" :can-administer="showsAdminNav(me)" :mfa-enabled="!!me.mfa_enabled" />
+      <slot />
+    </main>
     <CommandPalette v-model:open="paletteOpen" />
   </div>
 </template>
