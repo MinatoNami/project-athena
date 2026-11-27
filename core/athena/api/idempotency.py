@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from athena.api.auth import SESSION_COOKIE, resolve_session
+from athena.api.deps import STEP_UP_HEADER
 from athena.db.base import session_scope
 
 IDEMPOTENCY_HEADER = "Idempotency-Key"
@@ -134,7 +135,7 @@ async def idempotent(request: Request, call_next):
         return _replay(existing.response_status, existing.response_body)
 
     response = await call_next(request)
-    if response.status_code >= 500:
+    if response.status_code >= 500 or response.headers.get(STEP_UP_HEADER) is not None:
         return response
 
     raw = b"".join([chunk async for chunk in response.body_iterator])

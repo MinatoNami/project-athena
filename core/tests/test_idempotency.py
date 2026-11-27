@@ -35,14 +35,32 @@ def _make_user(session, role):
     return user
 
 
-def _signed_in(app, user):
+def _signed_in(app, user, *, step_up=True):
     from fastapi.testclient import TestClient
 
     client = TestClient(app, base_url="https://testserver")
     body = {"email": user.email, "password": PASSWORD}
     assert client.post("/api/v1/auth/login", json=body).status_code == 200
-    assert client.post("/api/v1/auth/step-up", json=body).status_code == 200
+    if step_up:
+        assert client.post("/api/v1/auth/step-up", json=body).status_code == 200
     return client
+
+
+def test_step_up_refusal_is_not_stored_so_the_retry_runs(app, session):
+    admin = _make_user(session, "admin")
+    target = _make_user(session, "viewer")
+    client = _signed_in(app, admin, step_up=False)
+    key = str(uuid.uuid4())
+    path = f"/api/v1/users/{target.id}/role"
+
+    refused = client.post(path, json={"role": "operator"}, headers={IDEMPOTENCY_HEADER: key})
+    assert refused.status_code == 403
+    body = {"email": admin.email, "password": PASSWORD}
+    assert client.post("/api/v1/auth/step-up", json=body).status_code == 200
+    retried = client.post(path, json={"role": "operator"}, headers={IDEMPOTENCY_HEADER: key})
+    assert retried.status_code == 200
+    assert REPLAYED_HEADER not in retried.headers
+    assert _role_changes(session, target.id) == 1
 
 
 def _role_changes(session, target_id):
