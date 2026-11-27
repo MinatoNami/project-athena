@@ -42,7 +42,10 @@ export function needsStepUp(e: any): boolean {
   return e?.statusCode === 403 && e?.data?.detail === STEP_UP_REQUIRED
 }
 
-export async function stepUp(password: string): Promise<void> {
+export async function stepUp(password: string, totpCode?: string): Promise<void> {
   const me = useNuxtData<Me | null>('me').data.value
-  await api('auth/step-up', { method: 'POST', body: { email: me?.email ?? '', password } })
+  await api('auth/step-up', {
+    method: 'POST',
+    body: { email: me?.email ?? '', password, totp_code: totpCode || null },
+  })
 }

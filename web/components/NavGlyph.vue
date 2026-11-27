@@ -33,6 +33,10 @@ defineProps<{ name: string }>()
       <path d="M4 18.5a8.5 8.5 0 0116 0" /><path d="M7.5 18.5a4.5 4.5 0 019 0" />
       <circle cx="12" cy="18.5" r="1" />
     </template>
+    <template v-else-if="name === 'users'">
+      <circle cx="9" cy="8.5" r="3.2" /><path d="M3.5 19.5a5.5 5.5 0 0111 0" />
+      <path d="M15.5 5.6a3.2 3.2 0 010 5.8" /><path d="M17.5 14.4a5.5 5.5 0 013 5.1" />
+    </template>
     <template v-else-if="name === 'search'">
       <circle cx="11" cy="11" r="6.5" /><path d="M16 16l4.5 4.5" />
     </template>
