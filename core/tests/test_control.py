@@ -225,3 +225,91 @@ def test_migration_0022_round_trips(engine):
     assert tables() == {"control_state", "investigation_hold"}
     with engine.connect() as conn:
         assert conn.execute(text("SELECT halted FROM control_state")).scalars().all() == [False]
+
+
+@pytest.fixture
+def operator(session):
+    import secrets
+    from datetime import timedelta
+
+    from sqlalchemy import delete
+
+    from athena.api.auth import hash_token
+    from athena.db.models import Session_, User
+
+    user = User(
+        email=f"operator-{uuid.uuid4().hex[:8]}@example.test",
+        password_hash=secrets.token_hex(16),
+        role="operator",
+    )
+    session.add(user)
+    session.flush()
+    token = secrets.token_urlsafe(32)
+    session.add(
+        Session_(
+            user_id=user.id,
+            token_hash=hash_token(token),
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+            step_up_at=datetime.now(UTC),
+        )
+    )
+    session.commit()
+    yield user.id, token
+    session.rollback()
+    session.execute(delete(User).where(User.id == user.id))
+    session.commit()
+
+
+def _operator_client(token: str):
+    from fastapi.testclient import TestClient
+
+    from athena.api.app import create_app
+    from athena.api.auth import SESSION_COOKIE
+
+    return TestClient(create_app(), cookies={SESSION_COOKIE: token})
+
+
+def _actions(session, subject: str) -> list[str]:
+    from athena.db.models import AuditEvent
+
+    session.expire_all()
+    return list(
+        session.execute(
+            select(AuditEvent.action).where(AuditEvent.subject == subject).order_by(AuditEvent.seq)
+        ).scalars()
+    )
+
+
+def test_an_operator_pauses_and_cancels_through_the_api(session, finding, operator):
+    from athena.control import is_investigation_paused
+    from athena.db.models import Job
+
+    _, token = operator
+    client = _operator_client(token)
+    base = f"/api/v1/findings/{finding.id}/investigation"
+
+    assert client.post(f"{base}/pause").json()["paused"] is True
+    assert is_investigation_paused(session, finding.id)
+    assert client.post(f"{base}/unpause").json()["paused"] is False
+    assert not is_investigation_paused(session, finding.id)
+
+    investigation = _investigation(session, finding.id)
+    session.commit()
+    cancelled = client.post(f"{base}/cancel")
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["removed_jobs"] == 1
+    session.expire_all()
+    assert session.get(Job, investigation) is None
+    assert is_investigation_paused(session, finding.id)
+
+    assert _actions(session, f"finding:{finding.id}") == [
+        "INVESTIGATION_PAUSED",
+        "INVESTIGATION_UNPAUSED",
+        "INVESTIGATION_CANCELLED",
+    ]
+
+
+def test_an_operator_cannot_halt(operator):
+    _, token = operator
+    response = _operator_client(token).post("/api/v1/control/halt", json={"reason": "not mine"})
+    assert response.status_code == 403

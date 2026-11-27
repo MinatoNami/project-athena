@@ -119,11 +119,12 @@ def cancel(
 ) -> dict[str, Any]:
     _finding(session, finding_id)
     removed = cancel_investigation(session, finding_id)
+    pause_investigation(session, finding_id, actor=principal.actor)
     record(
         session,
         actor=principal.actor,
         action="INVESTIGATION_CANCELLED",
         subject=f"finding:{finding_id}",
-        detail={"removed_jobs": [str(job_id) for job_id in removed]},
+        detail={"removed_jobs": [str(job_id) for job_id in removed], "held": True},
     )
-    return {"finding_id": str(finding_id), "removed_jobs": len(removed)}
+    return {"finding_id": str(finding_id), "removed_jobs": len(removed), "paused": True}
