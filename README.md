@@ -14,6 +14,8 @@ remediation while keeping a human in control of every change.
 | [Technical Design](docs/TECHNICAL_DESIGN.md) | How it is built |
 | [Web UI](docs/WEB_UI.md) | The Nuxt dashboard |
 | [Milestones](docs/MILESTONES.md) | What gets built when, and how each stage is proven |
+| [Security agent plan](docs/SECURITY_AGENT_PLAN.md) | How Athena grows to identify, mitigate and resolve threats |
+| [Research, Nov 2026](docs/RESEARCH_2026-11.md) | Security tooling released 27 Oct to 27 Nov 2026 that the plan builds on |
 
 ## Status
 
