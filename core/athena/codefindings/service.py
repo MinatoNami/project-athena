@@ -32,6 +32,19 @@ GUIDANCE = {
         ),
         "steps": [],
     },
+    "startup-hook": {
+        "summary": (
+            "Python runs every .pth line that starts with import each time the interpreter "
+            "starts, whether or not the package is ever imported. Treat an unexplained one "
+            "as code execution."
+        ),
+        "steps": [
+            "Find which package or commit added the .pth file",
+            "Read the line and any module it imports before running Python here again",
+            "Remove the file, or pin the package to a release without it",
+            "If it was installed anywhere, treat that environment as compromised",
+        ],
+    },
 }
 
 

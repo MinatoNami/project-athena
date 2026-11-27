@@ -13,7 +13,7 @@ from athena.db.models import Asset, CodeFinding, ScanRun
 
 router = APIRouter(tags=["code"])
 
-KINDS = ("secret", "misconfiguration")
+KINDS = ("secret", "misconfiguration", "startup-hook")
 _SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 
