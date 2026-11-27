@@ -311,3 +311,135 @@ def test_inherited_freshness_is_judged_against_the_image_window(session):
     after = coverage(session)
     assert after["assets_stale"] == before["assets_stale"], "counted stale on the wrong window"
     assert after["assets_inherited"] == before["assets_inherited"] + 1
+
+
+_STEADY = ObservedComponent(ecosystem="pypi", name="steady-dependency", version="1.0")
+
+
+def _absence_scan(session, asset, components, *, status="succeeded", tool="syft"):
+    run = start_scan(session, asset=asset, kind="repository", tool=tool)
+    record_components(session, asset=asset, run=run, components=components)
+    finish_scan(session, run, status=status)
+    session.flush()
+    return run
+
+
+def _vulnerable_repo(session, name):
+    from athena.correlation.engine import correlate_asset
+    from athena.db.models import Finding
+    from athena.intel.ingest import upsert_advisory
+    from athena.intel.osv import parse
+
+    package = f"gone-{uuid.uuid4().hex[:8]}"
+    upsert_advisory(
+        session,
+        parse(
+            {
+                "id": f"GHSA-{uuid.uuid4().hex[:4]}-{uuid.uuid4().hex[:4]}-{uuid.uuid4().hex[:4]}",
+                "affected": [
+                    {
+                        "package": {"ecosystem": "PyPI", "name": package},
+                        "ranges": [
+                            {
+                                "type": "ECOSYSTEM",
+                                "events": [{"introduced": "0"}, {"fixed": "2.0"}],
+                            }
+                        ],
+                    }
+                ],
+                "modified": "2026-11-01T00:00:00Z",
+            }
+        ),
+    )
+    asset = _repo(session, name)
+    vulnerable = ObservedComponent(ecosystem="pypi", name=package, version="1.0")
+    _absence_scan(session, asset, [vulnerable, _STEADY])
+    correlate_asset(session, asset)
+    session.flush()
+    finding = session.execute(select(Finding).where(Finding.asset_id == asset.id)).scalar_one()
+    assert finding.state == "discovered"
+    return asset, vulnerable, finding
+
+
+def _audit(session, finding, action):
+    from athena.db.models import AuditEvent
+
+    return session.execute(
+        select(AuditEvent).where(
+            AuditEvent.action == action, AuditEvent.subject == f"finding:{finding.id}"
+        )
+    ).scalars().all()
+
+
+def test_a_complete_scan_without_the_component_closes_its_finding(session):
+    from athena.db.models import Outbox
+
+    asset, _, finding = _vulnerable_repo(session, f"upgraded-{uuid.uuid4().hex[:6]}")
+
+    run = _absence_scan(session, asset, [_STEADY])
+
+    assert finding.state == "unmatched"
+    assert run.stats["findings_closed"] == 1
+    events = _audit(session, finding, "FINDING_UNMATCHED")
+    assert len(events) == 1
+    assert events[0].actor == "system:inventory"
+    assert events[0].detail["scan_run_id"] == str(run.id)
+    assert events[0].detail["scan"] == {"kind": "repository", "tool": "syft", "status": "succeeded"}
+    published = session.execute(
+        select(Outbox).where(Outbox.topic == "findings", Outbox.subject_id == str(asset.id))
+    ).scalars().all()
+    assert published
+
+
+def test_an_inconclusive_scan_never_closes_a_finding(session):
+    for status in ("partial", "failed", "timeout"):
+        asset, _, finding = _vulnerable_repo(session, f"{status}-{uuid.uuid4().hex[:6]}")
+
+        _absence_scan(session, asset, [_STEADY], status=status)
+
+        assert finding.state == "discovered", f"a {status} scan closed a finding"
+        assert _audit(session, finding, "FINDING_UNMATCHED") == []
+
+        _absence_scan(session, asset, [_STEADY])
+        assert finding.state == "unmatched", f"a complete scan after a {status} one left it open"
+
+
+def test_a_complete_scan_that_observed_nothing_closes_nothing(session):
+    asset, _, finding = _vulnerable_repo(session, f"empty-{uuid.uuid4().hex[:6]}")
+
+    _absence_scan(session, asset, [])
+
+    assert finding.state == "discovered"
+
+
+def test_a_scan_of_another_scope_never_closes_a_finding(session):
+    asset, _, finding = _vulnerable_repo(session, f"scoped-{uuid.uuid4().hex[:6]}")
+
+    _absence_scan(session, asset, [_STEADY], tool="another-scanner")
+
+    assert finding.state == "discovered"
+    assert _audit(session, finding, "FINDING_UNMATCHED") == []
+
+    _absence_scan(session, asset, [_STEADY], tool="another-scanner")
+
+    assert finding.state == "discovered"
+
+
+def test_the_component_reappearing_reopens_its_finding(session):
+    from athena.correlation.engine import correlate_asset
+
+    asset, vulnerable, finding = _vulnerable_repo(session, f"back-{uuid.uuid4().hex[:6]}")
+    _absence_scan(session, asset, [_STEADY])
+    assert finding.state == "unmatched"
+
+    _absence_scan(session, asset, [vulnerable, _STEADY])
+    result = correlate_asset(session, asset)
+    session.flush()
+
+    assert result["reopened"] == 1
+    assert finding.state == "discovered"
+    assert len(_audit(session, finding, "FINDING_REMATCHED")) == 1
+
+    _absence_scan(session, asset, [_STEADY])
+    assert finding.state == "unmatched"
+    assert len(_audit(session, finding, "FINDING_UNMATCHED")) == 2
