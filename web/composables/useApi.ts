@@ -12,7 +12,7 @@ export function apiUrl(path: string): string {
 }
 
 export function api<T>(path: string, opts: Record<string, any> = {}) {
-  const headers: Record<string, string> = { ...(opts.headers || {}) }
+  const headers: Record<string, string> = { ...(opts.headers || {}), 'x-requested-by': 'athena-web' }
 
   if (import.meta.server) {
     const incoming = useRequestHeaders(['cookie'])

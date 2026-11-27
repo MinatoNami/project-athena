@@ -168,6 +168,7 @@ services:
       NUXT_SESSION_SECRET_FILE: /run/secrets/session_secret
       NUXT_PUBLIC_APP_NAME: ${ATHENA_APP_NAME:-Athena}
       NUXT_APP_BASE_URL: ${ATHENA_BASE_PATH:-/}
+      NUXT_DASHBOARD_ORIGIN: ${ATHENA_DASHBOARD_ORIGIN:-}
     secrets: [session_secret]
     group_add:
       - "${ATHENA_SECRET_GID:-0}"

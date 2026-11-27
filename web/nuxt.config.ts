@@ -15,6 +15,7 @@ export default defineNuxtConfig({
   runtimeConfig: {
     athenaApiUrl: process.env.NUXT_ATHENA_API_URL || 'http://127.0.0.1:8000',
     sessionSecretFile: process.env.NUXT_SESSION_SECRET_FILE || '',
+    dashboardOrigin: '',
     public: {
       appName: process.env.NUXT_PUBLIC_APP_NAME || 'Athena',
     },
