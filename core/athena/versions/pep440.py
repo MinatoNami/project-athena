@@ -71,11 +71,11 @@ def sort_key(version: str) -> tuple:
     dev = parsed["dev"] or _INFINITY
 
     if parsed["local"] is None:
-        local: tuple = _NEGATIVE_INFINITY
+        local: tuple = ()
     else:
         local = tuple(
             (int(part), "") if part.isdigit() else (-1, part)
-            for part in re.split(r"[._-]", parsed["local"])
+            for part in re.split(r"[._-]", parsed["local"].lower())
         )
 
     return (parsed["epoch"], release, pre, post, dev, local)
