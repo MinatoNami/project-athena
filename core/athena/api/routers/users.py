@@ -11,7 +11,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from athena.api import auth as A
-from athena.api.deps import ADMIN, Principal, db, require_role
+from athena.api.deps import Principal, administer_with_step_up, can_administer, db
 from athena.api.types import AccountEmail
 from athena.audit import record
 from athena.db.models import Session_, User
@@ -28,11 +28,6 @@ class InviteRequest(BaseModel):
 
 class RoleRequest(BaseModel):
     role: AssignableRole
-
-
-def _require_step_up(principal: Principal) -> None:
-    if not A.has_fresh_step_up(principal.session_row):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Fresh step-up required")
 
 
 def _target(session: Session, principal: Principal, user_id: uuid.UUID) -> User:
@@ -67,7 +62,7 @@ def _view(user: User) -> dict:
 
 @router.get("")
 def list_users(
-    principal: Principal = Depends(require_role(ADMIN)),
+    principal: Principal = Depends(can_administer),
     session: Session = Depends(db),
 ) -> list[dict]:
     return [_view(u) for u in session.execute(select(User).order_by(User.email)).scalars()]
@@ -76,10 +71,9 @@ def list_users(
 @router.post("/invite", status_code=status.HTTP_201_CREATED)
 def invite_user(
     body: InviteRequest,
-    principal: Principal = Depends(require_role(ADMIN)),
+    principal: Principal = Depends(administer_with_step_up),
     session: Session = Depends(db),
 ) -> dict:
-    _require_step_up(principal)
     if session.execute(select(User.id).where(User.email == body.email)).first() is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "An account with this email exists")
 
@@ -106,10 +100,9 @@ def invite_user(
 def set_role(
     user_id: uuid.UUID,
     body: RoleRequest,
-    principal: Principal = Depends(require_role(ADMIN)),
+    principal: Principal = Depends(administer_with_step_up),
     session: Session = Depends(db),
 ) -> dict:
-    _require_step_up(principal)
     user = _target(session, principal, user_id)
     previous = user.role
     user.role = body.role
@@ -126,10 +119,9 @@ def set_role(
 @router.post("/{user_id}/disable")
 def disable_user(
     user_id: uuid.UUID,
-    principal: Principal = Depends(require_role(ADMIN)),
+    principal: Principal = Depends(administer_with_step_up),
     session: Session = Depends(db),
 ) -> dict:
-    _require_step_up(principal)
     user = _target(session, principal, user_id)
     if user.disabled_at is None:
         user.disabled_at = datetime.now(UTC)
@@ -147,10 +139,9 @@ def disable_user(
 @router.post("/{user_id}/mfa/reset")
 def reset_mfa(
     user_id: uuid.UUID,
-    principal: Principal = Depends(require_role(ADMIN)),
+    principal: Principal = Depends(administer_with_step_up),
     session: Session = Depends(db),
 ) -> dict:
-    _require_step_up(principal)
     user = _target(session, principal, user_id)
     was_active = user.mfa_enabled
     A.clear_mfa(user)

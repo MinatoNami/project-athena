@@ -175,6 +175,18 @@ def test_a_non_admin_cannot_reach_user_management(engine, staff, role, method, p
     _assert_role_denied(engine, user_id, response, path)
 
 
+@pytest.mark.parametrize("method,path,body", USER_ROUTES[1:])
+def test_user_management_refuses_an_admin_without_step_up_and_audits_it(
+    engine, staff, method, path, body
+):
+    user_id, response = _call(engine, staff, ADMIN, (method, path), step_up=False, body=body)
+    assert response.status_code == 403
+    assert response.json()["detail"] == STEP_UP_REQUIRED
+    assert response.headers[STEP_UP_HEADER] == "required"
+    refusals = [d for d in _audited(engine, user_id, "STEP_UP_REFUSED") if d["path"] == path]
+    assert len(refusals) == 1
+
+
 def test_the_assignable_roles_are_exactly_the_known_roles():
     assert set(get_args(AssignableRole)) == set(ROLES)
 

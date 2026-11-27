@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from athena.api import auth as A
 from athena.api import totp
+from athena.api.deps import ADMIN_ROLES, ROLE_CHECK_ATTR, STEP_UP_REQUIRED
 from athena.config import get_settings
 from athena.db.models import AuditEvent, User
 
@@ -80,11 +81,14 @@ def _mutations(target_id):
 def test_every_user_route_carries_the_admin_role_dependency(app):
     from athena.api.routers.users import router
 
+    def required_roles(dependant):
+        for dependency in dependant.dependencies:
+            yield getattr(dependency.call, ROLE_CHECK_ATTR, None)
+            yield from required_roles(dependency)
+
     for route in router.routes:
-        calls = [d.call for d in route.dependant.dependencies]
-        assert any(getattr(c, "__qualname__", "").startswith("require_role") for c in calls), (
-            route.path
-        )
+        roles = [r for r in required_roles(route.dependant) if r]
+        assert roles == [ADMIN_ROLES], route.path
 
 
 @pytest.mark.parametrize("role", ["viewer", "operator", "approver", "auditor"])
@@ -111,7 +115,7 @@ def test_admins_need_a_fresh_step_up(app, session):
     for method, path, body in _mutations(target.id):
         response = getattr(client, method)(path, json=body)
         assert response.status_code == 403, path
-        assert response.json()["detail"] == "Fresh step-up required"
+        assert response.json()["detail"] == STEP_UP_REQUIRED
 
 
 def test_admins_cannot_change_their_own_account(app, session):
