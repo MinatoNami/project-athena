@@ -18,6 +18,7 @@ from athena.intel.ingest import (
     upsert_advisory,
 )
 from athena.intel.osv import parse_many
+from athena.investigation.compromise import open_compromise_assessments
 from athena.queue import enqueue, publish
 from athena.queue.registry import handler
 
@@ -219,6 +220,9 @@ def correlate_one_advisory(payload: dict[str, Any]) -> dict[str, Any]:
     vulnerability_id = payload["vulnerability_id"]
     with session_scope() as session:
         result = correlate_advisory(session, vulnerability_id)
+        assessments = open_compromise_assessments(session, vulnerability_id=vulnerability_id)
+        if assessments:
+            result["compromise_assessments"] = assessments
         if result.get("created"):
             record(
                 session,
@@ -247,6 +251,9 @@ def correlate_one_asset(payload: dict[str, Any]) -> dict[str, Any]:
         if asset is None:
             return {"status": "unknown_asset"}
         result = correlate_asset(session, asset)
+        assessments = open_compromise_assessments(session, asset_id=asset.id)
+        if assessments:
+            result["compromise_assessments"] = assessments
         if result.get("created"):
             record(
                 session,
