@@ -126,7 +126,12 @@ def _break_glass(*, email: str, reason: str | None, confirm: bool, create: bool)
             return 1
 
         if user is None:
-            user = User(email=email, password_hash=hash_password(credential), role="admin")
+            user = User(
+                email=email,
+                password_hash=hash_password(credential),
+                role="admin",
+                password_change_required=True,
+            )
             session.add(user)
             session.flush()
             outcome = {"outcome": "created", "previous_role": None, "was_disabled": False}
@@ -140,6 +145,7 @@ def _break_glass(*, email: str, reason: str | None, confirm: bool, create: bool)
             }
             mfa_was_active = user.mfa_enabled
             user.password_hash = hash_password(credential)
+            user.password_change_required = True
             user.role = "admin"
             user.disabled_at = None
             clear_mfa(user)
@@ -174,12 +180,12 @@ def _break_glass(*, email: str, reason: str | None, confirm: bool, create: bool)
         )
 
     print("\n" + "=" * 68, file=sys.stderr)
-    print("  ATHENA BREAK-GLASS CREDENTIAL (shown once)", file=sys.stderr)
+    print("  ATHENA BREAK-GLASS CREDENTIAL (single use, shown once)", file=sys.stderr)
     print("=" * 68, file=sys.stderr)
     print(f"\n  account   {email}", file=sys.stderr)
     print(f"  password  {credential}\n", file=sys.stderr)
     print("  MFA is cleared and every session for this account is revoked.", file=sys.stderr)
-    print("  Sign in, enrol MFA again, then rotate this password.", file=sys.stderr)
+    print("  The first sign-in must set a new password; then enrol MFA again.", file=sys.stderr)
     print("=" * 68 + "\n", file=sys.stderr)
     return 0
 

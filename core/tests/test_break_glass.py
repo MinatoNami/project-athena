@@ -74,6 +74,7 @@ def test_creates_an_admin_and_audits_the_reason(session, email, capsys):
     session.expire_all()
     user = session.execute(select(User).where(User.email == email)).scalar_one()
     assert user.role == "admin"
+    assert user.password_change_required is True
     assert A.verify_password(user.password_hash, credential)
 
     [event] = _events(session, user.id, "BREAK_GLASS")
@@ -117,6 +118,7 @@ def test_resets_password_mfa_role_and_sessions_of_an_existing_user(session, emai
     assert restored.mfa_enabled is False
     assert restored.mfa_secret is None
     assert restored.mfa_last_counter is None
+    assert restored.password_change_required is True
     assert A.verify_password(restored.password_hash, credential)
     assert not A.verify_password(restored.password_hash, "old-password-123")
     live = session.execute(

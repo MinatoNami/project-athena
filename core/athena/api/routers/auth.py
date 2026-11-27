@@ -16,6 +16,8 @@ from athena.db.models import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+PASSWORD_CHANGE_REQUIRED = "Password change required"  # noqa: S105
+
 
 class BootstrapRequest(BaseModel):
     token: str
@@ -27,6 +29,7 @@ class LoginRequest(BaseModel):
     email: AccountEmail
     password: str
     totp_code: str | None = Field(default=None, max_length=16)
+    new_password: str | None = Field(default=None, max_length=1024)
 
 
 class MfaCodeRequest(BaseModel):
@@ -122,6 +125,9 @@ def login(
         )
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
 
+    if user.password_change_required:
+        _replace_single_use_password(session, user, body)
+
     record(
         session,
         actor=f"user:{user.id}",
@@ -131,6 +137,32 @@ def login(
     )
     _set_session_cookie(response, A.create_session(session, user))
     return {"id": str(user.id), "email": user.email, "role": user.role}
+
+
+def _replace_single_use_password(session: Session, user: User, body: LoginRequest) -> None:
+    if not body.new_password:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, PASSWORD_CHANGE_REQUIRED)
+    session.flush()
+    session.refresh(user, with_for_update=True)
+    if not user.password_change_required or not A.verify_password(
+        user.password_hash, body.password
+    ):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
+    if (problem := A.validate_password_strength(body.new_password)) is not None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, problem)
+    if body.new_password == body.password:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "The new password must differ from the old one."
+        )
+    user.password_hash = A.hash_password(body.new_password)
+    user.password_change_required = False
+    record(
+        session,
+        actor=f"user:{user.id}",
+        action="PASSWORD_CHANGED",
+        subject=f"user:{user.id}",
+        detail={"reason": "single-use credential replaced"},
+    )
 
 
 @router.post("/logout")

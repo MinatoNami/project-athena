@@ -1,0 +1,166 @@
+from __future__ import annotations
+
+import secrets
+import uuid
+from datetime import UTC, datetime
+from typing import Literal
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
+from sqlalchemy import select, update
+from sqlalchemy.orm import Session
+
+from athena.api import auth as A
+from athena.api.deps import Principal, db, require_role
+from athena.api.types import AccountEmail
+from athena.audit import record
+from athena.db.models import Session_, User
+
+router = APIRouter(prefix="/users", tags=["users"])
+
+ADMIN = "admin"
+AssignableRole = Literal["admin", "analyst", "viewer"]
+
+
+class InviteRequest(BaseModel):
+    email: AccountEmail
+    role: AssignableRole
+
+
+class RoleRequest(BaseModel):
+    role: AssignableRole
+
+
+def _require_step_up(principal: Principal) -> None:
+    if not A.has_fresh_step_up(principal.session_row):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Fresh step-up required")
+
+
+def _target(session: Session, principal: Principal, user_id: uuid.UUID) -> User:
+    if user_id == principal.user.id:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Ask another admin to change your own account"
+        )
+    user = session.get(User, user_id, with_for_update=True)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such user")
+    return user
+
+
+def _revoke_sessions(session: Session, user: User) -> int:
+    return session.execute(
+        update(Session_)
+        .where(Session_.user_id == user.id, Session_.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(UTC))
+    ).rowcount
+
+
+def _view(user: User) -> dict:
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "role": user.role,
+        "mfa_enabled": user.mfa_enabled,
+        "disabled": user.disabled_at is not None,
+        "password_change_required": user.password_change_required,
+    }
+
+
+@router.get("")
+def list_users(
+    principal: Principal = Depends(require_role(ADMIN)),
+    session: Session = Depends(db),
+) -> list[dict]:
+    return [_view(u) for u in session.execute(select(User).order_by(User.email)).scalars()]
+
+
+@router.post("/invite", status_code=status.HTTP_201_CREATED)
+def invite_user(
+    body: InviteRequest,
+    principal: Principal = Depends(require_role(ADMIN)),
+    session: Session = Depends(db),
+) -> dict:
+    _require_step_up(principal)
+    if session.execute(select(User.id).where(User.email == body.email)).first() is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "An account with this email exists")
+
+    credential = secrets.token_urlsafe(24)
+    user = User(
+        email=body.email,
+        password_hash=A.hash_password(credential),
+        role=body.role,
+        password_change_required=True,
+    )
+    session.add(user)
+    session.flush()
+    record(
+        session,
+        actor=principal.actor,
+        action="USER_INVITED",
+        subject=f"user:{user.id}",
+        detail={"email": user.email, "role": user.role},
+    )
+    return {**_view(user), "invite_credential": credential}
+
+
+@router.post("/{user_id}/role")
+def set_role(
+    user_id: uuid.UUID,
+    body: RoleRequest,
+    principal: Principal = Depends(require_role(ADMIN)),
+    session: Session = Depends(db),
+) -> dict:
+    _require_step_up(principal)
+    user = _target(session, principal, user_id)
+    previous = user.role
+    user.role = body.role
+    record(
+        session,
+        actor=principal.actor,
+        action="USER_ROLE_CHANGED",
+        subject=f"user:{user.id}",
+        detail={"from": previous, "to": user.role},
+    )
+    return _view(user)
+
+
+@router.post("/{user_id}/disable")
+def disable_user(
+    user_id: uuid.UUID,
+    principal: Principal = Depends(require_role(ADMIN)),
+    session: Session = Depends(db),
+) -> dict:
+    _require_step_up(principal)
+    user = _target(session, principal, user_id)
+    if user.disabled_at is None:
+        user.disabled_at = datetime.now(UTC)
+    revoked = _revoke_sessions(session, user)
+    record(
+        session,
+        actor=principal.actor,
+        action="USER_DISABLED",
+        subject=f"user:{user.id}",
+        detail={"sessions_revoked": revoked},
+    )
+    return _view(user)
+
+
+@router.post("/{user_id}/mfa/reset")
+def reset_mfa(
+    user_id: uuid.UUID,
+    principal: Principal = Depends(require_role(ADMIN)),
+    session: Session = Depends(db),
+) -> dict:
+    _require_step_up(principal)
+    user = _target(session, principal, user_id)
+    was_active = user.mfa_enabled
+    A.clear_mfa(user)
+    revoked = _revoke_sessions(session, user)
+    record(
+        session,
+        actor=principal.actor,
+        action="MFA_RESET",
+        subject=f"user:{user.id}",
+        detail={"via": "admin", "was_active": was_active, "sessions_revoked": revoked},
+    )
+    return _view(user)
