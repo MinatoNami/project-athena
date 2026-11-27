@@ -49,6 +49,14 @@ const deadlineBadge = computed(() => {
     return { text: 'next upgrade · BOD 26-04', bad: false,
              title: `No calendar deadline under BOD 26-04 for this asset.${fed}` }
   }
+  const basis = deadlineBasis(d)
+  if (basis?.setByKev) {
+    return {
+      text: `${dueText(d.due)} · CISA KEV`,
+      bad: d.days_left != null && d.days_left <= 0,
+      title: `${basis.label}: ${d.due}. ${basis.overridden}`,
+    }
+  }
   return {
     text: `${dueText(d.due)} · BOD 26-04`,
     bad: d.days_left != null && d.days_left <= 0,

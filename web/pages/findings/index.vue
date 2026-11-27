@@ -461,8 +461,10 @@ function instanceLines(g: any) {
                     </template>
                   </td>
                   <td><SsvcChip v-if="!g.malicious" :outcome="line.first.ssvc" compact /></td>
-                  <td class="due" :class="{ overdue: dueLabel(line.first)?.startsWith('overdue') }">
+                  <td class="due" :class="{ overdue: dueLabel(line.first)?.startsWith('overdue') }"
+                      :title="deadlineBasis(line.first)?.setByKev ? 'Due date set by CISA KEV' : undefined">
                     {{ dueLabel(line.first) ?? '—' }}
+                    <span v-if="deadlineBasis(line.first)?.setByKev" class="tag caps">KEV date</span>
                     <span v-if="line.first.forensic_triage" class="tag bad caps"
                           title="Check for prior compromise, not only the patch">+ triage</span>
                   </td>
