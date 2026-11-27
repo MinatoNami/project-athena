@@ -94,7 +94,7 @@ def suppress(
             actor=principal.actor,
         )
     except SuppressionError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
     return _serialise(session, suppression)
 

@@ -98,7 +98,7 @@ def list_code_findings(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such asset")
     if kind is not None and kind not in KINDS:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, f"kind must be one of {', '.join(KINDS)}"
+            status.HTTP_422_UNPROCESSABLE_CONTENT, f"kind must be one of {', '.join(KINDS)}"
         )
     stmt = (
         select(CodeFinding, Asset)

@@ -66,7 +66,9 @@ def create_job(
     session: Session = Depends(db),
 ) -> dict:
     if body.kind not in known_kinds():
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Unknown job kind {body.kind!r}")
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, f"Unknown job kind {body.kind!r}"
+        )
 
     job = enqueue(
         session, kind=body.kind, key=body.key, payload=body.payload, priority=body.priority

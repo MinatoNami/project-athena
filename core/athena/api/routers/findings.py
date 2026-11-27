@@ -74,7 +74,7 @@ def list_findings(
 ) -> dict[str, Any]:
     if sort not in SORTS:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"Unknown sort {sort!r} — expected one of {', '.join(SORTS)}",
         )
     if asset_id is not None and not is_uuid(asset_id):
@@ -292,7 +292,7 @@ def answer_compromise(
             session, finding, body.answers, actor=principal.actor
         )
     except AssessmentError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
 
 def _prioritization(

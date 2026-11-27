@@ -100,9 +100,9 @@ def enrol(body: EnrolRequest, request: Request, session: Session = Depends(db)) 
     try:
         public_key = unb64(body.public_key)
     except ProtocolError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     if len(public_key) != 32:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Expected an Ed25519 public key")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Expected an Ed25519 public key")
 
     from athena.inventory.identity import AssetKind, IdentityError, host_identity
     from athena.inventory.service import register_asset
@@ -114,7 +114,7 @@ def enrol(body: EnrolRequest, request: Request, session: Session = Depends(db)) 
             node_key=b64(public_key),
         )
     except IdentityError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
     asset, created = register_asset(
         session,

@@ -50,7 +50,7 @@ def bootstrap(body: BootstrapRequest, response: Response, session: Session = Dep
         raise HTTPException(status.HTTP_409_CONFLICT, "An account already exists")
 
     if (problem := A.validate_password_strength(body.password)) is not None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, problem)
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, problem)
 
     if A.consume_bootstrap_token(session, body.token) is None:
         record_isolated(
