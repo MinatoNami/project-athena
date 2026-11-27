@@ -528,7 +528,11 @@ def triage_finding(payload: dict[str, Any]) -> dict[str, Any]:
             source="triage",
         )
 
-        if outcome.disposition == "investigate":
+        from athena.control import is_investigation_blocked
+
+        if outcome.disposition == "investigate" and not is_investigation_blocked(
+            session, finding.id
+        ):
             from athena.queue import enqueue
 
             enqueue(
