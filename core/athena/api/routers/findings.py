@@ -301,6 +301,7 @@ def _prioritization(
             vector=vector,
             cisa_ssvc=vulnerability.ssvc_cisa,
             first_seen=finding.first_seen.date(),
+            kev_due_date=due,
         ).as_dict(today=today),
         "epss": {
             "score": vulnerability.epss_score,

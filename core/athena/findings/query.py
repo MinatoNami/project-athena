@@ -375,13 +375,15 @@ def query_findings(session: Session, query: FindingQuery) -> Page:
 
 def _benchmark_due(finding: Finding, vulnerability: Vulnerability, asset: Asset) -> dict:
     if vulnerability.malicious:
-        return {"due": None, "due_on_upgrade": False, "forensic_triage": True}
+        return {"due": None, "due_on_upgrade": False, "due_rule": None,
+                "forensic_triage": True}
     d = deadline.deadline(
         exposure=asset.exposure, kev=vulnerability.kev,
         kev_date_added=vulnerability.kev_date_added, vector=vulnerability.cvss_vector,
         cisa_ssvc=vulnerability.ssvc_cisa, first_seen=finding.first_seen.date(),
+        kev_due_date=vulnerability.kev_due_date,
     )
-    return {"due": d.due, "due_on_upgrade": d.days is None,
+    return {"due": d.due, "due_on_upgrade": d.due is None, "due_rule": d.due_rule,
             "forensic_triage": d.forensic_triage}
 
 

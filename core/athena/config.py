@@ -75,6 +75,23 @@ class Settings(BaseSettings):
     sla_days_critical: int = 7
     sla_days_high: int = 30
     sla_days_medium: int = 90
+
+    deadline_window_short_days: int = Field(default=3, ge=1)
+    deadline_window_medium_days: int = Field(default=14, ge=1)
+    deadline_window_long_days: int = Field(default=60, ge=1)
+
+    @model_validator(mode="after")
+    def _deadline_windows_ascend(self) -> Settings:
+        short = self.deadline_window_short_days
+        medium = self.deadline_window_medium_days
+        long = self.deadline_window_long_days
+        if not short <= medium <= long:
+            raise ValueError(
+                "deadline windows must be ordered short <= medium <= long "
+                f"(got {short}, {medium}, {long})"
+            )
+        return self
+
     llm_base_url: str = "http://127.0.0.1:1234"
     llm_model: str = "qwen/qwen3.6-35b-a3b"
     llm_timeout: float = 300.0
