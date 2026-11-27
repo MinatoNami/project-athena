@@ -24,6 +24,10 @@ export function parseHaltState(raw: unknown): HaltState | null {
   }
 }
 
+export function canOperateInvestigations(me: { role?: unknown } | null | undefined): boolean {
+  return me?.role === 'operator' || me?.role === 'admin'
+}
+
 export function isHaltReasonValid(reason: string): boolean {
   const length = reason.trim().length
   return length >= HALT_REASON_MIN && length <= HALT_REASON_MAX

@@ -339,6 +339,13 @@ const tabs = [
         describes the current function.
       </div>
 
+      <InvestigationControl
+        v-if="canOperateInvestigations(me)"
+        :finding-id="String(route.params.id)"
+        :mfa-enabled="!!me?.mfa_enabled"
+        @changed="refresh()"
+      />
+
       <div class="tabs" role="tablist" aria-label="Case file">
         <button
           v-for="t in tabs" :id="`case-tab-${t.id}`" :key="t.id" class="tab" :class="{ on: tab === t.id }"

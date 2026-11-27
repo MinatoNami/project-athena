@@ -1,6 +1,20 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { haltAttribution, isHaltReasonValid, parseHaltState } from '../../utils/control.ts'
+import {
+  canOperateInvestigations,
+  haltAttribution,
+  isHaltReasonValid,
+  parseHaltState,
+} from '../../utils/control.ts'
+
+test('only operators and admins may pause, unpause or cancel an investigation', () => {
+  assert.equal(canOperateInvestigations({ role: 'operator' }), true)
+  assert.equal(canOperateInvestigations({ role: 'admin' }), true)
+  for (const role of ['viewer', 'approver', 'auditor', 'owner', undefined]) {
+    assert.equal(canOperateInvestigations({ role }), false)
+  }
+  assert.equal(canOperateInvestigations(null), false)
+})
 
 test('a halted state is read with its reason, actor and time', () => {
   assert.deepEqual(
