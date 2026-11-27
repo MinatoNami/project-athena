@@ -126,8 +126,8 @@ ruff check athena tests     # the whole lint gate; run it before pushing
 ```
 
 **`ruff format` is not run on this repository, and CI does not check it.** The code is
-hand-wrapped throughout — keyword arguments grouped onto shared lines, trailing
-comments aligned, query chains left on one line where they read as one thought — and
+hand-wrapped throughout — keyword arguments grouped onto shared lines, query
+chains left on one line where they read as one thought — and
 the formatter disagrees with that in most of the package. Running it would rewrite
 those files without changing what any of them do.
 
