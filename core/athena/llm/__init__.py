@@ -1,3 +1,4 @@
+from athena.llm.budget import BudgetExhausted
 from athena.llm.gateway import (
     Completion,
     ModelUnavailable,
@@ -5,7 +6,6 @@ from athena.llm.gateway import (
     complete_json,
     health,
 )
-from athena.llm.budget import BudgetExhausted
 from athena.llm.policy import DataClass, EgressBlocked
 
 __all__ = [

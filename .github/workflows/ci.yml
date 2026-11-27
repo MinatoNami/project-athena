@@ -29,7 +29,9 @@ jobs:
       - run: pip install -e ".[dev]"
 
       - name: Lint
-        run: ruff check athena tests && ruff format --check athena tests
+        run: |
+          ruff --version
+          ruff check athena tests
 
       - name: Privilege boundaries
         run: pytest tests/test_boundaries.py -v

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from athena.remediation import RemediationClass, plan_for
 
 

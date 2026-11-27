@@ -63,7 +63,8 @@ def complete(
         )
 
     from athena.db.base import session_scope
-    from athena.llm.budget import BudgetExhausted, check as check_budget
+    from athena.llm.budget import BudgetExhausted
+    from athena.llm.budget import check as check_budget
 
     try:
         with session_scope() as budget_session:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import func, select
@@ -204,5 +204,8 @@ def test_the_inbox_leads_with_what_matters(session):
     session.flush()
 
     listed = list_notifications(unread_only=False, limit=50, _=None, session=session)
-    ours = [n for n in listed["notifications"] if f"order-{tag}" in str(n["title"]) or n["title"] == "exploited"]
+    ours = [
+        n for n in listed["notifications"]
+        if f"order-{tag}" in str(n["title"]) or n["title"] == "exploited"
+    ]
     assert ours and ours[0]["urgency"] == "urgent", "the urgent notification was not first"

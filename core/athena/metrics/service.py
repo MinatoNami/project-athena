@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import Float, and_, case, cast, func, select
+from sqlalchemy import Float, cast, func, select
 from sqlalchemy.orm import Session
 
 from athena.config import get_settings
 from athena.db.models import (
-    Asset,
     Finding,
     IntelSource,
     InvestigationRecord,

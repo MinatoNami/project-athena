@@ -45,7 +45,7 @@ def test_registering_a_repository_reaches_images_already_observed(session):
 
 
 def test_a_tag_pushed_after_registration_links_itself(session):
-    repo = _repo(session, name="lumaindex", builds=["lumaindex-frontend"])
+    _repo(session, name="lumaindex", builds=["lumaindex-frontend"])
     session.flush()
     fresh = _image(session, repo="lumaindex-frontend", tag="20260828T101500Z-9f3c1de",
                    digest="bb" * 32)

@@ -275,7 +275,6 @@ def _apply(
                 revised=revised, advisory_revision=advisory_revision,
             )
 
-        asset = session.get(Asset, finding.asset_id)
         risk = score(signals_for(session, finding, verdict))
 
         _notify_if_worth_it(session, finding, verdict, risk)
