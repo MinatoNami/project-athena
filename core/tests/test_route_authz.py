@@ -310,29 +310,109 @@ def test_jobs_refuses_a_role_without_access(people):
     assert response.status_code == 403
 
 
-def test_jobs_accepts_an_allowlisted_kind(engine, people):
+@pytest.fixture
+def job_asset(engine):
     from sqlalchemy import delete
+    from sqlalchemy.orm import Session
+
+    from athena.db.models import Asset, Job
+
+    made: list[str] = []
+
+    def make(kind: str = "repository", *, tombstoned: bool = False) -> str:
+        with Session(engine) as s:
+            asset = Asset(
+                kind=kind,
+                identity_key=f"jobs-{uuid.uuid4().hex}",
+                display_name="jobs-test",
+                tombstoned_at=datetime.now(UTC) if tombstoned else None,
+            )
+            s.add(asset)
+            s.commit()
+            made.append(str(asset.id))
+            return str(asset.id)
+
+    yield make
+    with Session(engine) as s:
+        for asset_id in made:
+            s.execute(delete(Job).where(Job.key.startswith(f"{asset_id}:")))
+            s.execute(delete(Asset).where(Asset.id == uuid.UUID(asset_id)))
+        s.commit()
+
+
+def test_jobs_accepts_an_allowlisted_kind_and_builds_the_key(engine, people, job_asset):
     from sqlalchemy.orm import Session
 
     from athena.db.models import Job
 
-    asset_id = str(uuid.uuid4())
-    key = f"authz-test-{uuid.uuid4().hex}"
+    asset_id = job_asset()
     response = _client(people["admin"][2]).post(
         "/api/v1/jobs",
-        json={"kind": "scan.repository", "key": key, "payload": {"asset_id": asset_id}},
+        json={"kind": "scan.repository", "key": "ignored", "payload": {"asset_id": asset_id}},
     )
-    try:
-        assert response.status_code == 202, response.text
-        body = response.json()
-        assert body["kind"] == "scan.repository"
-        with Session(engine) as s:
-            job = s.get(Job, body["id"])
-            assert job.payload == {"asset_id": asset_id}
-    finally:
-        with Session(engine) as s:
-            s.execute(delete(Job).where(Job.key == key))
-            s.commit()
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["kind"] == "scan.repository"
+    assert body["key"].startswith(f"{asset_id}:")
+    with Session(engine) as s:
+        job = s.get(Job, body["id"])
+        assert job.payload == {"asset_id": asset_id}
+
+
+def test_jobs_cannot_borrow_another_assets_dedupe_key(people, job_asset):
+    first, second = job_asset(), job_asset()
+    client = _client(people["admin"][2])
+    borrowed = client.post(
+        "/api/v1/jobs",
+        json={
+            "kind": "scan.repository",
+            "key": f"{second}:rescan",
+            "payload": {"asset_id": first},
+        },
+    )
+    assert borrowed.status_code == 202 and borrowed.json()["key"].startswith(f"{first}:")
+    own = client.post(
+        "/api/v1/jobs", json={"kind": "scan.repository", "payload": {"asset_id": second}}
+    )
+    assert own.status_code == 202 and own.json()["deduplicated"] is False
+
+
+def test_jobs_refuses_a_kind_that_does_not_fit_the_asset(engine, people, job_asset):
+    user_id, _, token = people["admin"]
+    before = _audited(engine, f"user:{user_id}", "JOB_REFUSED")
+    response = _client(token).post(
+        "/api/v1/jobs", json={"kind": "scan.image", "payload": {"asset_id": job_asset()}}
+    )
+    assert response.status_code == 422
+    assert _audited(engine, f"user:{user_id}", "JOB_REFUSED") == before + 1
+
+
+def test_jobs_refuses_an_asset_that_is_never_scanned(people, job_asset):
+    response = _client(people["admin"][2]).post(
+        "/api/v1/jobs",
+        json={"kind": "scan.repository", "payload": {"asset_id": job_asset("service")}},
+    )
+    assert response.status_code == 422
+
+
+def test_jobs_refuses_a_tombstoned_asset(engine, people, job_asset):
+    user_id, _, token = people["admin"]
+    before = _audited(engine, f"user:{user_id}", "JOB_REFUSED")
+    response = _client(token).post(
+        "/api/v1/jobs",
+        json={"kind": "scan.repository", "payload": {"asset_id": job_asset(tombstoned=True)}},
+    )
+    assert response.status_code == 422
+    assert "tombstoned" in response.json()["detail"]
+    assert _audited(engine, f"user:{user_id}", "JOB_REFUSED") == before + 1
+
+
+def test_jobs_refuses_an_unknown_asset(people):
+    response = _client(people["admin"][2]).post(
+        "/api/v1/jobs",
+        json={"kind": "scan.repository", "payload": {"asset_id": str(uuid.uuid4())}},
+    )
+    assert response.status_code == 404
 
 
 def test_halt_and_resume_are_audited_and_readable(engine, people):
