@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -22,6 +23,11 @@ from athena.db.models import (
 from athena.findings import FindingQuery, query_findings
 from athena.findings.query import DEFAULT_LIMIT, MAX_LIMIT, SORTS
 from athena.intel.ingest import source_health
+from athena.investigation.compromise import (
+    AssessmentError,
+    answer_compromise_assessment,
+    compromise_assessment_of,
+)
 from athena.investigation.priority import decide
 from athena.queue import enqueue
 
@@ -256,10 +262,37 @@ def get_finding(
             else None
         ),
         "investigation": _investigation_of(session, finding),
+        "compromise_assessment": compromise_assessment_of(session, finding),
         "prioritization": _prioritization(vulnerability, asset, finding),
         "risk_explained": _risk_explained(session, finding),
         "remediation": _remediation(session, finding, asset, component),
     }
+
+
+class CompromiseAnswers(BaseModel):
+    answers: dict[str, str]
+
+
+@router.post("/findings/{finding_id}/compromise-assessment")
+def answer_compromise(
+    finding_id: str,
+    body: CompromiseAnswers,
+    principal: Principal = Depends(current_principal),
+    session: Session = Depends(db),
+) -> dict[str, Any]:
+    if not is_uuid(finding_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such finding")
+    finding = session.execute(
+        select(Finding).where(Finding.id == finding_id).with_for_update()
+    ).scalar_one_or_none()
+    if finding is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such finding")
+    try:
+        return answer_compromise_assessment(
+            session, finding, body.answers, actor=principal.actor
+        )
+    except AssessmentError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
 
 def _prioritization(
