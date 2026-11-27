@@ -309,6 +309,19 @@ def test_an_operator_pauses_and_cancels_through_the_api(session, finding, operat
     ]
 
 
+def test_the_finding_detail_says_whether_its_investigation_is_held(session, finding, operator):
+    _, token = operator
+    client = _operator_client(token)
+    detail = f"/api/v1/findings/{finding.id}"
+    base = f"{detail}/investigation"
+
+    assert client.get(detail).json()["investigation_held"] is False
+    assert client.post(f"{base}/pause").status_code == 200
+    assert client.get(detail).json()["investigation_held"] is True
+    assert client.post(f"{base}/unpause").status_code == 200
+    assert client.get(detail).json()["investigation_held"] is False
+
+
 def test_an_operator_cannot_halt(operator):
     _, token = operator
     response = _operator_client(token).post("/api/v1/control/halt", json={"reason": "not mine"})

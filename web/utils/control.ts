@@ -42,3 +42,13 @@ export function haltAttribution(state: HaltState): string {
     : `${when.toISOString().replace('T', ' ').slice(0, 16)} UTC`
   return `Set by ${who} at ${stamp}`
 }
+
+export type InvestigationAction = 'pause' | 'unpause' | 'cancel'
+
+export function investigationActions(held: boolean): InvestigationAction[] {
+  return held ? ['unpause', 'cancel'] : ['pause', 'cancel']
+}
+
+export function investigationHoldStatus(held: boolean): string {
+  return held ? 'Investigation is paused.' : 'Investigation is not paused.'
+}

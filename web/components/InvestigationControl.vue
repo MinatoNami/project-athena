@@ -1,5 +1,5 @@
 <script setup lang="ts">
-const props = defineProps<{ findingId: string; mfaEnabled: boolean }>()
+const props = defineProps<{ findingId: string; mfaEnabled: boolean; held: boolean }>()
 const emit = defineEmits<{ changed: [] }>()
 
 const busy = ref(false)
@@ -9,6 +9,7 @@ const confirmingIdentity = ref(false)
 const password = ref('')
 const totpCode = ref('')
 const pendingAction = ref<{ label: string; run: () => Promise<void> } | null>(null)
+const offered = computed(() => investigationActions(props.held))
 
 async function perform(label: string, run: () => Promise<void>) {
   busy.value = true
@@ -74,10 +75,11 @@ function act(kind: 'pause' | 'unpause' | 'cancel', label: string) {
 
 <template>
   <div class="invcontrol" role="group" aria-label="Investigation control">
+    <p>{{ investigationHoldStatus(props.held) }}</p>
     <div class="buttons">
-      <button class="btn" :disabled="busy" @click="act('pause', 'Pause')">Pause investigation</button>
-      <button class="btn" :disabled="busy" @click="act('unpause', 'Unpause')">Unpause</button>
-      <button class="btn" :disabled="busy" @click="act('cancel', 'Cancel')">Cancel investigation</button>
+      <button v-if="offered.includes('pause')" class="btn" :disabled="busy" @click="act('pause', 'Pause')">Pause investigation</button>
+      <button v-if="offered.includes('unpause')" class="btn" :disabled="busy" @click="act('unpause', 'Unpause')">Unpause</button>
+      <button v-if="offered.includes('cancel')" class="btn" :disabled="busy" @click="act('cancel', 'Cancel')">Cancel investigation</button>
     </div>
     <div v-if="confirmingIdentity" class="stepup">
       <label>

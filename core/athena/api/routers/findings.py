@@ -12,6 +12,7 @@ from athena.api.deps import Principal, can_operate, can_read, db
 from athena.api.routers.exports import is_uuid
 from athena.audit import record
 from athena.config import get_settings
+from athena.control import is_investigation_paused
 from athena.db.models import (
     AffectedRange,
     Asset,
@@ -184,6 +185,7 @@ def get_finding(
         "advisory_revision": finding.advisory_revision,
         "first_seen": finding.first_seen,
         "last_evaluated_at": finding.last_evaluated_at,
+        "investigation_held": is_investigation_paused(session, finding.id),
         "vulnerability": {
             "id": vulnerability.id,
             "aliases": vulnerability.aliases,
