@@ -113,7 +113,7 @@ Extension patterns used below:
   - A replayed key returns the original response.
   - Break-glass writes an audit entry.
 - **Done when:** two users with different roles exist, and one cannot approve their own request.
-- **Status, 28 November 2026:** **Partial.** Route roles and step-up are done: 9c6e747, a3ba2f9, 5ed85db, ce4b85c, 48afb8b, a2f790f. TOTP (b7d200d), break-glass (7d07b91), user management (e0ace1f, cf23d01) and BFF CSRF protection (f3bce6c) have landed. Open: `Idempotency-Key` handling on mutating POSTs, and the self-approval check, which needs the approvals of 1.1.
+- **Status, 28 November 2026:** **Partial.** Route roles and step-up are done: 9c6e747, a3ba2f9, 5ed85db, ce4b85c, 48afb8b, a2f790f. TOTP (b7d200d), break-glass (7d07b91), user management (e0ace1f, cf23d01) and BFF CSRF protection (f3bce6c) have landed. `Idempotency-Key` replay landed in 2cc4556, 90bd1f9 and 1bf6189. An independent review then led to five fixes: a TOTP failure lockout (49a9c7c), ASCII-only codes (5733e89), a last-admin guard (1f5c5ba), invite expiry (282a419) and a safe 0021 downgrade (6957176). Open: the self-approval check, which needs the approvals of 1.1, and IP-level rate limiting in front of login.
 
 **0.2 Allowlist the jobs API.**
 
