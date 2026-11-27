@@ -184,6 +184,35 @@ def mfa_lockout_retry_after(
     return max(1, math.ceil((unlocks_at - current).total_seconds()))
 
 
+SINGLE_USE_CREDENTIAL_ISSUERS = ("USER_INVITED", "BREAK_GLASS")
+
+
+def single_use_credential_expired(
+    session: Session, user: User, *, now: datetime | None = None
+) -> bool:
+    since = (now or datetime.now(UTC)) - timedelta(
+        hours=get_settings().single_use_credential_ttl_hours
+    )
+    last_seq_before_ttl = (
+        select(AuditEvent.seq)
+        .where(AuditEvent.at < since)
+        .order_by(AuditEvent.seq.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+    issued_within_ttl = session.execute(
+        select(AuditEvent.seq)
+        .where(
+            AuditEvent.seq > func.coalesce(last_seq_before_ttl, 0),
+            AuditEvent.at >= since,
+            AuditEvent.action.in_(SINGLE_USE_CREDENTIAL_ISSUERS),
+            AuditEvent.subject == f"user:{user.id}",
+        )
+        .limit(1)
+    ).first()
+    return issued_within_ttl is None
+
+
 def verify_totp(session: Session, user: User, code: str | None) -> bool:
     if not user.mfa_secret or not code:
         return False

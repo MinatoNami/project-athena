@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     step_up_ttl_seconds: int = 300
     mfa_lockout_failures: int = 5
     mfa_lockout_window_seconds: int = 900
+    single_use_credential_ttl_hours: int = 72
 
     worker_concurrency: int = 4
     job_lease_seconds: int = 300

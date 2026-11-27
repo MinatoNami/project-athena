@@ -161,6 +161,33 @@ def test_invite_issues_a_single_use_credential(app, session):
     assert "PASSWORD_CHANGED" in actions
 
 
+def test_an_invite_credential_expires_after_its_ttl(app, session, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    admin = _make_user(session, "admin")
+    client = _signed_in(app, admin)
+    email = f"invitee-{uuid.uuid4().hex[:8]}@example.com"
+    invited = client.post("/api/v1/users/invite", json={"email": email, "role": "viewer"})
+    credential = invited.json()["invite_credential"]
+    invitee_id = invited.json()["id"]
+
+    session.expire_all()
+    invitee_row = session.get(User, uuid.UUID(invitee_id))
+    ttl = timedelta(hours=get_settings().single_use_credential_ttl_hours)
+    assert A.single_use_credential_expired(session, invitee_row) is False
+    later = datetime.now(UTC) + ttl + timedelta(minutes=1)
+    assert A.single_use_credential_expired(session, invitee_row, now=later) is True
+
+    monkeypatch.setattr(get_settings(), "single_use_credential_ttl_hours", 0)
+    body = {"email": email, "password": credential, "new_password": NEW_PASSWORD}
+    expired = _client(app).post("/api/v1/auth/login", json=body)
+    assert expired.status_code == 401
+    assert "expired" in expired.json()["detail"]
+    session.expire_all()
+    assert session.get(User, uuid.UUID(invitee_id)).password_change_required is True
+    assert _actions(session, invitee_id)[-1] == "SINGLE_USE_CREDENTIAL_EXPIRED"
+
+
 def test_set_role_disable_and_reset_mfa_are_applied_and_audited(app, session):
     admin = _make_user(session, "admin")
     target = _make_user(session, "viewer")

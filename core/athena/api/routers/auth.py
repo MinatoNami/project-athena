@@ -129,6 +129,17 @@ def login(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
 
     assert user is not None
+    if user.password_change_required and A.single_use_credential_expired(session, user):
+        record_isolated(
+            actor="anonymous",
+            action="SINGLE_USE_CREDENTIAL_EXPIRED",
+            subject=f"user:{user.id}",
+            detail={"ip": request.client.host if request.client else None},
+        )
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "This single-use credential has expired; ask an admin for a new one",
+        )
     if user.mfa_enabled:
         _refuse_while_mfa_locked(session, user, actor="anonymous", stage="login", request=request)
     if user.mfa_enabled and not A.verify_totp(session, user, body.totp_code):
