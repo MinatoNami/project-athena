@@ -11,8 +11,14 @@ export function apiUrl(path: string): string {
   return `${base.endsWith('/') ? base : base + '/'}api/${path}`
 }
 
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
+
 export function api<T>(path: string, opts: Record<string, any> = {}) {
   const headers: Record<string, string> = { ...(opts.headers || {}), 'x-requested-by': 'athena-web' }
+  const method = String(opts.method || 'GET').toUpperCase()
+  if (!SAFE_METHODS.has(method) && !headers['idempotency-key']) {
+    headers['idempotency-key'] = crypto.randomUUID()
+  }
 
   if (import.meta.server) {
     const incoming = useRequestHeaders(['cookie'])

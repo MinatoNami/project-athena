@@ -18,6 +18,7 @@ export default defineEventHandler(async (event) => {
   const target = `${config.athenaApiUrl}/api/v1/${path}${getRequestURL(event).search}`
 
   const cookie = getHeader(event, 'cookie')
+  const idempotencyKey = getHeader(event, 'idempotency-key')
   const body =
     method === 'GET' || method === 'HEAD'
       ? undefined
@@ -28,6 +29,7 @@ export default defineEventHandler(async (event) => {
     headers: {
       'content-type': getHeader(event, 'content-type') || 'application/json',
       ...(cookie ? { cookie } : {}),
+      ...(idempotencyKey ? { 'idempotency-key': idempotencyKey } : {}),
     },
     body,
     redirect: 'manual',
