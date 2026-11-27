@@ -123,7 +123,16 @@ def _sweep_triage(session, last_run: dict[str, float], now: float) -> None:
                -- current revision (`investigate.match_is_current`): queued now, the
                -- worker would only set it aside, on every pass until then.
                AND f.advisory_revision >= v.revision
-               AND (f.triage_disposition IS NULL OR f.triage_disposition = 'investigate')
+               AND (
+                   f.triage_disposition IS NULL
+                   OR (
+                       f.triage_disposition = 'investigate'
+                       AND NOT EXISTS (SELECT 1 FROM control_state c WHERE c.halted)
+                       AND NOT EXISTS (
+                           SELECT 1 FROM investigation_hold h WHERE h.finding_id = f.id
+                       )
+                   )
+               )
              ORDER BY v.malicious DESC,
                       v.kev DESC,
                       COALESCE(v.cvss_score, 0) DESC,

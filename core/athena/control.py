@@ -70,6 +70,10 @@ def is_investigation_paused(session: Session, finding_id: uuid.UUID) -> bool:
     return found is not None
 
 
+def is_investigation_blocked(session: Session, finding_id: uuid.UUID) -> bool:
+    return is_halted(session) or is_investigation_paused(session, finding_id)
+
+
 def pause_investigation(session: Session, finding_id: uuid.UUID, *, actor: str) -> bool:
     row = session.execute(
         text(

@@ -313,3 +313,145 @@ def test_an_operator_cannot_halt(operator):
     _, token = operator
     response = _operator_client(token).post("/api/v1/control/halt", json={"reason": "not mine"})
     assert response.status_code == 403
+
+
+def _open_jobs(session, finding_id):
+    rows = session.execute(
+        text("SELECT kind FROM job WHERE payload->>'finding_id' = :fid AND finished_at IS NULL"),
+        {"fid": str(finding_id)},
+    ).all()
+    return sorted(row.kind for row in rows)
+
+
+def _drop_jobs(session, finding_id):
+    session.rollback()
+    session.execute(
+        text("DELETE FROM job WHERE payload->>'finding_id' = :fid"),
+        {"fid": str(finding_id)},
+    )
+    session.commit()
+
+
+@pytest.fixture
+def sweep_ready(session, finding, monkeypatch):
+    from types import SimpleNamespace
+
+    import athena.investigation.priority as priority
+    import athena.llm.budget as budget
+
+    monkeypatch.setattr(
+        budget,
+        "current",
+        lambda _session: SimpleNamespace(exhausted=False, remaining=1000, as_dict=dict),
+    )
+    monkeypatch.setattr(priority, "decide", lambda *_a, **_k: SimpleNamespace(investigate=True))
+    session.execute(
+        text(
+            "UPDATE vulnerability SET malicious = true, kev = true, cvss_score = 10"
+            " WHERE id = :v"
+        ),
+        {"v": finding.vulnerability_id},
+    )
+    session.commit()
+    yield finding
+    _drop_jobs(session, finding.id)
+
+
+def _sweep(session):
+    from athena.workers.scheduler import _sweep_triage
+
+    _sweep_triage(session, {}, 10**12)
+    session.commit()
+
+
+def _set_disposition(session, finding, disposition):
+    finding.triage_disposition = disposition
+    session.commit()
+
+
+def test_sweep_skips_a_held_finding_until_it_is_resumed(session, sweep_ready):
+    finding = sweep_ready
+    _set_disposition(session, finding, "investigate")
+    pause_investigation(session, finding.id, actor="test")
+    session.commit()
+
+    _sweep(session)
+    assert _open_jobs(session, finding.id) == []
+
+    resume_investigation(session, finding.id)
+    session.commit()
+    _sweep(session)
+    assert _open_jobs(session, finding.id) == ["investigate.finding"]
+
+
+def test_sweep_queues_no_investigation_while_halted(session, sweep_ready):
+    finding = sweep_ready
+    _set_disposition(session, finding, "investigate")
+    set_halt(session, halted=True, reason="drill", actor="test")
+    session.commit()
+
+    _sweep(session)
+    assert _open_jobs(session, finding.id) == []
+
+    set_halt(session, halted=False, reason=None, actor="test")
+    session.commit()
+    _sweep(session)
+    assert _open_jobs(session, finding.id) == ["investigate.finding"]
+
+
+def test_sweep_still_queues_triage_for_a_held_finding_while_halted(session, sweep_ready):
+    finding = sweep_ready
+    pause_investigation(session, finding.id, actor="test")
+    set_halt(session, halted=True, reason="drill", actor="test")
+    session.commit()
+
+    _sweep(session)
+    assert _open_jobs(session, finding.id) == ["triage.finding"]
+
+
+@pytest.fixture
+def triaged_to_investigate(session, finding, monkeypatch):
+    from types import SimpleNamespace
+
+    import athena.investigation.triage as triage_module
+
+    monkeypatch.setattr(
+        triage_module,
+        "triage",
+        lambda _facts: SimpleNamespace(
+            disposition="investigate", reason="stub", confidence=0.9, forced=False, tokens=0
+        ),
+    )
+    yield finding
+    _drop_jobs(session, finding.id)
+
+
+def _run_triage(finding_id):
+    from athena.workers.investigate import triage_finding
+
+    return triage_finding({"finding_id": str(finding_id)})
+
+
+def test_triage_does_not_queue_an_investigation_for_a_held_finding(
+    session, sweep_ready, triaged_to_investigate
+):
+    finding = triaged_to_investigate
+    pause_investigation(session, finding.id, actor="test")
+    session.commit()
+
+    assert _run_triage(finding.id)["disposition"] == "investigate"
+    assert _open_jobs(session, finding.id) == []
+
+    resume_investigation(session, finding.id)
+    session.commit()
+    _sweep(session)
+    assert _open_jobs(session, finding.id) == ["investigate.finding"]
+
+
+def test_triage_does_not_queue_an_investigation_while_halted(session, triaged_to_investigate):
+    finding = triaged_to_investigate
+    set_halt(session, halted=True, reason="drill", actor="test")
+    session.commit()
+
+    assert _run_triage(finding.id)["disposition"] == "investigate"
+    assert _open_jobs(session, finding.id) == []
