@@ -39,6 +39,11 @@ STEP_UP_ROUTES = {
     ("POST", "/api/v1/users/{user_id}/role"),
     ("POST", "/api/v1/users/{user_id}/disable"),
     ("POST", "/api/v1/users/{user_id}/mfa/reset"),
+    ("POST", "/api/v1/control/halt"),
+    ("POST", "/api/v1/control/resume"),
+    ("POST", "/api/v1/findings/{finding_id}/investigation/pause"),
+    ("POST", "/api/v1/findings/{finding_id}/investigation/unpause"),
+    ("POST", "/api/v1/findings/{finding_id}/investigation/cancel"),
 }
 
 MUTATION_WORDS = {"apply", "rotate", "block", "isolate", "revoke", "execute", "delete"}
@@ -197,6 +202,7 @@ READ_ROUTES = [
     "/api/v1/metrics",
     "/api/v1/code-findings",
     "/api/v1/export/openvex",
+    "/api/v1/control",
 ]
 
 DENIED_ONLY_ROUTES = ["/api/v1/events"]
@@ -232,6 +238,11 @@ def test_anonymous_is_unauthenticated(engine, path):
         ("POST", f"/api/v1/suppressions/{uuid.uuid4()}/revoke", None),
         ("DELETE", f"/api/v1/nodes/{uuid.uuid4()}", None),
         ("POST", "/api/v1/nodes/enrol-token", {"tier": "unknown"}),
+        ("POST", "/api/v1/control/halt", {"reason": "step-up probe"}),
+        ("POST", "/api/v1/control/resume", None),
+        ("POST", f"/api/v1/findings/{uuid.uuid4()}/investigation/pause", None),
+        ("POST", f"/api/v1/findings/{uuid.uuid4()}/investigation/unpause", None),
+        ("POST", f"/api/v1/findings/{uuid.uuid4()}/investigation/cancel", None),
     ],
 )
 def test_sensitive_mutations_need_a_fresh_step_up(engine, people, method, path, body):
@@ -322,3 +333,27 @@ def test_jobs_accepts_an_allowlisted_kind(engine, people):
         with Session(engine) as s:
             s.execute(delete(Job).where(Job.key == key))
             s.commit()
+
+
+def test_halt_and_resume_are_audited_and_readable(engine, people):
+    user_id, session_id, token = people["admin"]
+    client = _client(token)
+    _set_step_up(engine, session_id, datetime.now(UTC))
+    try:
+        halted = client.post("/api/v1/control/halt", json={"reason": "audit probe"})
+        assert halted.status_code == 200, halted.text
+        assert client.get("/api/v1/control").json()["halted"] is True
+        assert _audited(engine, f"user:{user_id}", "ATHENA_HALTED") >= 1
+    finally:
+        resumed = client.post("/api/v1/control/resume")
+    assert resumed.status_code == 200, resumed.text
+    assert client.get("/api/v1/control").json()["halted"] is False
+    assert _audited(engine, f"user:{user_id}", "ATHENA_RESUMED") >= 1
+
+
+def test_a_stranger_cannot_halt(engine, people):
+    _, session_id, token = people["stranger"]
+    _set_step_up(engine, session_id, datetime.now(UTC))
+    response = _client(token).post("/api/v1/control/halt", json={"reason": "not mine"})
+    assert response.status_code == 403
+    assert response.json()["detail"] != STEP_UP_REQUIRED

@@ -49,6 +49,20 @@ def complete(
     base_url = settings.llm_base_url
     payload_text = "\n".join(filter(None, [system, prompt]))
 
+    from athena.control import Halted, halt_state
+    from athena.db.base import session_scope
+
+    with session_scope() as control_session:
+        halt = halt_state(control_session)
+    if halt.halted:
+        _record_egress(
+            purpose=purpose, endpoint=base_url, model=settings.llm_model,
+            classes=set(), blocked=True,
+            reason=f"athena is halted: {halt.reason or 'no reason given'}",
+            payload_hash=_digest(payload_text), bytes_out=len(payload_text),
+        )
+        raise Halted(f"Athena is halted by {halt.set_by}; no model calls until it resumes")
+
     if secrets_found := find_secrets(payload_text):
         _record_egress(
             purpose=purpose, endpoint=base_url, model=settings.llm_model,
