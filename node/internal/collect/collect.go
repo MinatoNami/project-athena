@@ -1,8 +1,3 @@
-// Package collect implements the observe capabilities.
-//
-// Every capability is a named, argument-validated operation with a fixed
-// implementation. There is deliberately no generic command execution: the absence
-// of a run_shell capability is the difference between a node agent and a backdoor.
 package collect
 
 import (
@@ -18,8 +13,6 @@ import (
 
 const commandTimeout = 60 * time.Second
 
-// Registry maps a capability name to its implementation. A capability absent here
-// cannot be invoked, whatever core sends.
 var Registry = map[string]func(args map[string]any) (any, error){
 	"get_system_info": func(map[string]any) (any, error) { return SystemInfo() },
 	"list_packages":   func(map[string]any) (any, error) { return Packages() },
@@ -29,8 +22,6 @@ var Registry = map[string]func(args map[string]any) (any, error){
 	"inspect_docker":  func(map[string]any) (any, error) { return Docker() },
 }
 
-// run executes a fixed argv with a timeout. Nothing here interpolates task input
-// into a command line.
 func run(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
@@ -90,9 +81,6 @@ func SystemInfo() (Info, error) {
 	if kernel, err := run("uname", "-r"); err == nil {
 		info.Kernel = strings.TrimSpace(kernel)
 	}
-	// ID and VERSION_ID are reported alongside the pretty name because correlation
-	// needs the release: a fix in Ubuntu 22.04 says nothing about 24.04, and
-	// parsing a human-readable string on the server is the wrong place for it.
 	for _, line := range strings.Split(osRelease(), "\n") {
 		value := func(prefix string) string {
 			return strings.Trim(strings.TrimPrefix(line, prefix), `"`)
@@ -117,8 +105,6 @@ func osRelease() string {
 	return string(data)
 }
 
-// MachineID is the most durable host identity available: it survives reboots,
-// hostname changes, and IP changes, which a hostname does not.
 func MachineID() string {
 	for _, path := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id"} {
 		if id := readFirstLine(path); id != "" {
@@ -135,9 +121,6 @@ type Package struct {
 	Source  string `json:"source"`
 }
 
-// Packages reads the OS package database directly rather than shelling out to a
-// package manager where possible, so a broken package tool cannot look like an
-// empty system.
 func Packages() ([]Package, error) {
 	if out, err := run("dpkg-query", "-W", "-f=${Package}\t${Version}\t${Architecture}\n"); err == nil {
 		return parseTabular(out, "deb"), nil
@@ -238,8 +221,6 @@ type Port struct {
 	Process  string `json:"process,omitempty"`
 }
 
-// Ports reports listening sockets. New exposure is the signal that matters here, so
-// the address is kept: 127.0.0.1:6379 and 0.0.0.0:6379 are very different facts.
 func Ports() ([]Port, error) {
 	out, err := run("ss", "-lntupH")
 	if err != nil {
@@ -281,9 +262,6 @@ type DockerState struct {
 }
 
 type DockerImage struct {
-	// The local image ID, which is what `docker ps` prints for a container whose
-	// image carries no usable tag. Without it such a container cannot be matched to
-	// the image it runs, and the image looks like one nothing uses.
 	ID         string `json:"id"`
 	Digest     string `json:"digest"`
 	Repository string `json:"repository"`
@@ -296,18 +274,12 @@ type DockerContainer struct {
 	Image  string `json:"image"`
 	Digest string `json:"digest,omitempty"`
 	State  string `json:"state"`
-	// Published port mappings, verbatim, e.g. "0.0.0.0:8080->80/tcp". Reported
-	// rather than interpreted: whether binding to loopback means a container is
-	// unreachable depends on what else runs on the host, which the agent cannot see.
-	// The empty string and "no ports reported" are different facts, so the field is
-	// always present once an agent is new enough to send it.
-	Ports string `json:"ports"`
+	Ports  string `json:"ports"`
 }
 
 func Docker() (DockerState, error) {
 	state := DockerState{Images: []DockerImage{}, Containers: []DockerContainer{}}
 
-	// Images are identified by digest, never by tag: a tag is a moving pointer.
 	if out, err := run("docker", "image", "ls", "--digests", "--format",
 		"{{.ID}}\t{{.Digest}}\t{{.Repository}}\t{{.Tag}}"); err == nil {
 		for _, line := range strings.Split(out, "\n") {
@@ -319,9 +291,6 @@ func Docker() (DockerState, error) {
 				DockerImage{ID: f[0], Digest: f[1], Repository: f[2], Tag: f[3]})
 		}
 	} else {
-		// Distinguishing "no Docker here" from "the read-only proxy is unreachable"
-		// matters: the first is a fact about the host, the second is a coverage gap
-		// the operator can fix.
 		host := os.Getenv("DOCKER_HOST")
 		if host == "" {
 			return state, fmt.Errorf("docker unavailable and no DOCKER_HOST set: %w", err)
@@ -332,8 +301,6 @@ func Docker() (DockerState, error) {
 	if out, err := run("docker", "ps", "-a", "--format",
 		"{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Ports}}"); err == nil {
 		for _, line := range strings.Split(out, "\n") {
-			// Ports is last and is routinely empty, so the line is split to a fixed
-			// width rather than requiring every field to be non-empty.
 			f := strings.SplitN(strings.TrimSpace(line), "\t", 5)
 			if len(f) < 4 {
 				continue

@@ -1,10 +1,3 @@
-"""AI layer.
-
-Every outbound call goes through athena.llm.gateway. There is deliberately no
-provider client anywhere else in the codebase, so the egress policy cannot be
-bypassed by accident.
-"""
-
 from athena.llm.budget import BudgetExhausted
 from athena.llm.gateway import (
     Completion,

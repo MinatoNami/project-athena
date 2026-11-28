@@ -1,9 +1,3 @@
-"""M0 schema subset.
-
-Only the tables the foundations milestone actually exercises. The full model in
-docs/TECHNICAL_DESIGN.md §5 lands in M1/M2 as those milestones are built.
-"""
-
 from __future__ import annotations
 
 import uuid
@@ -51,8 +45,6 @@ class User(Base):
 
 
 class Session_(Base):
-    """Server-side session. The browser holds only an opaque token hash reference."""
-
     __tablename__ = "app_session"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
@@ -72,8 +64,6 @@ class Session_(Base):
 
 
 class BootstrapToken(Base):
-    """Single-use token minted on first run so the deployment never ships credentials."""
-
     __tablename__ = "bootstrap_token"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
@@ -87,8 +77,6 @@ class BootstrapToken(Base):
 
 class Job(Base):
     __tablename__ = "job"
-    # Uniqueness is enforced by a partial index on pending rows only — see
-    # migration 0007. A finished job must not reserve its key forever.
     __table_args__ = (
         Index("job_claimable_idx", "priority", "run_after"),
     )
@@ -112,8 +100,6 @@ class Job(Base):
 
 
 class AuditEvent(Base):
-    """Append-only, hash-chained. A trigger rejects UPDATE and DELETE — see migration 0003."""
-
     __tablename__ = "audit_event"
 
     seq: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -129,8 +115,6 @@ class AuditEvent(Base):
 
 
 class Secret(Base):
-    """Envelope-encrypted secret. The wrapping key never lives in this database."""
-
     __tablename__ = "secret"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
@@ -146,8 +130,6 @@ class Secret(Base):
 
 
 class Outbox(Base):
-    """Domain events for the SSE relay. Carries identity, never a payload."""
-
     __tablename__ = "outbox"
 
     seq: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -159,9 +141,6 @@ class Outbox(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
-# ─── inventory (M1) ──────────────────────────────────────────────────────────
-
-
 class Asset(Base):
     __tablename__ = "asset"
 
@@ -171,8 +150,6 @@ class Asset(Base):
     display_name: Mapped[str] = mapped_column(Text, nullable=False)
     tier: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown")
     exposure: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown")
-    # NULL means "nobody has said", which is different from "unimportant". Risk
-    # scoring must not silently treat an unset value as zero.
     criticality: Mapped[int | None] = mapped_column(SmallInteger)
     owner: Mapped[str | None] = mapped_column(Text)
     attributes: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
@@ -182,12 +159,7 @@ class Asset(Base):
     last_seen: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-    # NULL means never successfully inventoried. The UI must render that as unknown,
-    # never as clean.
     last_inventoried_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # The moment this asset's existing backlog was accepted as "what was already
-    # here". Findings first seen at or before it are pre-existing; later ones are
-    # new. Null means no baseline, so everything counts as new.
     baseline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     baseline_by: Mapped[str | None] = mapped_column(Text)
     tombstoned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -245,12 +217,6 @@ class AssetComponent(Base):
 
 
 class ScanRun(Base):
-    """What was attempted, what succeeded, and what did not.
-
-    A partial or failed scan must never be indistinguishable from a complete one, so
-    the outcome is recorded explicitly rather than implied by the presence of rows.
-    """
-
     __tablename__ = "scan_run"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
@@ -270,12 +236,6 @@ class ScanRun(Base):
 
 
 class MergeCandidate(Base):
-    """Two assets that might be the same.
-
-    Never merged automatically: a wrong merge corrupts history irreversibly, while a
-    wrong split is merely untidy.
-    """
-
     __tablename__ = "merge_candidate"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
@@ -296,9 +256,6 @@ class MergeCandidate(Base):
     __table_args__ = (
         UniqueConstraint("asset_id", "other_asset_id", name="merge_candidate_pair_uniq"),
     )
-
-
-# ─── nodes (M1) ──────────────────────────────────────────────────────────────
 
 
 class Node(Base):
@@ -370,9 +327,6 @@ class NodeNonce(Base):
     )
 
 
-# ─── vulnerability intelligence (M2) ─────────────────────────────────────────
-
-
 class Vulnerability(Base):
     __tablename__ = "vulnerability"
 
@@ -390,24 +344,12 @@ class Vulnerability(Base):
     kev: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     kev_ransomware: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     kev_added_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # CISA's own dates, distinct from `kev_added_at` (when Athena noticed). The due
-    # date is the remediation deadline the catalogue sets for federal agencies.
     kev_date_added: Mapped[date | None] = mapped_column(Date)
     kev_due_date: Mapped[date | None] = mapped_column(Date)
     kev_forensic_triage: Mapped[bool | None] = mapped_column(Boolean)
-    # CISA Vulnrichment's SSVC decision points: {exploitation, automatable,
-    # technical_impact, timestamp, version}. Null with `ssvc_checked_at` set means
-    # CISA has published none; both null means nobody has asked.
-    # `none_as_null`: without it SQLAlchemy writes Python None as JSON `null`, which
-    # is NOT NULL to SQL — and "has CISA published an assessment?" then counts every
-    # CVE that was merely checked.
     ssvc_cisa: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
     ssvc_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # The vector `cvss_score` was computed from; null when the advisory published
-    # the number itself. Written with the score, never apart from it.
     cvss_scoring_vector: Mapped[str | None] = mapped_column(Text)
-    # An OpenSSF malicious-packages record (`MAL-`): the package is the attack, not
-    # a flaw in it. Changes the remediation and the floor; see risk.scoring.
     malicious: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
@@ -445,13 +387,6 @@ class AffectedRange(Base):
 
 
 class AdvisorySource(Base):
-    """Per-source ingestion state.
-
-    Several records converge on one CVE. Tracking the content hash per source record
-    means a revision reflects that source actually changing, rather than two sources
-    taking turns overwriting each other.
-    """
-
     __tablename__ = "advisory_source"
 
     vulnerability_id: Mapped[str] = mapped_column(
@@ -464,10 +399,6 @@ class AdvisorySource(Base):
     ingested_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-    # Whether this record classifies the advisory as malware (its own `MAL-` id, or
-    # a true `MAL-` alias). False once withdrawn; NULL when ingested before this was
-    # recorded (migration 0020), which counts as possibly. `vulnerability.malicious`
-    # is recomputed from these when a source is retracted.
     malicious: Mapped[bool | None] = mapped_column(Boolean)
 
 
@@ -476,9 +407,6 @@ class IntelSource(Base):
 
     name: Mapped[str] = mapped_column(String(32), primary_key=True)
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # The moment that never moves. `last_success_at` is overwritten on every poll, so
-    # it can never answer "since when has Athena been watching" — which is the start
-    # line detection latency has to be measured from.
     first_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
@@ -486,14 +414,11 @@ class IntelSource(Base):
     advisories: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
-# Mirrors the finding_state enum created in migration 0006. create_type=False: the
-# migration owns the type, and SQLAlchemy must not try to create it again.
 FINDING_STATES = (
     "discovered", "investigating", "confirmed", "remediation_found", "patch_prepared",
     "awaiting_approval", "remediating", "verifying", "resolved",
     "false_positive", "mitigated", "accepted_risk", "deferred", "no_fix_available",
     "regressed",
-    # Every range that matched it was retracted by its source (migration 0019).
     "unmatched",
 )
 finding_state_enum = ENUM(*FINDING_STATES, name="finding_state", create_type=False)
@@ -516,17 +441,12 @@ class Finding(Base):
     state: Mapped[str] = mapped_column(finding_state_enum, nullable=False, default="discovered")
     match_method: Mapped[str] = mapped_column(String(32), nullable=False)
     match_confidence: Mapped[float] = mapped_column(Float, nullable=False)
-    # matched_range_id is a convenience only: affected_range rows are replaced
-    # wholesale when an advisory is revised, so the identifying facts are kept here
-    # too rather than behind a reference that dangles.
     matched_range_id: Mapped[int | None] = mapped_column(BigInteger)
     matched_source: Mapped[str | None] = mapped_column(String(32))
     matched_release: Mapped[str | None] = mapped_column(String(32))
     fix_channel: Mapped[str | None] = mapped_column(String(16))
     fixed_version: Mapped[str | None] = mapped_column(Text)
     investigation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    # Triage decides what deserves a full investigation, never whether the
-    # vulnerability applies. A deprioritised finding stays `discovered`.
     triage_disposition: Mapped[str | None] = mapped_column(String(16))
     triage_reason: Mapped[str | None] = mapped_column(Text)
     triage_confidence: Mapped[float | None] = mapped_column(Float)
@@ -571,12 +491,6 @@ class Evidence(Base):
 
 
 class EgressLog(Base):
-    """Every outbound model call, including refused ones.
-
-    The payload is never stored — only its digest — so the log can correlate a call
-    without becoming a copy of everything ever sent.
-    """
-
     __tablename__ = "egress_log"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -598,17 +512,6 @@ class EgressLog(Base):
 
 
 class Suppression(Base):
-    """A decision to stop showing a finding, and what that decision rested on.
-
-    Not a deletion. The premise — exposure, tier, whether a fix exists, whether the
-    flaw is known-exploited — is stored with it, so when the situation changes the
-    reasoning can be re-checked rather than silently outliving the facts it was
-    about. A one-line "accepted" from six months ago is worth nothing on its own.
-
-    Scope is expressed by which columns are set: a null `asset_id` means any asset, a
-    null `component_id` means any component. The vulnerability is always required.
-    """
-
     __tablename__ = "suppression"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
@@ -621,8 +524,6 @@ class Suppression(Base):
     component_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("component.id", ondelete="CASCADE")
     )
-    # Provenance only. Findings are recreated by correlation, so keying a suppression
-    # on one would lose it the next time the estate was scanned.
     created_from_finding_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     reason_code: Mapped[str] = mapped_column(String(32), nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
@@ -639,13 +540,6 @@ class Suppression(Base):
 
 
 class Notification(Base):
-    """Something worth telling somebody about, grouped by what happened.
-
-    One advisory affecting fourteen hosts is one notification with an occurrence
-    count, not fourteen messages. A partial unique index enforces at most one pending
-    row per `group_key`, so grouping cannot be lost to a race between two emitters.
-    """
-
     __tablename__ = "notification"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
@@ -669,12 +563,6 @@ class Notification(Base):
 
 
 class InvestigationRecord(Base):
-    """A completed investigation, keyed by the facts that could change its answer.
-
-    Stores everything needed to replay the conclusion: the model, the prompt hash,
-    and the ordered tool calls. A verdict nobody can reconstruct is not evidence.
-    """
-
     __tablename__ = "investigation"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
@@ -700,17 +588,6 @@ class InvestigationRecord(Base):
 
 
 class CodeFinding(Base):
-    """A secret or misconfiguration found in a repository's tree.
-
-    Separate from `Finding` because there is no advisory and no package version to
-    key on — forcing these into that table would mean placeholder vulnerabilities
-    and placeholder components, and every query over real findings would then have
-    to know to exclude them.
-
-    Identity is the scanner's fingerprint for the location and rule, never the
-    secret: values are redacted inside the sandbox and never reach this process.
-    """
-
     __tablename__ = "code_finding"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)

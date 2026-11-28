@@ -14,6 +14,8 @@ remediation while keeping a human in control of every change.
 | [Technical Design](docs/TECHNICAL_DESIGN.md) | How it is built |
 | [Web UI](docs/WEB_UI.md) | The Nuxt dashboard |
 | [Milestones](docs/MILESTONES.md) | What gets built when, and how each stage is proven |
+| [Security agent plan](docs/SECURITY_AGENT_PLAN.md) | How Athena grows to identify, mitigate and resolve threats |
+| [Research, Nov 2026](docs/RESEARCH_2026-11.md) | Security tooling released 27 Oct to 27 Nov 2026 that the plan builds on |
 
 ## Status
 
@@ -124,8 +126,8 @@ ruff check athena tests     # the whole lint gate; run it before pushing
 ```
 
 **`ruff format` is not run on this repository, and CI does not check it.** The code is
-hand-wrapped throughout — keyword arguments grouped onto shared lines, trailing
-comments aligned, query chains left on one line where they read as one thought — and
+hand-wrapped throughout — keyword arguments grouped onto shared lines, query
+chains left on one line where they read as one thought — and
 the formatter disagrees with that in most of the package. Running it would rewrite
 those files without changing what any of them do.
 

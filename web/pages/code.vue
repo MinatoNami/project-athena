@@ -1,12 +1,4 @@
 <script setup lang="ts">
-/**
- * Secrets and misconfigurations across every repository Athena patrols.
- *
- * A separate surface from findings on purpose. A leaked credential is not a
- * vulnerability with a CVE and a fixed version: its remedy is rotation, its clock
- * started when it was committed, and the person who handles it is often not the one
- * who upgrades packages.
- */
 useHead({ title: 'Secrets & config' })
 const { data: me } = await useMe()
 if (!me.value) await navigateTo('/login')

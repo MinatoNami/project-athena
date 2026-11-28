@@ -15,7 +15,6 @@ from athena.inventory.purl import build_purl, normalise_name, parse_purl
     ],
 )
 def test_pypi_names_follow_pep503(raw: str, expected: str) -> None:
-    """PyPI treats -, _, and . as equivalent. Missing this silently loses matches."""
     assert normalise_name("pypi", raw) == expected
 
 
@@ -36,7 +35,6 @@ def test_npm_scope_becomes_a_namespace() -> None:
 
 
 def test_qualifiers_are_ordered_so_the_purl_is_stable() -> None:
-    """The PURL is a lookup key; an unstable rendering would fragment the index."""
     a = build_purl(
         "deb", "openssl", "3.0.2", qualifiers={"distro": "ubuntu-24.04", "arch": "amd64"}
     )
@@ -51,12 +49,7 @@ def test_version_is_never_dropped() -> None:
     assert parse_purl("pkg:npm/left-pad") is None
 
 
-# --- Syft output shapes ------------------------------------------------------
-
-
 def test_syft_cpes_are_accepted_as_strings_or_objects() -> None:
-    """Syft has emitted both shapes across versions. Assuming one of them put a dict
-    into a SQL parameter and failed every repository scan."""
     from athena.scanners.syft import _first_cpe
 
     cpe = "cpe:2.3:a:x:y:1:*:*:*:*:*:*:*"
@@ -68,8 +61,6 @@ def test_syft_cpes_are_accepted_as_strings_or_objects() -> None:
 
 
 def test_unmapped_ecosystems_are_a_note_not_an_incomplete_scan() -> None:
-    """An ecosystem Athena cannot map is a known limitation. Recording it as a gap
-    would leave every repository with GitHub Actions permanently stale."""
     from athena.scanners.syft import parse
 
     components, warnings, notes = parse(
@@ -87,8 +78,6 @@ def test_unmapped_ecosystems_are_a_note_not_an_incomplete_scan() -> None:
 
 
 def test_syft_artifacts_without_a_version_are_reported_not_silently_kept() -> None:
-    """A component with no version cannot be matched against an advisory range, so
-    recording it as usable would overstate what we know."""
     from athena.scanners.syft import parse
 
     components, warnings, _notes = parse(
@@ -105,8 +94,6 @@ def test_syft_artifacts_without_a_version_are_reported_not_silently_kept() -> No
 
 
 def test_scope_is_unknown_when_the_sbom_carries_no_dependency_edges() -> None:
-    """Guessing direct-vs-transitive is worse than admitting we do not know: the
-    distinction decides whether a fix is even possible where the finding appears."""
     from athena.scanners.syft import parse
 
     components, warnings, notes = parse(
@@ -115,8 +102,6 @@ def test_scope_is_unknown_when_the_sbom_carries_no_dependency_edges() -> None:
                 {"id": "a", "name": "requests", "version": "2.19.1", "type": "python"},
                 {"id": "b", "name": "urllib3", "version": "1.24.1", "type": "python"},
             ],
-            # Syft emits `contains` for file locations. It is not a dependency edge,
-            # and treating it as one marked every declared package transitive.
             "artifactRelationships": [
                 {"parent": "src", "child": "a", "type": "contains"},
                 {"parent": "src", "child": "b", "type": "contains"},

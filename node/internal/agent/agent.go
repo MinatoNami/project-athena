@@ -1,4 +1,3 @@
-// Package agent holds enrolment, on-disk state, and the run loop.
 package agent
 
 import (
@@ -25,8 +24,6 @@ const (
 	maxBackoff   = 5 * time.Minute
 )
 
-// State is what persists across restarts. The private key lives here and nowhere
-// else; the file is created 0600 and the directory 0700.
 type State struct {
 	CoreURL       string `json:"core_url"`
 	NodeID        string `json:"node_id"`
@@ -56,15 +53,9 @@ func (s *State) Save(dir string) error {
 	if err != nil {
 		return err
 	}
-	// 0600: the private key is the node's whole identity.
 	return os.WriteFile(statePath(dir), data, 0o600)
 }
 
-// Enrol redeems a single-use token.
-//
-// The keypair is generated here, on the protected host. Only the public half is
-// ever sent, so core — and anyone who compromises it — never holds a credential
-// that can impersonate this node.
 func Enrol(coreURL, token, dir string) (*State, error) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -135,7 +126,6 @@ func (s *State) client() (*client.Client, error) {
 	return client.New(s.CoreURL, s.NodeID, priv, corePub, Version), nil
 }
 
-// Run polls for work until the context is cancelled.
 func Run(state *State, stop <-chan struct{}) error {
 	c, err := state.client()
 	if err != nil {
@@ -154,8 +144,6 @@ func Run(state *State, stop <-chan struct{}) error {
 
 		tasks, err := c.PollTasks()
 		if err != nil {
-			// Core being unreachable is expected and survivable; the node keeps
-			// trying rather than exiting and needing a supervisor to notice.
 			slog.Warn("poll failed", "error", err, "retry_in", backoff)
 			sleep(backoff, stop)
 			if backoff < maxBackoff {
@@ -173,8 +161,6 @@ func Run(state *State, stop <-chan struct{}) error {
 }
 
 func executeAndReport(c *client.Client, task client.Task) {
-	// A task is only executed if core signed it. An unsigned or expired instruction
-	// is refused and reported, never run.
 	if err := task.Verify(c.CorePublicKey); err != nil {
 		slog.Error("refusing task", "task", task.TaskID, "error", err)
 		_ = c.SubmitResult(client.Result{

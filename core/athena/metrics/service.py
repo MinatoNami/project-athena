@@ -1,20 +1,3 @@
-"""The PRD's success metrics, computed where they can be and refused where they cannot.
-
-Every metric carries three things: a value, the denominator it was computed over, and
-a status saying whether that denominator is large enough to mean anything. Most
-security dashboards omit the middle one, which is how "0% false positives" comes to
-be printed under a sample of two.
-
-Four of the ten cannot be computed on this system yet — remediation has not been
-built, and investigation quality needs ground truth a corpus has to supply. They are
-reported as `not_implemented` and `unknown` respectively rather than as zero. A zero
-and an absence look identical in a chart and mean opposite things, and the whole
-product is an argument against letting that happen.
-
-Rates over tiny denominators are refused for the same reason. A percentage computed
-over four findings is noise wearing a number's clothes.
-"""
-
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
@@ -35,17 +18,15 @@ from athena.db.models import (
     Vulnerability,
 )
 
-# Below these, a rate is not a measurement. Chosen so a single outcome cannot move
-# a headline number by more than a few points.
 MIN_FOR_RATE = 20
 MIN_FOR_LATENCY = 5
 
 
 class Status(StrEnum):
-    MEETING = "meeting"          # at or better than the MVP target
-    MISSING = "missing"          # computed, and short of it
-    NO_TARGET = "no_target"      # computed, but the PRD sets no number
-    UNKNOWN = "unknown"          # not enough data to say
+    MEETING = "meeting"
+    MISSING = "missing"
+    NO_TARGET = "no_target"
+    UNKNOWN = "unknown"
     NOT_IMPLEMENTED = "not_implemented"
 
 
@@ -56,12 +37,10 @@ class Metric:
     description: str
     value: float | None = None
     unit: str = ""
-    # Always stated. A rate without one is an assertion.
     denominator: int = 0
     denominator_label: str = ""
     target_mvp: float | None = None
     target_mature: float | None = None
-    # Which direction is good, so the UI never has to guess.
     lower_is_better: bool = False
     status: Status = Status.UNKNOWN
     note: str = ""
@@ -73,7 +52,6 @@ class Metric:
 
 
 def _grade(metric: Metric) -> Metric:
-    """Compare against the MVP target, and only when the sample supports it."""
     if metric.value is None:
         return metric
     if metric.target_mvp is None:
@@ -88,16 +66,7 @@ def _grade(metric: Metric) -> Metric:
     return metric
 
 
-# ── computable now ───────────────────────────────────────────────────────────
-
-
 def detection_latency(session: Session) -> Metric:
-    """Advisory published to affected asset identified, in hours.
-
-    Counted only for advisories published after Athena started watching. An advisory
-    from before that did not take two years to detect — it was there when the system
-    arrived, and including it would measure the backfill rather than the watch.
-    """
     m = Metric(
         id="detection_latency",
         label="Detection latency",
@@ -146,7 +115,6 @@ def detection_latency(session: Session) -> Metric:
 
 
 def coverage(session: Session) -> Metric:
-    """Registered assets with a recent inventory."""
     from athena.inventory.service import coverage as inventory_coverage
 
     c = inventory_coverage(session)
@@ -169,9 +137,6 @@ def coverage(session: Session) -> Metric:
         "Neither is a clean result."
     ]
     if c.get("assets_inherited"):
-        # Said rather than folded in silently: these were established by scanning the
-        # image a container came from, so a package installed into a running
-        # container after it started would not appear.
         note.append(
             f"{c['assets_inherited']} containers are covered by their image rather "
             "than scanned directly, so a runtime install would not be seen."
@@ -181,7 +146,6 @@ def coverage(session: Session) -> Metric:
 
 
 def false_positive_rate(session: Session) -> Metric:
-    """Assessed findings a person dismissed as not real."""
     m = Metric(
         id="false_positive_rate",
         label="False positive rate",
@@ -214,11 +178,6 @@ def false_positive_rate(session: Session) -> Metric:
 
 
 def suppression_durability(session: Session) -> Metric:
-    """Dismissed findings that stayed dismissed.
-
-    A falling rate is a correlation defect, not a user problem: findings that keep
-    coming back were dismissed for reasons that never held.
-    """
     m = Metric(
         id="suppression_durability",
         label="Suppression durability",
@@ -242,11 +201,6 @@ def suppression_durability(session: Session) -> Metric:
 
 
 def notification_precision(session: Session) -> Metric:
-    """Notifications somebody opened.
-
-    Deliberately labelled as read rather than acted on. Reading is what this system
-    can observe; claiming it measures action would overstate what the number knows.
-    """
     m = Metric(
         id="notification_precision",
         label="Notification engagement",
@@ -274,12 +228,6 @@ def notification_precision(session: Session) -> Metric:
 
 
 def model_cost(session: Session) -> Metric:
-    """Tokens spent on investigation over the last 30 days.
-
-    Reported in tokens rather than currency: this deployment runs a local model, so
-    the marginal cost is electricity and time, and putting a price on it would be an
-    invented number.
-    """
     m = Metric(
         id="model_cost",
         label="Investigation cost",
@@ -312,11 +260,7 @@ def model_cost(session: Session) -> Metric:
     return m
 
 
-# ── not computable yet, and saying so ────────────────────────────────────────
-
-
 def investigation_quality(session: Session) -> Metric:
-    """Needs ground truth, which only a labelled corpus supplies."""
     m = Metric(
         id="investigation_quality",
         label="Investigation quality",
@@ -343,8 +287,6 @@ def mean_time_to_remediation(session: Session) -> Metric:
         description="Confirmed finding to verified resolution.",
         unit="days",
         lower_is_better=True,
-        # Stated even though nothing can be counted yet: a gap is described by what
-        # would fill it, not just by being empty.
         denominator_label="findings taken from confirmed to verified resolution",
         status=Status.NOT_IMPLEMENTED,
     )
@@ -367,17 +309,7 @@ def patch_success_rate(session: Session) -> Metric:
     return m
 
 
-# ── service levels ───────────────────────────────────────────────────────────
-
-
 def sla_report(session: Session) -> dict[str, Any]:
-    """How long open findings have been waiting, against a target per band.
-
-    The targets are defaults, not requirements handed down by the PRD — it sets
-    numbers for detection and accuracy but says nothing about how long a confirmed
-    finding may sit. They are configurable so they can be argued with rather than
-    quietly ignored.
-    """
     settings = get_settings()
     targets = {
         "critical": settings.sla_days_critical,
@@ -399,13 +331,9 @@ def sla_report(session: Session) -> dict[str, Any]:
             .join(Vulnerability, Vulnerability.id == Finding.vulnerability_id)
             .where(
                 Finding.risk_band == band,
-                # Open means somebody could still act. Dismissed and unfixable
-                # findings are not late; they are elsewhere, and counted there.
                 Finding.state.notin_(
                     ("resolved", "false_positive", "no_fix_available", "unmatched")
                 ),
-                # Nor is a finding its advisory's publisher retracted: no list shows
-                # it, so nobody could act on the lateness this would report.
                 Vulnerability.withdrawn_at.is_(None),
             )
         ).one()
@@ -416,8 +344,6 @@ def sla_report(session: Session) -> dict[str, Any]:
                 "open": total or 0,
                 "late": late or 0,
                 "oldest_days": round((now - oldest).total_seconds() / 86400, 1) if oldest else None,
-                # Stated rather than implied: no open findings in a band is not
-                # compliance, it is an absence of anything to comply about.
                 "status": "none_open" if not total else ("late" if late else "within_target"),
             }
         )

@@ -1,11 +1,4 @@
 <script setup lang="ts">
-/**
- * Data freshness, everywhere a fact is shown.
- *
- * "Never inventoried" is visually distinct from "inventoried and stale", which is
- * distinct from fresh. A host unseen for nine days must never look like one seen
- * five minutes ago.
- */
 const props = defineProps<{
   at?: string | null
   neverInventoried?: boolean
@@ -41,7 +34,6 @@ const relative = computed(() => {
 .never {
   color: var(--crit);
   font-weight: 600;
-  /* Hatched, so "unknown" cannot be mistaken for a clean result at a glance. */
   background: repeating-linear-gradient(
     45deg, transparent, transparent 3px, var(--never-hatch) 3px, var(--never-hatch) 4px
   );

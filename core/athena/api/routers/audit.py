@@ -25,8 +25,6 @@ def list_events(
         stmt = stmt.where(AuditEvent.seq < before_seq)
     rows = session.execute(stmt).scalars().all()
 
-    # A person reads "alice@example.com", not "user:83f7e862-…". The id stays in
-    # `actor` — it is what the chain hashed — and the label is resolved on read.
     user_ids = {e.actor.split(":", 1)[1] for e in rows if e.actor.startswith("user:")}
     emails: dict[str, str] = {}
     if user_ids:
@@ -74,5 +72,4 @@ def verify(
     _: Principal = Depends(current_principal),
     session: Session = Depends(db),
 ) -> dict:
-    """Recompute the hash chain from genesis and report the first divergence, if any."""
     return verify_chain(session)

@@ -1,5 +1,3 @@
-"""Inventory behaviour that the product's honesty rules depend on."""
-
 from __future__ import annotations
 
 import uuid
@@ -53,8 +51,6 @@ def test_a_new_asset_is_never_scanned_not_clean(session):
 
 
 def test_only_a_conclusive_scan_marks_an_asset_inventoried(session):
-    """A partial or failed scan must leave the asset stale. Reporting it as clean
-    would turn 'we could not look' into 'there is nothing there'."""
     for status in ("failed", "partial", "timeout"):
         asset = _repo(session, f"repo-{status}")
         run = start_scan(session, asset=asset, kind="repository", tool="syft")
@@ -191,16 +187,7 @@ def test_relationships_are_refreshed_not_duplicated(session):
     assert edges[0].confidence == 0.5
 
 
-# ── classification ───────────────────────────────────────────────────────────
-
-
 def test_literal_asset_routes_are_declared_before_the_parameterised_one():
-    """`/assets/unclassified` must not be swallowed by `/assets/{asset_id}`.
-
-    FastAPI matches in declaration order, so a literal path declared after a
-    parameterised sibling is unreachable — and fails as a 404 for an asset named
-    "unclassified" rather than as anything that looks like a routing mistake.
-    """
     from athena.api.routers.assets import router
 
     paths = [r.path for r in router.routes]
@@ -233,16 +220,7 @@ def test_family_keeps_hosts_individual(session):
     assert one[0] != two[0], "hosts carry their own consequence and are decided one by one"
 
 
-# ── sandbox failure diagnosis ────────────────────────────────────────────────
-
-
 def test_a_kill_is_reported_as_a_kill_not_a_number():
-    """137 is SIGKILL, which from a memory-limited container means the OOM killer.
-
-    It arrives with an empty stderr, so an unexplained "exit 137" is the least
-    actionable failure this system can produce — two images failed on it every sweep
-    for hours without anybody being able to tell why from the log line.
-    """
     from athena.scanners.sandbox import SandboxResult
 
     assert "out of memory" in SandboxResult(exit_code=137, stdout="", stderr="").diagnosis
@@ -254,7 +232,6 @@ def test_a_kill_is_reported_as_a_kill_not_a_number():
 
 
 def test_image_scratch_removal_refuses_a_name_it_did_not_generate(tmp_path):
-    """This deletes a tree, so it only ever acts on names this module generates."""
     from athena.scanners import syft
 
     keep = tmp_path / "important"
@@ -272,14 +249,9 @@ def test_image_scratch_removal_refuses_a_name_it_did_not_generate(tmp_path):
 
 
 def test_removing_a_scratch_that_is_already_gone_is_not_an_error(tmp_path):
-    """Cleanup runs in a finally block. Raising there would turn a scan that already
-    succeeded into a failed one."""
     from athena.scanners import syft
 
     syft.remove_scratch("imagescan-000000000000", work_dir=str(tmp_path))
-
-
-# ── coverage: containers inherit from their image ────────────────────────────
 
 
 def _asset(session, kind, name, *, inventoried=None):
@@ -295,9 +267,6 @@ def _asset(session, kind, name, *, inventoried=None):
 
 
 def test_a_container_counts_as_covered_once_its_image_is_scanned(session):
-    """A container's packages come from its image, so scanning the image is what
-    establishes its contents. Counting containers as never-looked-at put a ceiling
-    on the metric that no amount of scanning could lift."""
     from datetime import UTC, datetime
 
     from athena.db.models import AssetEdge
@@ -313,12 +282,10 @@ def test_a_container_counts_as_covered_once_its_image_is_scanned(session):
     after = coverage(session)
     assert after["assets_never_scanned"] == before["assets_never_scanned"]
     assert after["assets_inherited"] == before["assets_inherited"] + 1
-    assert after["assets_fresh"] == before["assets_fresh"] + 2  # the image and the container
+    assert after["assets_fresh"] == before["assets_fresh"] + 2
 
 
 def test_a_container_with_no_image_stays_unknown(session):
-    """Inheritance is not a way of assuming. With nothing to inherit from, the
-    container is genuinely unlooked-at and says so."""
     from athena.inventory.service import coverage
 
     before = coverage(session)
@@ -328,9 +295,6 @@ def test_a_container_with_no_image_stays_unknown(session):
 
 
 def test_inherited_freshness_is_judged_against_the_image_window(session):
-    """An image scanned two days ago is fresh — images have a seven-day window. The
-    container's own 24-hour window would call the same observation stale, which
-    would be judging a scan of an image by how often containers change."""
     from datetime import UTC, datetime, timedelta
 
     from athena.db.models import AssetEdge

@@ -1,6 +1,3 @@
-# Separate image on purpose. No model client library is installed here, so a
-# compromised reasoning layer has nothing to reach even if it reached this host.
-# See docs/TECHNICAL_DESIGN.md §10.
 FROM python:3.12-slim AS build
 WORKDIR /build
 COPY pyproject.toml ./

@@ -1,15 +1,4 @@
 <script setup lang="ts">
-/**
- * The success metrics.
- *
- * Every number carries its denominator and, where one exists, its target as a bar
- * rather than a sentence — "91%, target over 80%" is two numbers to compare in your
- * head; a bar past a mark is not.
- *
- * Nothing renders a zero for something unbuilt. A zero and an absence look identical
- * in a chart and mean opposite things, so the unmeasurable are hatched and kept in
- * their own group.
- */
 useHead({ title: 'Metrics' })
 
 const { data: me } = await useMe()
@@ -31,7 +20,6 @@ function suffix(m: any) {
   return m.unit === '%' ? '%' : m.unit === 'hours' ? 'h' : m.unit === 'days' ? 'd' : ''
 }
 
-/** How far along, against the target it is judged by — not a share of anything. */
 function progress(m: any) {
   if (m.value === null || m.target_mvp === null || !m.target_mvp) return null
   const share = m.lower_is_better ? m.target_mvp / m.value : m.value / m.target_mvp
@@ -45,13 +33,6 @@ const STATUS: Record<string, 'good' | 'bad' | 'warn' | null> = {
 const measured = computed(() => data.value?.metrics?.filter((m: any) => m.value !== null) ?? [])
 const unanswered = computed(() => data.value?.metrics?.filter((m: any) => m.value === null) ?? [])
 
-/**
- * Open findings per band, with what is overdue said beside each. Not dashed when
- * late: dashed is the charts' mark for *unknown*, and drew a band with one late
- * finding in fifty as an empty outline — lighter than a band meeting its target.
- * "None open" is its own word, as the API's `none_open` is: zero findings is not
- * compliance with a deadline.
- */
 const slaRows = computed(() =>
   (data.value?.sla?.bands ?? []).map((b: any) => ({
     label: b.band,
@@ -149,8 +130,6 @@ const overdue = computed(() =>
               : 'not enough data to say'"
           />
           <p class="desc">{{ m.description }}</p>
-          <!-- How much data there is, and why it is not enough: "not enough" alone
-               does not say whether that is three findings or none. -->
           <p v-if="m.note" class="note">{{ m.note }}</p>
         </div>
       </div>

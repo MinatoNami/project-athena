@@ -10,16 +10,11 @@ ExecStart=/usr/local/bin/athena-node run
 Restart=always
 RestartSec=10
 
-# The agent observes; it does not need to change anything on this host, and the
-# capability set contains no execution path. Confine it accordingly.
 User=athena-node
 Group=athena-node
 StateDirectory=athena-node
 StateDirectoryMode=0700
 Environment=ATHENA_NODE_STATE=/var/lib/athena-node
-# Read-only Docker API, so container inventory needs no docker group membership
-# (which would be root-equivalent). Set empty to disable container inventory
-# entirely — the gap is then reported rather than silently absent.
 Environment=DOCKER_HOST=tcp://127.0.0.1:2375
 
 NoNewPrivileges=true
@@ -37,7 +32,6 @@ CapabilityBoundingSet=
 SystemCallFilter=@system-service
 SystemCallArchitectures=native
 
-# A security agent must not degrade the host it protects.
 CPUQuota=50%
 MemoryMax=256M
 TasksMax=128

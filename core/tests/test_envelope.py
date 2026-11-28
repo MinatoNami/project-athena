@@ -29,7 +29,6 @@ def test_ciphertext_does_not_contain_plaintext():
 
 
 def test_aad_is_binding():
-    """A secret sealed under one name must not decrypt under another."""
     sealed = envelope.seal("v", aad="github_token")
     with pytest.raises(InvalidTag):
         envelope.unseal(**sealed, aad="registry_password")

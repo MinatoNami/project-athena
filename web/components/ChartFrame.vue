@@ -1,19 +1,9 @@
 <script setup lang="ts">
-/**
- * What every chart is wrapped in.
- *
- * The table toggle is not a nicety: it is the accessibility fallback and the CSV
- * source (§9), and it is the only way a reader can get the exact figure out of a
- * picture. Empty and loading are distinct states here for the same reason the rest
- * of the product distinguishes them — a chart with no bars and a chart that has not
- * loaded look identical, and mean opposite things.
- */
 const props = defineProps<{
   title: string
   note?: string
   pending?: boolean
   empty?: boolean
-  /** Said when there is nothing to plot — never left to an empty frame. */
   emptyText?: string
   table: { columns: string[]; rows: (string | number)[][] }
 }>()
@@ -69,7 +59,6 @@ function csv() {
 .frame { margin: 0; border: 1px solid var(--rule); border-radius: 9px;
          background: var(--surface); padding: .7rem .85rem .75rem; }
 figcaption { display: flex; align-items: center; gap: .5rem; margin-bottom: .6rem; flex-wrap: wrap; }
-/* The note wraps rather than pushing the controls onto a line of their own. */
 .note { font-size: .72rem; color: var(--ink-muted); flex: 1 1 10rem; min-width: 0; }
 .sp { flex-grow: 1; }
 .seg button { font-size: .68rem; padding: .18rem .45rem; }

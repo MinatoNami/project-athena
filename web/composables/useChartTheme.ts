@@ -1,12 +1,3 @@
-/**
- * Chart colour, read from the stylesheet rather than restated here.
- *
- * §8 keeps every colour in a custom property so the two themes cannot drift apart.
- * A chart that hard-codes its palette is a third theme nobody maintains, so the
- * values are resolved off `:root` at render time and re-read when the OS switches —
- * which is why switching themes needs no chart re-instantiation.
- */
-
 const TOKENS = {
   ink: '--ink',
   ink2: '--ink-2',
@@ -27,7 +18,6 @@ const TOKENS = {
 
 export type ChartTheme = Record<keyof typeof TOKENS, string>
 
-/** Light-mode values, used for the server pass and before the first paint. */
 const FALLBACK: ChartTheme = {
   ink: '#0b0b0b', ink2: '#52514e', muted: '#6f6d68', rule: '#e1e0d9',
   surface: '#fcfcfb', plane: '#f9f9f7', good: '#0ca30c', warn: '#fab219',
@@ -47,8 +37,6 @@ function read(): ChartTheme {
 
 export function useChartTheme() {
   const theme = ref<ChartTheme>(FALLBACK)
-  // Nothing essential is carried by animation (§12), and a chart that redraws on
-  // every refresh is the most animated thing on the page.
   const reducedMotion = ref(false)
 
   onMounted(() => {
@@ -67,7 +55,6 @@ export function useChartTheme() {
     })
   })
 
-  /** Axis, grid and tooltip chrome every chart shares. Recessive by default (§9). */
   const chrome = computed(() => ({
     animation: !reducedMotion.value,
     textStyle: { fontFamily: 'system-ui, -apple-system, sans-serif' },
@@ -81,7 +68,6 @@ export function useChartTheme() {
     },
   }))
 
-  /** Severity is ordered magnitude, so it is the one-hue ramp — never a series colour. */
   const severity = computed((): Record<string, string> => ({
     critical: theme.value.critical,
     high: theme.value.high,

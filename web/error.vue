@@ -1,12 +1,4 @@
 <script setup lang="ts">
-/**
- * Application error page.
- *
- * Nuxt's default is an unbranded white page with a giant "404" and no way back into
- * the product. For a security tool that is worse than ugly: someone who lands here
- * cannot tell whether the page is missing or the whole service is down, and those
- * call for different reactions.
- */
 import type { NuxtError } from '#app'
 
 const props = defineProps<{ error: NuxtError }>()

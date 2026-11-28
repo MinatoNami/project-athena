@@ -1,9 +1,3 @@
-"""The only path to a model.
-
-Every outbound call passes through here so that "what has left my network?" is
-answerable exactly, from a table, rather than inferred from logs.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -31,18 +25,11 @@ class Completion:
     duration_ms: int
     endpoint: str
     local: bool
-    # True when the answer had to be recovered from the reasoning channel. Recorded
-    # rather than hidden: it means the runtime is not labelling output as this code
-    # expects, and a future model or runtime change could break it silently.
     from_reasoning: bool = False
 
 
 class ModelUnavailable(RuntimeError):
-    """The model could not be reached or did not answer.
-
-    Deliberately distinct from a refusal: correlation continues and findings stay
-    uninvestigated, rather than being presented as though they had been checked.
-    """
+    pass
 
 
 def _digest(text: str) -> str:
@@ -58,17 +45,10 @@ def complete(
     max_tokens: int = 2048,
     purpose: str = "investigation",
 ) -> Completion:
-    """Send one prompt, after the policy has cleared it.
-
-    `schema` requests a JSON-shaped answer. Structured output is how the model's
-    reply becomes data the system can act on rather than prose someone has to parse.
-    """
     settings = get_settings()
     base_url = settings.llm_base_url
     payload_text = "\n".join(filter(None, [system, prompt]))
 
-    # A secret in a prompt is blocked outright, not redacted and sent. If one reached
-    # this point something upstream is wrong, and continuing would hide it.
     if secrets_found := find_secrets(payload_text):
         _record_egress(
             purpose=purpose, endpoint=base_url, model=settings.llm_model,
@@ -82,9 +62,6 @@ def complete(
             "a prompt."
         )
 
-    # Checked here rather than only where work is scheduled, so the ceiling binds
-    # every caller. A refusal is recorded like any other, and recorded as blocked so
-    # it cannot itself count against the window it is enforcing.
     from athena.db.base import session_scope
     from athena.llm.budget import BudgetExhausted
     from athena.llm.budget import check as check_budget
@@ -181,14 +158,6 @@ def complete(
 
 
 def _answer_of(message: dict[str, Any]) -> tuple[str, bool]:
-    """The model's answer, wherever the runtime put it.
-
-    Reasoning models split their output, and some runtimes route everything to the
-    reasoning channel and leave `content` empty — LM Studio does this with Qwen3,
-    returning a complete schema-conforming answer under `reasoning_content` and
-    nothing under `content`. Reading only `content` yields an empty answer that
-    looks like the model failing.
-    """
     content = (message.get("content") or "").strip()
     if content:
         return content, False
@@ -198,16 +167,9 @@ def _answer_of(message: dict[str, Any]) -> tuple[str, bool]:
 def complete_json(
     *, schema: dict[str, Any], **kwargs: Any
 ) -> tuple[dict[str, Any], Completion]:
-    """A completion parsed as JSON.
-
-    Structured output is how a model's reply becomes something the system can act on
-    rather than prose someone has to interpret. A reply that will not parse is a
-    failure, not something to salvage with a regex over free text.
-    """
     completion = complete(schema=schema, **kwargs)
     text = completion.text.strip()
 
-    # Reasoning models often wrap the object in prose or a fenced block.
     if not text.startswith("{"):
         start, end = text.find("{"), text.rfind("}")
         if start == -1 or end <= start:
@@ -234,11 +196,6 @@ def _record_egress(
     completion_tokens: int = 0,
     duration_ms: int = 0,
 ) -> None:
-    """Record the attempt, whatever its outcome.
-
-    Written in its own transaction: a blocked call raises, and the record of the
-    block must survive that.
-    """
     from athena.db.base import session_scope
     from athena.db.models import EgressLog
 
@@ -260,12 +217,11 @@ def _record_egress(
                     duration_ms=duration_ms,
                 )
             )
-    except Exception as exc:  # noqa: BLE001 - never let auditing break the caller
+    except Exception as exc:  # noqa: BLE001
         log.error("egress.audit_failed", error=str(exc), blocked=blocked)
 
 
 def health() -> dict[str, Any]:
-    """Whether the configured model is reachable, and which models it serves."""
     settings = get_settings()
     base_url = settings.llm_base_url
     try:

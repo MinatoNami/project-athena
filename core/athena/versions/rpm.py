@@ -1,9 +1,3 @@
-"""RPM EVR ordering (rpmvercmp).
-
-Close to Debian's but not the same: `~` sorts low as in Debian, `^` sorts high,
-and alphabetic and numeric segments never compare equal across types.
-"""
-
 from __future__ import annotations
 
 import re
@@ -21,8 +15,6 @@ def _segments(value: str) -> list[str]:
 
 def _compare_fragment(a: str, b: str) -> int:
     sa, sb = _segments(a), _segments(b)
-    # Deliberately non-strict: the shorter side running out is meaningful,
-    # and the length difference is resolved below.
     for x, y in zip(sa, sb, strict=False):
         if x == "~" or y == "~":
             if x != y:
@@ -35,7 +27,7 @@ def _compare_fragment(a: str, b: str) -> int:
 
         x_num, y_num = x.isdigit(), y.isdigit()
         if x_num != y_num:
-            return 1 if x_num else -1        # numeric outranks alphabetic
+            return 1 if x_num else -1
         if x_num:
             if int(x) != int(y):
                 return 1 if int(x) > int(y) else -1
@@ -44,7 +36,6 @@ def _compare_fragment(a: str, b: str) -> int:
 
     if len(sa) == len(sb):
         return 0
-    # A trailing ~ makes the longer side *lower*, everywhere else it is higher.
     longer, sign = (sa, 1) if len(sa) > len(sb) else (sb, -1)
     return -sign if longer[len(min(sa, sb, key=len))] == "~" else sign
 

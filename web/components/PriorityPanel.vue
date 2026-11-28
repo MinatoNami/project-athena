@@ -1,16 +1,4 @@
 <script setup lang="ts">
-/**
- * Exploitability, beside the score rather than inside it.
- *
- * The risk band answers "how bad is this here?" with Athena's own arithmetic. This
- * panel answers the questions people ask before they believe it — is it being
- * exploited, how likely is it to be, what does the vector say — with the public
- * facts behind each, and the SSVC outcome those facts imply in CISA's vocabulary.
- *
- * Every decision point shows the fact it was read from. A point Athena had to
- * assume is hatched, the way every not-observed value is (rule 1): the outcome is
- * only as solid as its weakest input, and that has to be visible.
- */
 const props = defineProps<{ p: any }>()
 
 const ssvc = computed(() => props.p?.ssvc)
@@ -39,17 +27,14 @@ const dlText = computed(() => {
 })
 const epss = computed(() => props.p?.epss)
 
-/** Decision-point values as people write them: "poc" is PoC, not "Poc". */
 function pointValue(v: string | undefined) {
   if (!v) return ''
   return v === 'poc' ? 'PoC' : v.charAt(0).toUpperCase() + v.slice(1)
 }
 const cvss = computed(() => props.p?.cvss)
 
-// The KEV catalogue's own (federal) date, in the shared wording.
 const kevDue = computed(() => dueText(kev.value?.due_date))
 
-/** CVSS metrics in words, so the vector is readable without the spec open. */
 const METRICS: Record<string, [string, Record<string, string>]> = {
   AV: ['Attack vector', { N: 'network', A: 'adjacent', L: 'local', P: 'physical' }],
   AC: ['Complexity', { L: 'low', H: 'high' }],
@@ -64,7 +49,6 @@ const METRICS: Record<string, [string, Record<string, string>]> = {
   VI: ['Integrity', { H: 'high', L: 'low', N: 'none' }],
   VA: ['Availability', { H: 'high', L: 'low', N: 'none' }],
 }
-/** The value of each metric that most favours an attacker, emphasised in the list. */
 const WORST: Record<string, string> = {
   AV: 'N', AC: 'L', AT: 'N', PR: 'N', UI: 'N', S: 'C',
   C: 'H', I: 'H', A: 'H', VC: 'H', VI: 'H', VA: 'H',
@@ -96,9 +80,6 @@ function pct(v: number | null | undefined, digits = 1) {
       </p>
     </div>
 
-    <!-- ══ SSVC ══ -->
-    <!-- SSVC and the score cards model flaws. For malware they would only restate
-         "remove it" in borrowed vocabulary, so the malware card stands alone. -->
     <div v-if="ssvc && !p?.malicious" class="card">
       <div class="ssvchead">
         <div>
@@ -142,7 +123,6 @@ function pct(v: number | null | undefined, digits = 1) {
       </p>
     </div>
 
-    <!-- ══ BOD 26-04 ══ -->
     <div v-if="dl" class="card">
       <div class="ssvchead">
         <div>
@@ -177,7 +157,6 @@ function pct(v: number | null | undefined, digits = 1) {
     </div>
 
     <div v-if="!p?.malicious" class="grid">
-      <!-- ══ Known exploitation ══ -->
       <div class="card">
         <div class="lbl">Known exploitation</div>
         <template v-if="kev?.listed">
@@ -205,7 +184,6 @@ function pct(v: number | null | undefined, digits = 1) {
         </template>
       </div>
 
-      <!-- ══ EPSS ══ -->
       <div class="card">
         <div class="lbl">Exploit likelihood (EPSS)</div>
         <template v-if="epss?.scored">
@@ -230,7 +208,6 @@ function pct(v: number | null | undefined, digits = 1) {
         </template>
       </div>
 
-      <!-- ══ CVSS ══ -->
       <div class="card">
         <div class="lbl">CVSS {{ cvss?.version || '' }}</div>
         <template v-if="cvss?.vector">
@@ -282,8 +259,6 @@ function pct(v: number | null | undefined, digits = 1) {
   content: '›'; position: absolute; right: -.48rem; top: 50%; transform: translateY(-50%);
   color: var(--ink-muted); font-size: .9rem; background: var(--surface); line-height: 1;
 }
-/* Assumed must not look established: a dashed strong border, the hatch across the
-   whole step, and the word itself. */
 .step.assumed {
   border: 1px dashed var(--line-strong);
   background: repeating-linear-gradient(45deg, var(--plane), var(--plane) 6px,

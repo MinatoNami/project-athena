@@ -1,10 +1,3 @@
-"""The success metrics, with their denominators and their gaps.
-
-Every metric returns its denominator and a status. A rate with neither is an
-assertion, and four of these cannot be computed on this system at all — reporting
-those as zero would be the same lie as an empty findings list meaning "clean".
-"""
-
 from __future__ import annotations
 
 from typing import Any
@@ -27,8 +20,6 @@ def metrics(
     return {
         "metrics": computed,
         "sla": sla_report(session),
-        # Counted so the page can lead with how much of itself it cannot answer,
-        # rather than leaving that to be discovered card by card.
         "summary": {
             "total": len(computed),
             "measured": sum(1 for m in computed if m["value"] is not None),

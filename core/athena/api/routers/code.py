@@ -1,11 +1,3 @@
-"""Secrets and misconfigurations found in repositories.
-
-Every response carries its denominator: how many repositories have had a *successful*
-scan of each kind. "No secrets found" across two repositories out of forty is a very
-different statement from the same words across forty, and the list alone cannot
-tell them apart.
-"""
-
 from __future__ import annotations
 
 from typing import Any
@@ -50,7 +42,6 @@ def _serialise(finding: CodeFinding, asset: Asset) -> dict[str, Any]:
 
 
 def _coverage(session: Session, asset_id: str | None) -> dict[str, Any]:
-    """Per kind: repositories in scope, and how many a scan of that kind completed."""
     repos = select(Asset.id).where(Asset.kind == "repository", Asset.tombstoned_at.is_(None))
     if asset_id:
         repos = repos.where(Asset.id == asset_id)
@@ -66,10 +57,6 @@ def _coverage(session: Session, asset_id: str | None) -> dict[str, Any]:
         scanned, oldest, newest = session.execute(
             select(func.count(), func.min(latest.c.at), func.max(latest.c.at)).select_from(latest)
         ).one()
-        # Failing means the most recent attempt did not succeed — including on a
-        # repository that succeeded once, months ago. Counting only repositories
-        # that never succeeded let a scanner broken since then (a moved digest, a
-        # pull that cannot reach the registry) stand on that one old success.
         last_attempt = (
             select(
                 ScanRun.status,
@@ -92,8 +79,6 @@ def _coverage(session: Session, asset_id: str | None) -> dict[str, Any]:
             "scanned": scanned,
             "never_succeeded": total - scanned,
             "failing": failing,
-            # The stalest repository's last good scan bounds how fresh the whole
-            # list is; the newest says when anything was last checked.
             "oldest_success": oldest,
             "latest_success": newest,
         }
@@ -138,9 +123,6 @@ def list_code_findings(
         )
     )
 
-    # Open counts for every kind, whatever `kind` filters the list to: the page
-    # shows a tile per kind beside the list, and counting from the filtered rows
-    # gave the other kind a confident "0 open".
     counts: dict[str, dict[str, int]] = {k: {} for k in KINDS}
     open_rows = (
         select(CodeFinding.kind, CodeFinding.severity, func.count())

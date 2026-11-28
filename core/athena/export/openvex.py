@@ -1,25 +1,3 @@
-"""OpenVEX: per-finding exploitability statements, for tools that consume them.
-
-The status rules, in order:
-
-1. A verified resolution is `fixed`.
-2. A person's live suppression decides next, because it is the only thing in the
-   system that is a human judgement about *this* finding:
-   `not_applicable`, `compensating_control` and `false_positive` become
-   `not_affected`; `accepted_risk` and `fix_scheduled` stay `affected`, with the
-   decision as the action statement.
-3. Malware is `affected`. Nothing short of a person can say otherwise.
-4. An investigation that found it applicable is `affected`.
-5. Everything else is `under_investigation` — including an automated verdict of
-   "not applicable", which is reported in the notes and not asserted. A downstream
-   scanner would silently drop the finding on the strength of a `not_affected`,
-   which would make the model the authority on what other tools are allowed to see.
-
-`not_affected` without a justification is permitted by the spec only with an impact
-statement, so every human-sourced one carries the operator's own words, and the
-justification enum is used only where the reason code actually means it.
-"""
-
 from __future__ import annotations
 
 import re
@@ -48,18 +26,10 @@ CONTEXT = "https://openvex.dev/ns/v0.2.0"
 
 NOT_AFFECTED_CODES = {"not_applicable", "compensating_control", "false_positive"}
 
-# Only where the reason code *is* the justification. The rest carry an impact
-# statement in the operator's words instead of a category we would be guessing at.
 JUSTIFICATION = {"compensating_control": "inline_mitigations_already_exist"}
 
 
 def product_id(asset: Asset) -> str:
-    """The identifier a consuming scanner will match the product on.
-
-    An image is a `pkg:oci` purl on its digest — what Trivy and Grype compare when
-    they apply a VEX to an image scan. Anything else has no standard identifier
-    Athena can vouch for, so it gets a URN that is honest about being Athena's own.
-    """
     if asset.kind == "image":
         digest = asset.attributes.get("digest") or (
             asset.identity_key if asset.identity_key.startswith("sha256:") else None
@@ -79,13 +49,6 @@ def product_id(asset: Asset) -> str:
 
 
 def public_repository_url(url: str) -> str | None:
-    """A clone URL with nothing in it that is not the repository's address.
-
-    The clone URL is stored as the operator gave it, and that is often
-    `https://x-access-token:ghp_…@host/org/repo.git`. This document is built to leave
-    Athena, so user info, query and fragment are dropped, and an scp-style
-    `git@host:org/repo` becomes a URL an IRI consumer can read.
-    """
     url = url.strip()
     scp = re.match(r"^[^@/]+@(?P<host>[^:/]+):(?P<path>.+)$", url)
     if scp and "://" not in url:
@@ -97,7 +60,6 @@ def public_repository_url(url: str) -> str | None:
         return None
     if not parts.scheme or not parts.hostname:
         return None
-    # `hostname` drops an IPv6 literal's brackets, which the netloc needs back.
     host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
     netloc = host + (f":{port}" if port else "")
     return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
@@ -189,7 +151,6 @@ def vex_document(
     vulnerability_id: str | None = None,
     author: str = "Athena",
 ) -> dict[str, Any]:
-    """One OpenVEX document covering every finding in scope."""
     from athena.remediation import plan_for, source_for
 
     stmt = (
@@ -199,14 +160,7 @@ def vex_document(
         .join(Component, Component.id == Finding.component_id)
         .outerjoin(InvestigationRecord, InvestigationRecord.id == Finding.investigation_id)
         .where(Asset.tombstoned_at.is_(None))
-        # A withdrawn advisory is its publisher retracting it, and the findings
-        # queue already stops ranking one. Exporting it anyway would publish the
-        # retraction's opposite — a withdrawn malware report still carries
-        # `malicious`, so it would leave as `affected`, "treat the asset as
-        # compromised", for other scanners to act on. It is left out, not marked
-        # `not_affected`: that status belongs to a person's decision (rule 2).
         .where(Vulnerability.withdrawn_at.is_(None))
-        # Likewise a finding whose every supporting range its source retracted.
         .where(Finding.state != "unmatched")
         .order_by(Finding.vulnerability_id, Asset.display_name, Component.name)
     )
@@ -216,8 +170,6 @@ def vex_document(
         stmt = stmt.where(Finding.vulnerability_id == vulnerability_id)
     rows = session.execute(stmt).all()
 
-    # Live suppressions, most specific first, so a finding-scoped decision wins over
-    # an estate-wide one for the same vulnerability.
     suppressions = (
         session.execute(
             select(Suppression)

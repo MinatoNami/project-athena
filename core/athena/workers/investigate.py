@@ -1,5 +1,3 @@
-"""Investigation job: candidate finding → evidenced verdict → risk score."""
-
 from __future__ import annotations
 
 import hashlib
@@ -31,9 +29,6 @@ from athena.risk.scoring import MATCH_FLOOR
 
 log = structlog.get_logger(__name__)
 
-# Verdict → the state a finding lands in. `uncertain` deliberately returns to
-# discovered: an inconclusive investigation has not confirmed anything, and the UI
-# must keep presenting it as not yet settled.
 VERDICT_STATE = {
     "applicable": "confirmed",
     "not_applicable": "false_positive",
@@ -42,27 +37,10 @@ VERDICT_STATE = {
 
 
 def match_is_current(finding: Finding, vulnerability: Vulnerability) -> bool:
-    """Whether the finding's match facts describe the advisory as it now stands.
-
-    Ingest revises an advisory before correlation re-evaluates its findings, and in
-    between the finding still carries the old range's facts — whether the version
-    is in range, the fixed version. Triaged or investigated then, a verdict about
-    the old range was recorded against the new revision and passed the check
-    meant to catch exactly that. Correlation catches up within the hour (the stale
-    sweep), or at once when the poller queued it; the finding waits until then.
-    """
     return finding.advisory_revision >= vulnerability.revision
 
 
 def state_for(verdict: str, *, malicious: bool) -> str:
-    """The lifecycle state a verdict moves a finding to.
-
-    Malware is the exception to "not applicable closes it": the score already
-    records that verdict without obeying it (`risk.scoring._malware`), and the state
-    must agree — `false_positive` takes a finding out of every open count, the
-    queue and the CISA lookups. Whether published malware is a false positive is a
-    person's call, so the model's view leaves the finding open for one.
-    """
     if malicious and verdict == "not_applicable":
         return "discovered"
     return VERDICT_STATE.get(verdict, "discovered")
@@ -75,18 +53,11 @@ def _is_malware(session: Any, finding: Finding) -> bool:
 
 @handler("investigate.finding")
 def investigate_finding(payload: dict[str, Any]) -> dict[str, Any]:
-    """Investigate one candidate finding.
-
-    A model failure leaves the finding in `discovered` — uninvestigated, and shown as
-    such — rather than producing a verdict nobody could justify.
-    """
     finding_id = payload["finding_id"]
     context = _load(finding_id)
     if context is None:
         return {"status": "skipped"}
 
-    # Identical relevant facts share an answer. Fourteen matching hosts are one
-    # question; without this, investigating a fleet costs a model call per host.
     if (cached := _lookup_cache(context["fingerprint"])) is not None:
         verdict, investigation_id, model = cached
         outcome = _apply(
@@ -95,8 +66,6 @@ def investigate_finding(payload: dict[str, Any]) -> dict[str, Any]:
         )
         log.info("investigation.cache_hit", finding=finding_id,
                  fingerprint=context["fingerprint"][:12])
-        # A cached answer is discarded on the same terms as a fresh one, and the job
-        # result must say so rather than report it applied.
         return {
             "status": "discarded" if outcome.get("discarded") else "cached",
             "verdict": verdict.verdict,
@@ -130,9 +99,6 @@ def investigate_finding(payload: dict[str, Any]) -> dict[str, Any]:
     return {"status": "discarded" if outcome.get("discarded") else "investigated", **outcome}
 
 
-# ── context ──────────────────────────────────────────────────────────────────
-
-
 def _load(finding_id: str) -> dict[str, Any] | None:
     with session_scope() as session:
         finding = session.get(Finding, finding_id)
@@ -143,12 +109,6 @@ def _load(finding_id: str) -> dict[str, Any] | None:
         if vuln_for_guard is not None and not match_is_current(finding, vuln_for_guard):
             return None
 
-        # An uncertain verdict returns the finding to `discovered`, which is correct —
-        # it has not been settled. But without this guard a sweep would investigate it
-        # again on every pass, forever, at 40 seconds a time. Re-investigation happens
-        # when the advisory changes, not because the answer was inconclusive — so the
-        # question is which revision the investigation answered, not which one the
-        # finding was last matched against.
         if finding.investigation_id is not None and vuln_for_guard is not None:
             answered = session.get(InvestigationRecord, finding.investigation_id)
             if answered is None or answered.advisory_revision >= vuln_for_guard.revision:
@@ -163,12 +123,6 @@ def _load(finding_id: str) -> dict[str, Any] | None:
         finding.state = "investigating"
         finding.state_changed_at = datetime.now(UTC)
 
-        # Two of the eight signals are not questions. Inventory recorded the component;
-        # correlation put the version inside an affected range, which is the only
-        # reason this finding exists. `version_in_range` is withheld when the match
-        # was heuristic or uncomparable, because there we genuinely did not order the
-        # versions — MATCH_FLOOR is the same line the scorer uses to decide a match
-        # is trustworthy.
         established: dict[str, Any] = {"component_present": True}
         if finding.match_confidence >= MATCH_FLOOR:
             established["version_in_range"] = True
@@ -179,9 +133,6 @@ def _load(finding_id: str) -> dict[str, Any] | None:
             "vulnerability_id": vulnerability.id,
             "advisory_revision": vulnerability.revision,
             "established": established,
-            # No tool inspects configuration or code, so the advisory is the only
-            # possible source for a claim about how the flaw works. An advisory with
-            # no rating, no weakness class and no detail is not such a source.
             "advisory_describes_flaw": bool(
                 vulnerability.cvss_score is not None
                 or vulnerability.severity
@@ -203,8 +154,6 @@ def _load(finding_id: str) -> dict[str, Any] | None:
                     "severity": vulnerability.severity, "cvss": vulnerability.cvss_score,
                     "known_exploited": vulnerability.kev,
                     "fixed_in": finding.fixed_version,
-                    # Only present when true, so prompts for every other finding — and
-                    # the eval corpus built on them — are byte-for-byte unchanged.
                     **({"malicious": True} if vulnerability.malicious else {}),
                 },
                 "match": {
@@ -212,8 +161,6 @@ def _load(finding_id: str) -> dict[str, Any] | None:
                     "confidence": finding.match_confidence,
                 },
             },
-            # Only facts that could change the verdict. Anything else would fragment
-            # the cache without improving its correctness.
             "fingerprint": context_fingerprint(
                 {
                     "vulnerability": vulnerability.id,
@@ -223,9 +170,6 @@ def _load(finding_id: str) -> dict[str, Any] | None:
                     "exposure": asset.exposure,
                     "release": asset.attributes.get("distro_release"),
                     "fixed_in": finding.fixed_version,
-                    # These change what the model is allowed to conclude, so two
-                    # findings that differ on them are not the same question and must
-                    # not share an answer.
                     "established": sorted(established),
                     "advisory_describes_flaw": bool(
                         vulnerability.cvss_score is not None
@@ -239,15 +183,11 @@ def _load(finding_id: str) -> dict[str, Any] | None:
 
 
 def _reset(finding_id: str) -> None:
-    """Return a finding to uninvestigated after an inconclusive attempt."""
     with session_scope() as session:
         finding = session.get(Finding, finding_id)
         if finding is not None and finding.state == "investigating":
             finding.state = "discovered"
             finding.state_changed_at = datetime.now(UTC)
-
-
-# ── cache ────────────────────────────────────────────────────────────────────
 
 
 def _lookup_cache(fingerprint: str) -> tuple[Verdict, Any, str] | None:
@@ -280,7 +220,6 @@ def _verdict_of(cached: InvestigationRecord) -> Verdict:
 
 
 def _store(context: dict[str, Any], result) -> Any:
-    """Persist the investigation so its conclusion can be replayed."""
     verdict = result.verdict
     with session_scope() as session:
         stored = InvestigationRecord(
@@ -308,9 +247,6 @@ def _store(context: dict[str, Any], result) -> Any:
         return stored.id
 
 
-# ── applying the verdict ─────────────────────────────────────────────────────
-
-
 def _apply(
     finding_id: str,
     verdict: Verdict,
@@ -322,12 +258,6 @@ def _apply(
     advisory_revision: int,
 ) -> dict[str, Any]:
     with session_scope() as session:
-        # Locked, and re-checked under the lock: the model can take minutes, and in
-        # that time correlation may have closed the finding (`unmatched`), a person
-        # may have moved it on, or the advisory may have been revised. A verdict for
-        # a question that no longer stands is recorded, not applied — and nobody is
-        # notified about it. Unchecked, a late "applicable" turned an `unmatched`
-        # finding back into `confirmed`.
         finding = session.execute(
             select(Finding)
             .where(Finding.id == finding_id)
@@ -338,8 +268,6 @@ def _apply(
             return {}
         vulnerability = session.get(Vulnerability, finding.vulnerability_id)
         current = vulnerability.revision if vulnerability is not None else None
-        # Both the advisory and the finding's match must still be at the revision
-        # the question was asked about: `_load` asks only once they agree.
         revised = current != advisory_revision or finding.advisory_revision != advisory_revision
         if finding.state != "investigating" or revised:
             return _discard(
@@ -395,13 +323,6 @@ def _discard(
     revised: bool,
     advisory_revision: int,
 ) -> dict[str, Any]:
-    """A verdict that arrived after its question changed.
-
-    Still `investigating` means only the advisory moved: the finding goes back to
-    `discovered` and is asked again against the current revision. Any other state
-    was set by something with more standing than a stale verdict — correlation
-    closing it, a person — and is left exactly as it is.
-    """
     reset = finding.state == "investigating"
     if reset:
         finding.state = "discovered"
@@ -423,22 +344,10 @@ def _discard(
     return {"verdict": verdict.verdict, "discarded": True}
 
 
-# Bands that are worth interrupting somebody about. Below this an investigation is
-# something to find when you look, not something to be told.
 _WORTH_TELLING = {"critical", "high", "medium"}
 
 
 def _notify_if_worth_it(session, finding: Finding, verdict: Verdict, risk) -> None:
-    """Tell somebody, once per advisory rather than once per asset.
-
-    Grouped on the vulnerability deliberately: the same flaw landing on fourteen
-    hosts is one thing to know about, and sending it fourteen times is how a useful
-    alert becomes something people filter away.
-
-    Only emitted when the band *rises* into the range worth interrupting for. A
-    finding rescored from high to critical is news; one re-evaluated from high to
-    high is the system working, and saying so every time would bury the first kind.
-    """
     from athena.db.models import Asset, Vulnerability
     from athena.notify import emit
 
@@ -468,7 +377,6 @@ _RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "informational": 0}
 
 
 def _attach(session, finding: Finding, verdict: Verdict, risk, *, model: str) -> None:
-    """Persist the reasoning, so the conclusion can be replayed and argued with."""
     session.query(Evidence).filter(
         Evidence.finding_id == finding.id,
         Evidence.kind.in_(("model_claim", "verdict", "uncertainty",
@@ -497,8 +405,6 @@ def _attach(session, finding: Finding, verdict: Verdict, risk, *, model: str) ->
     for uncertainty in verdict.uncertainties:
         add("uncertainty", uncertainty, {})
 
-    # Corrections are evidence too: they record where the model asserted something
-    # it could not support.
     for correction in verdict.corrections:
         add("grounding_correction", correction, {})
 
@@ -506,14 +412,6 @@ def _attach(session, finding: Finding, verdict: Verdict, risk, *, model: str) ->
 
 
 def signals_for(session, finding: Finding, verdict: Verdict) -> Signals:
-    """Assemble the scoring inputs for one finding.
-
-    The single definition of what the score depends on. Anything that recomputes a
-    score — the investigation path, a rescore after the function changes — goes
-    through here, because two copies would drift and the drift would be silent:
-    both would produce a plausible number and only one would be the number the UI
-    says it is.
-    """
     asset = session.get(Asset, finding.asset_id)
     vulnerability = session.get(Vulnerability, finding.vulnerability_id)
     component = session.get(Component, finding.component_id)
@@ -523,12 +421,6 @@ def signals_for(session, finding: Finding, verdict: Verdict) -> Signals:
             AssetComponent.component_id == finding.component_id,
         )
     ).scalars().first()
-    # An observation outranks an assertion. The model is asked whether the service is
-    # running and sometimes answers "no" while citing the very tool output that shows
-    # it listening — grounding cannot catch that, because it checks that evidence was
-    # cited, not that the evidence supports the claim. Where inventory records a
-    # listening service whose process is this package, running state is a fact we hold
-    # and not a question for the model.
     running = _running(verdict)
     if running is not True and component is not None and _listening(
         session, asset_id=finding.asset_id, name=component.name
@@ -557,14 +449,6 @@ def signals_for(session, finding: Finding, verdict: Verdict) -> Signals:
 
 
 def _listening(session, *, asset_id: Any, name: str) -> bool:
-    """Does inventory show a listening service on this asset that is this package?
-
-    Matched on the process name or the service's own name, exactly and
-    case-insensitively. Deliberately narrow: this function only ever raises a
-    finding's score, so a loose match here would invent exposure that is not there.
-    A package that runs under some other process name simply falls through to
-    unknown, which earns no discount either way.
-    """
     wanted = (name or "").strip().lower()
     if not wanted:
         return False
@@ -582,13 +466,6 @@ def _listening(session, *, asset_id: Any, name: str) -> bool:
 
 
 def _running(verdict: Verdict) -> bool | None:
-    """`service_running`, but a "no" has to be earned.
-
-    This one signal carries a four-fold discount, which makes it the cheapest way
-    for an unsupported assertion to bury a real finding. A `False` therefore counts
-    only when the model cited tool output for it and grounding did not downgrade the
-    claim. Everything else reads as unknown, which earns no discount.
-    """
     signal = verdict.signals.get("service_running")
     if signal is None:
         return None
@@ -600,7 +477,6 @@ def _running(verdict: Verdict) -> bool | None:
 
 
 def _tri(value: Any) -> bool | None:
-    """True, False, or None for unknown. Unknown is never collapsed into False."""
     if value is True or value is False:
         return value
     return None
@@ -620,12 +496,6 @@ def _reach(value: Any) -> str:
 
 @handler("triage.finding")
 def triage_finding(payload: dict[str, Any]) -> dict[str, Any]:
-    """Decide whether a finding earns a full investigation.
-
-    Triage never closes anything. A deprioritised finding stays `discovered` and
-    still reports that it has not been investigated — it is simply not queued for
-    the expensive loop.
-    """
     from athena.investigation.triage import triage
 
     finding_id = payload["finding_id"]
@@ -692,20 +562,18 @@ def triage_finding(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _load_for_triage(finding_id: str) -> dict[str, Any] | None:
-    """The summary triage reasons over. No tools, so this is all it gets."""
     with session_scope() as session:
         finding = session.get(Finding, finding_id)
         if finding is None or finding.state != "discovered":
             return None
         if finding.triage_disposition is not None:
-            return None    # already triaged; re-triage is an explicit action
+            return None
 
         asset = session.get(Asset, finding.asset_id)
         component = session.get(Component, finding.component_id)
         vulnerability = session.get(Vulnerability, finding.vulnerability_id)
         if not (asset and component and vulnerability):
             return None
-        # Triage reads the fixed version off the match; an old range's is no basis.
         if not match_is_current(finding, vulnerability):
             return None
 

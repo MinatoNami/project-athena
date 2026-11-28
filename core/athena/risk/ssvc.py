@@ -1,25 +1,3 @@
-"""SSVC: CISA's Stakeholder-Specific Vulnerability Categorization.
-
-A second opinion beside the risk score, not a replacement for it. The score ranks;
-SSVC names what to *do* — Track, Track*, Attend, Act — and it is the vocabulary
-CISA's own directives now speak, so a finding that says "Act" can be argued about
-with people who have never seen Athena's arithmetic.
-
-Like the score, it is a pure function of stored facts, and every decision point
-states the fact it was read from. Where Athena does not hold the fact, the point is
-taken at its worse value and listed in `assumed`: SSVC's guidance is to resolve
-doubt conservatively, and a decision that silently took the comfortable branch would
-be the "unknown rendered as clean" this product exists to refuse.
-
-Decision points and the outcome table follow CISA's coordinator tree (SSVC 2.0.3).
-Where CISA has published its own assessment for the CVE (the Vulnrichment ADP
-container), its Exploitation, Automatable and Technical Impact values are used and
-cited. Otherwise Exploitation reads the known-exploited catalogue and public-exploit
-evidence, and Automatable and Technical Impact are mapped from the CVSS vector — a
-mapping, labelled as such. Mission & Well-being reads the asset's tier and
-criticality, which only the operator can set.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -34,7 +12,6 @@ ACT = "act"
 
 OUTCOME_ORDER = [TRACK, TRACK_STAR, ATTEND, ACT]
 
-# What CISA says each outcome means, for the page.
 OUTCOME_MEANING = {
     TRACK: "No action needed now; remediate within standard update timelines.",
     TRACK_STAR: (
@@ -45,8 +22,6 @@ OUTCOME_MEANING = {
     ACT: ("Needs attention from leadership and action as soon as possible; remediate immediately."),
 }
 
-# (exploitation, automatable, technical_impact) → outcome for low / medium / high
-# mission & well-being. CERTCC/SSVC data/csv/cisa/cisa_coordinator_2_0_3.csv.
 _TABLE: dict[tuple[str, str, str], tuple[str, str, str]] = {
     ("none", "no", "partial"): (TRACK, TRACK, TRACK),
     ("none", "no", "total"): (TRACK, TRACK, TRACK_STAR),
@@ -97,11 +72,6 @@ class Decision:
 
 
 def _cisa_value(cisa: dict[str, Any] | None, key: str, allowed: tuple[str, ...]) -> str | None:
-    """One of CISA's Vulnrichment values, normalised, or None if it has none.
-
-    The SSVC reference data spells the middle exploitation value "public poc" while
-    Vulnrichment writes "poc"; both mean the same thing.
-    """
     if not cisa:
         return None
     value = str(cisa.get(key) or "").strip().lower().replace("public poc", "poc")
@@ -116,16 +86,6 @@ def _cisa_basis(cisa: dict[str, Any]) -> str:
 def exploitation(
     *, kev: bool, exploit_public: bool, cisa: dict[str, Any] | None = None
 ) -> DecisionPoint:
-    """active | poc | none.
-
-    EPSS is deliberately not read here. It is a probability of future exploitation,
-    and SSVC's Exploitation point asks what is already *known* — mixing the two would
-    let a forecast stand in for a fact. The risk score reads EPSS; this does not.
-
-    KEV outranks CISA's own SSVC entry: the ADP assessment is written once and is
-    not always revisited, and CVEs exist that are in the catalogue while their
-    Vulnrichment record still says "none".
-    """
     if kev:
         return DecisionPoint("active", "listed in CISA's Known Exploited Vulnerabilities")
     if (value := _cisa_value(cisa, "exploitation", ("none", "poc", "active"))) is not None:
@@ -139,13 +99,6 @@ def exploitation(
 
 
 def automatable(vector: str | None, cisa: dict[str, Any] | None = None) -> DecisionPoint:
-    """Can steps 1–4 of the kill chain be automated? Mapped from the CVSS vector.
-
-    Network-reachable, low complexity, no privileges and no user interaction is the
-    shape of a flaw a worm can use. Anything less needs a person somewhere in the
-    loop. With no readable vector the answer is unknown and taken as `yes`. CISA's
-    own assessment, where one exists, replaces the mapping entirely.
-    """
     if (value := _cisa_value(cisa, "automatable", ("yes", "no"))) is not None:
         return DecisionPoint(value, _cisa_basis(cisa or {}))
     try:
@@ -167,11 +120,6 @@ def automatable(vector: str | None, cisa: dict[str, Any] | None = None) -> Decis
 
 
 def technical_impact(vector: str | None, cisa: dict[str, Any] | None = None) -> DecisionPoint:
-    """partial | total — does success give total control or total disclosure?
-
-    Read as high confidentiality *and* high integrity impact on the vulnerable
-    system. With no readable vector it is unknown and taken as `total`.
-    """
     if (value := _cisa_value(cisa, "technical_impact", ("partial", "total"))) is not None:
         return DecisionPoint(value, _cisa_basis(cisa or {}))
     try:
@@ -190,20 +138,11 @@ def technical_impact(vector: str | None, cisa: dict[str, Any] | None = None) -> 
 
 
 def mission_wellbeing(*, tier: str | None, criticality: int | None) -> DecisionPoint:
-    """low | medium | high, from what the operator has said about the asset.
-
-    An unclassified asset is `medium` and marked assumed — the same stance the risk
-    function takes: not knowing what something is does not make it unimportant, and
-    defaulting low would quietly discount everything nobody has classified.
-    """
     tier = (tier or "unknown").lower()
     if criticality == 5 or (tier == "production" and (criticality or 3) >= 4):
         return DecisionPoint("high", f"{tier} tier, criticality {criticality}")
     if tier == "unknown" and criticality is None:
         return DecisionPoint("medium", "the asset has no tier or criticality; assumed medium", True)
-    # Half-classified is still partly assumed: with criticality unset, "production"
-    # stands in for a 3 and "development" for a 2, and the page must not present a
-    # value resting on that as one the operator stated.
     partial = criticality is None or tier == "unknown"
     if tier in ("production", "staging", "unknown") or (criticality or 0) >= 3:
         detail = f"criticality {criticality}" if criticality else "criticality unset"
@@ -221,7 +160,6 @@ def decide(
     malicious: bool = False,
     cisa: dict[str, Any] | None = None,
 ) -> Decision:
-    """The SSVC outcome for one finding on one asset."""
     points = {
         "exploitation": exploitation(kev=kev, exploit_public=exploit_public, cisa=cisa),
         "automatable": automatable(vector, cisa),
@@ -231,8 +169,6 @@ def decide(
     notes: list[str] = []
 
     if malicious:
-        # SSVC is a model for flaws. A malicious package is a compromise already in
-        # progress, so its "exploitation" is active by construction.
         points["exploitation"] = DecisionPoint(
             "active", "the package is published malware: installing it is the attack"
         )

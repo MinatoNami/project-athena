@@ -1,11 +1,3 @@
-"""Malicious packages: the package is the attack, not a flaw awaiting a patch.
-
-OSV carries the OpenSSF malicious-packages feed as `MAL-` records, and before this
-they were handled like any advisory — which told the operator a typosquat had "no
-fixed version published yet" and scored it as a middling, unrated vulnerability.
-Every property asserted here is one of those two failures not recurring.
-"""
-
 from __future__ import annotations
 
 import uuid
@@ -48,9 +40,6 @@ def _sig(**kw) -> Signals:
     return Signals(**{**defaults, **kw})
 
 
-# ── recognising it ───────────────────────────────────────────────────────────
-
-
 def test_an_osv_mal_record_is_recognised():
     advisory = parse(MAL_RECORD)
     assert advisory is not None
@@ -74,21 +63,14 @@ def test_a_record_aliased_to_a_mal_report_is_recognised():
 
 
 def test_a_record_that_only_relates_to_a_mal_report_is_not_malware():
-    """`related` points at another issue. It is folded into aliases so records can
-    merge, but a CVE that mentions a MAL- report is not thereby malware — and the
-    flag is sticky, so a false positive here would never clear."""
     advisory = parse(_ghsa(aliases=["CVE-2025-1"], related=["MAL-2025-9"]))
     assert advisory is not None and "MAL-2025-9" in advisory.aliases
     assert not is_malicious(advisory)
 
 
 def test_a_withdrawn_duplicate_does_not_withdraw_the_cve_it_merges_into():
-    """GitHub withdraws duplicate GHSAs routinely. Folded under the CVE, the
-    withdrawal marked the shared row withdrawn and every finding for that CVE, from
-    every source, dropped out of the list."""
     duplicate = parse(_ghsa(aliases=["CVE-2025-1"], withdrawn="2025-10-01T00:00:00Z"))
     assert duplicate is not None and duplicate.id == "CVE-2025-1"
-    # It withdraws itself — its ranges, cleared on ingest — and not the CVE.
     assert duplicate.withdrawn_at is None
     assert duplicate.source_withdrawn_at is not None
     assert duplicate.ranges == [] and duplicate.source_record == "GHSA-aaaa-bbbb-cccc"
@@ -106,20 +88,13 @@ def test_an_ordinary_advisory_is_not_malware():
 
 
 def test_recognition_does_not_move_the_content_hash():
-    """Adding the flag must not mark the corpus revised: a revision re-correlates the
-    estate and breaks every suppression's premise at once."""
     advisory = parse(MAL_RECORD)
     before = content_hash(advisory)
     advisory.scoring_vector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
     assert content_hash(advisory) == before
 
 
-# ── scoring it ───────────────────────────────────────────────────────────────
-
-
 def test_malware_is_critical_however_isolated_and_unreachable():
-    """Every discount in the vulnerability arithmetic presumes a flaw an attacker has
-    to reach. Malware's install hook has already run, and it acts outbound."""
     result = score(_sig())
     assert result.band is Band.CRITICAL
     assert any("malicious" in o for o in result.overrides)
@@ -132,14 +107,12 @@ def test_the_pinned_factors_are_shown_not_hidden():
 
 
 def test_a_not_applicable_verdict_does_not_close_malware():
-    """The model does not hold the authority to dismiss a malware alert."""
     result = score(_sig(verdict="not_applicable"))
     assert result.band is Band.CRITICAL
     assert any("person has to" in o for o in result.overrides)
 
 
 def test_a_doubtful_match_still_caps_it():
-    """ "Named like a malicious package" is not "is the malicious package"."""
     result = score(_sig(match_confidence=0.4))
     assert result.band is Band.MEDIUM
 
@@ -149,9 +122,6 @@ def test_importance_orders_malware_among_itself():
     dev = score(_sig(tier="development", criticality=1))
     assert prod.value > dev.value
     assert prod.band is dev.band is Band.CRITICAL
-
-
-# ── fixing it ────────────────────────────────────────────────────────────────
 
 
 def test_malware_is_removal_and_response_not_an_upgrade():
@@ -174,7 +144,6 @@ def test_malware_is_removal_and_response_not_an_upgrade():
 
 
 def test_without_the_flag_the_same_record_still_reads_as_no_fix():
-    """The regression this replaces, pinned so the ordering cannot drift back."""
     plan = plan_for(
         ecosystem="pypi",
         package="colourama",
@@ -186,9 +155,6 @@ def test_without_the_flag_the_same_record_still_reads_as_no_fix():
         fix_channel=None,
     )
     assert plan.klass is RemediationClass.NO_FIX
-
-
-# ── persisting it ────────────────────────────────────────────────────────────
 
 
 def test_ingest_marks_the_vulnerability_malicious_and_keeps_it(session):
@@ -205,8 +171,6 @@ def test_ingest_marks_the_vulnerability_malicious_and_keeps_it(session):
     session.flush()
     assert session.get(Vulnerability, mal_id).malicious is True
 
-    # A second record for the same id that says nothing of malware is silence, not a
-    # retraction.
     quiet = NormalisedAdvisory(
         id=mal_id,
         source_record="OTHER-1",
@@ -264,8 +228,6 @@ def test_kev_records_cisa_dates_and_refreshes_them(session):
         date(2026, 11, 22),
     )
 
-    # Revised upstream: the page must show CISA's current deadline, and the return
-    # value still counts only what is newly known-exploited.
     entry = {**entry, "dueDate": "2026-12-06", "knownRansomwareCampaignUse": "Known"}
     assert apply_kev(session, [entry]) == 0
     session.expire_all()
@@ -304,8 +266,6 @@ def test_a_malformed_kev_date_is_absent_not_invented(session):
     ],
 )
 def test_the_model_cannot_close_a_malware_finding(verdict, malicious, state):
-    """The score already ignores a model's "not applicable" on malware; the state
-    must too, or the finding leaves every open count on the model's word alone."""
     from athena.workers.investigate import state_for
 
     assert state_for(verdict, malicious=malicious) == state

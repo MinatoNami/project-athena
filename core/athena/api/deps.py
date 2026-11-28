@@ -11,14 +11,6 @@ REQUEST_SESSION_ATTR = "athena_db_session"
 
 
 def db(request: Request) -> Session:
-    """Request-scoped session, committed by the transaction middleware.
-
-    Deliberately not a `yield` dependency: FastAPI runs that teardown *after* the
-    response is sent, so the client could act on a 201 before the transaction had
-    committed — and a commit failure would have been reported as success. The
-    middleware in `athena.api.app` closes the transaction before the response goes
-    out. See docs/TECHNICAL_DESIGN.md §1 ("report outcomes faithfully").
-    """
     session = getattr(request.state, REQUEST_SESSION_ATTR, None)
     if session is None:
         session = new_session()

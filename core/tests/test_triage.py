@@ -1,9 +1,3 @@
-"""Triage.
-
-Triage decides where the expensive loop is spent. It must never decide whether a
-vulnerability applies — it has no tools and no evidence, only a summary.
-"""
-
 from __future__ import annotations
 
 import pytest
@@ -30,8 +24,6 @@ def facts(**overrides):
     return base
 
 
-# ── gates that the model cannot override ─────────────────────────────────────
-
 @pytest.mark.parametrize(
     ("overrides", "expected"),
     [
@@ -42,8 +34,6 @@ def facts(**overrides):
     ],
 )
 def test_some_findings_are_always_investigated(overrides, expected):
-    """In code, not in the prompt. A model asked nicely not to skip known-exploited
-    vulnerabilities will still occasionally skip one."""
     reason = _hard_gates(facts(**overrides))
     assert reason is not None and expected in reason
 
@@ -64,11 +54,7 @@ def test_a_gated_finding_never_reaches_the_model(monkeypatch):
     assert result.forced is True
 
 
-# ── the asymmetry ────────────────────────────────────────────────────────────
-
 def test_a_low_confidence_deprioritise_becomes_an_investigate(monkeypatch):
-    """Doubt is information, not a decision. Investigating something irrelevant costs
-    seconds; overlooking something real costs much more."""
     import athena.investigation.triage as t
 
     monkeypatch.setattr(
@@ -105,7 +91,6 @@ def test_the_threshold_is_conservative():
 
 
 def test_a_model_failure_queues_rather_than_drops(monkeypatch):
-    """A triage outage must not silently discard findings."""
     import athena.investigation.triage as t
 
     def fail(**kwargs):
@@ -118,7 +103,6 @@ def test_a_model_failure_queues_rather_than_drops(monkeypatch):
 
 
 def test_triage_is_cheap_by_construction():
-    """It exists to avoid the expensive loop; a large budget would defeat it."""
     from athena.investigation.loop import MAX_TOOL_CALLS
     from athena.investigation.triage import MAX_TOKENS
 

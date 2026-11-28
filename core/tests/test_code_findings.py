@@ -1,10 +1,3 @@
-"""Secrets and misconfigurations: adapters, identity, and what a scan may conclude.
-
-The two reports below are trimmed from real runs of the pinned images
-(gitleaks v8.30.1, trivy 0.76.2) under Athena's sandbox flags against a fixture with
-a planted, fake GitHub token and a root-user Dockerfile.
-"""
-
 from __future__ import annotations
 
 import json
@@ -96,24 +89,18 @@ TRIVY_REPORT = json.dumps(
 )
 
 
-# ── gitleaks ─────────────────────────────────────────────────────────────────
-
-
 def test_gitleaks_report_becomes_a_redacted_observation():
     [obs] = secrets.parse(GITLEAKS_REPORT, checkout="checkout-0123456789ab")
     assert obs.kind == "secret" and obs.rule_id == "github-pat"
     assert obs.path == "app/settings.py"
     assert obs.line == 2
     assert obs.severity == "critical"
-    # Neither the value nor its surrounding line is kept, redacted or not.
     blob = json.dumps(obs.detail)
     assert "Match" not in blob and "Secret" not in blob and "REDACTED" not in blob
     assert obs.detail["redacted"] is True
 
 
 def test_secret_identity_survives_the_random_checkout_directory():
-    """Gitleaks' own fingerprint embeds the per-scan checkout path and would make
-    every patrol resolve and recreate every finding."""
     a = secrets.parse(GITLEAKS_REPORT, checkout="checkout-0123456789ab")[0]
     moved = GITLEAKS_REPORT.replace("checkout-0123456789ab", "checkout-ba9876543210")
     b = secrets.parse(moved, checkout="checkout-ba9876543210")[0]
@@ -128,11 +115,6 @@ def test_secret_identity_survives_an_edit_above_it():
 
 
 def _gitleaks(*hits: tuple[int, float]) -> str:
-    """A report of github-pat hits in app/settings.py, one per (line, entropy).
-
-    The entropies below are what the pinned Gitleaks printed, under `--redact`, for
-    two different fake tokens in one file.
-    """
     base = json.loads(GITLEAKS_REPORT)[0]
     return json.dumps(
         [{**base, "StartLine": line, "EndLine": line, "Entropy": entropy} for line, entropy in hits]
@@ -143,9 +125,6 @@ FIRST, SECOND = 4.553056, 4.6841836
 
 
 def test_removing_one_credential_does_not_hand_its_identity_to_another():
-    """Two tokens for one rule in one file; the first is deleted. An occurrence
-    ordinal moved the second into the first's identity — resolving the token that
-    is still there and giving it the deleted one's history."""
     both = secrets.parse(_gitleaks((1, FIRST), (2, SECOND)), checkout="checkout-0123456789ab")
     after = secrets.parse(_gitleaks((1, SECOND)), checkout="checkout-0123456789ab")
     assert len({o.fingerprint for o in both}) == 2
@@ -159,7 +138,6 @@ def test_the_same_credential_twice_shares_an_identity_group():
     copies = secrets.parse(_gitleaks((3, FIRST), (9, FIRST)), checkout="c")
     assert copies[0].fingerprint != copies[1].fingerprint
     assert copies[0].detail["identity_group"] == copies[1].detail["identity_group"]
-    # A credential that appears once has nothing to share a group with.
     single = secrets.parse(_gitleaks((3, FIRST), (9, SECOND)), checkout="c")
     assert single[0].detail["identity_group"] != single[1].detail["identity_group"]
 
@@ -174,9 +152,6 @@ def test_anything_but_a_gitleaks_array_is_a_failure(stdout):
         secrets.parse(stdout, checkout="x")
 
 
-# ── trivy ────────────────────────────────────────────────────────────────────
-
-
 def test_trivy_failures_become_observations_and_passes_do_not():
     observations, summary = misconfig.parse(TRIVY_REPORT)
     assert [o.rule_id for o in observations] == ["DS-0002", "DS-0029"]
@@ -188,7 +163,6 @@ def test_trivy_failures_become_observations_and_passes_do_not():
 
 
 def test_trivy_source_lines_are_not_kept():
-    """A misconfigured file is where a credential sits beside the misconfiguration."""
     observations, _ = misconfig.parse(TRIVY_REPORT)
     assert "apt-get install" not in json.dumps([o.detail for o in observations])
 
@@ -202,9 +176,6 @@ def test_severity_words_fold_and_unknown_is_not_low():
     assert normalise_severity("HIGH") == "high"
     assert normalise_severity("WARNING") == "medium"
     assert normalise_severity("UNKNOWN") == "medium"
-
-
-# ── recording ────────────────────────────────────────────────────────────────
 
 
 @pytest.fixture
@@ -285,8 +256,6 @@ def test_removing_the_first_of_two_credentials_resolves_that_one(session, repo):
 
 
 def test_a_shrinking_group_of_identical_copies_is_held_open_not_resolved(session, repo):
-    """The same token pasted twice, then one copy deleted. Nothing in the report
-    says which copy went, so neither finding is declared resolved."""
     from athena.db.models import CodeFinding
 
     _scan(session, repo, _gitleaks((3, FIRST), (9, FIRST)))
@@ -353,7 +322,6 @@ def test_only_a_successful_scan_resolves(session, repo):
 
 
 def test_a_code_scan_does_not_refresh_inventory_freshness(session, repo):
-    """A secrets scan says nothing about installed packages."""
     assert repo.last_inventoried_at is None
     record_code_scan(
         session,
@@ -409,8 +377,6 @@ def test_runs_are_recorded_with_their_counts(session, repo):
 
 
 def test_coverage_calls_a_scanner_failing_when_its_latest_run_failed(session, repo):
-    """A success last month and failures since is failing — the old count only
-    knew repositories that had never succeeded."""
     from datetime import datetime as _dt
 
     from athena.api.routers.code import _coverage

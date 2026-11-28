@@ -1,5 +1,4 @@
 <script setup lang="ts">
-/** Placeholder rows shaped like the real ones, so the page does not jump on arrival. */
 withDefaults(defineProps<{ rows?: number }>(), { rows: 4 })
 const widths = ['58%', '74%', '44%', '66%', '52%', '70%']
 </script>

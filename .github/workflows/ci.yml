@@ -28,21 +28,11 @@ jobs:
 
       - run: pip install -e ".[dev]"
 
-      # `ruff format --check` is deliberately not part of this gate: the formatter
-      # disagrees with this package's hand-wrapped style in most of its files, so
-      # adopting it would rewrite them, and that is a decision to take on purpose
-      # rather than while repairing CI. What contributors need to know about it lives
-      # under "Linting and formatting" in README.md, where they will look for it.
-      #
-      # The version is printed because the pin in core/pyproject.toml is what makes a
-      # failure here reproducible locally, and a log that names it saves the guess.
       - name: Lint
         run: |
           ruff --version
           ruff check athena tests
 
-      # These gates are security controls, not style. They run before anything else
-      # that could mask a failure.
       - name: Privilege boundaries
         run: pytest tests/test_boundaries.py -v
 
@@ -75,8 +65,6 @@ jobs:
       - run: gofmt -l . | tee /dev/stderr | (! read)
       - run: go vet ./...
       - run: go test ./...
-      # The agent must stay a single static binary: a runtime dependency on the
-      # protected host is the thing the Go choice exists to avoid.
       - run: CGO_ENABLED=0 go build -o /tmp/athena-node ./cmd/athena-node
       - name: Agent exposes no shell capability
         run: |

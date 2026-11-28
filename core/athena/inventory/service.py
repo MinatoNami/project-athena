@@ -1,13 +1,3 @@
-"""Inventory operations.
-
-Two rules govern everything here:
-
-  1. An observation is never recorded without its provenance (which scan run, which
-     tool, at what time).
-  2. Nothing is ever marked inventoried unless the scan that produced it actually
-     succeeded. A partial scan leaves the asset stale, not clean.
-"""
-
 from __future__ import annotations
 
 import uuid
@@ -22,8 +12,6 @@ from athena.db.models import Asset, AssetEdge, Component, ScanRun
 from athena.inventory.identity import AssetKind
 from athena.inventory.purl import build_purl, normalise_name
 
-# How long before an asset's inventory is considered stale. Deliberately per-kind:
-# a repository changes when someone pushes, a host drifts continuously.
 STALENESS: dict[str, timedelta] = {
     AssetKind.HOST: timedelta(hours=24),
     AssetKind.REPOSITORY: timedelta(days=7),
@@ -34,7 +22,6 @@ STALENESS: dict[str, timedelta] = {
 }
 DEFAULT_STALENESS = timedelta(hours=24)
 
-# Scan outcomes that justify calling an asset inventoried.
 CONCLUSIVE = {"succeeded"}
 
 
@@ -43,14 +30,11 @@ class ObservedComponent:
     ecosystem: str
     name: str
     version: str
-    scope: str = "unknown"         # direct | transitive | os | runtime | unknown
+    scope: str = "unknown"
     purl: str | None = None
     cpe: str | None = None
     install_path: str | None = None
     is_running: bool | None = None
-
-
-# ─── assets ──────────────────────────────────────────────────────────────────
 
 
 def register_asset(
@@ -63,7 +47,6 @@ def register_asset(
     tier: str | None = None,
     owner: str | None = None,
 ) -> tuple[Asset, bool]:
-    """Find or create an asset by identity. Returns (asset, created)."""
     kind = str(AssetKind(kind))
     existing = session.execute(
         select(Asset).where(Asset.kind == kind, Asset.identity_key == identity_key)
@@ -72,9 +55,6 @@ def register_asset(
     now = datetime.now(UTC)
     if existing is not None:
         existing.last_seen = now
-        # Seeing it again undoes retiring it. Without this a service that is briefly
-        # down would be tombstoned on one observation and never come back, which
-        # turns a restart into a permanent disappearance.
         existing.tombstoned_at = None
         existing.display_name = display_name or existing.display_name
         if attributes:
@@ -108,7 +88,6 @@ def link(
     relation: str,
     confidence: float = 1.0,
 ) -> None:
-    """Record a relationship. Re-observing refreshes it rather than duplicating it."""
     session.execute(
         text(
             """
@@ -125,10 +104,6 @@ def link(
 def flag_merge_candidate(
     session: Session, *, asset: Asset, other: Asset, reason: str, confidence: float
 ) -> None:
-    """Record that two assets might be the same, for a human to confirm.
-
-    Never merges. A wrong merge corrupts history irreversibly; a wrong split is untidy.
-    """
     if asset.id == other.id:
         return
     a, b = sorted([asset.id, other.id], key=str)
@@ -145,11 +120,7 @@ def flag_merge_candidate(
 
 
 def tombstone_asset(session: Session, asset: Asset) -> None:
-    """Retire an asset without deleting it, so its history stays auditable."""
     asset.tombstoned_at = datetime.now(UTC)
-
-
-# ─── scan runs ───────────────────────────────────────────────────────────────
 
 
 def start_scan(
@@ -175,12 +146,6 @@ def finish_scan(
     stats: dict[str, Any] | None = None,
     error: str | None = None,
 ) -> None:
-    """Close a scan run and, only on a conclusive result, mark the asset inventoried.
-
-    This is the single place that sets `last_inventoried_at`. A partial, failed, or
-    timed-out scan deliberately leaves the asset looking stale, because that is the
-    truth: we do not know its current state.
-    """
     if status not in {"succeeded", "partial", "failed", "timeout"}:
         raise ValueError(f"Unknown scan status {status!r}")
 
@@ -194,9 +159,6 @@ def finish_scan(
         if asset is not None:
             asset.last_inventoried_at = run.finished_at
             asset.last_seen = run.finished_at
-
-
-# ─── components ──────────────────────────────────────────────────────────────
 
 
 def upsert_component(session: Session, observed: ObservedComponent) -> Component:
@@ -235,11 +197,6 @@ def record_components(
     components: list[ObservedComponent],
     replace: bool = True,
 ) -> int:
-    """Attach observed components to an asset, tagged with the run that saw them.
-
-    `replace` drops rows this scan did not re-observe, so a removed dependency
-    disappears — but only ever within a run that completed, never a partial one.
-    """
     seen: set[tuple[uuid.UUID, str]] = set()
     for observed in components:
         component = upsert_component(session, observed)
@@ -279,9 +236,6 @@ def record_components(
     return len(seen)
 
 
-# ─── coverage ────────────────────────────────────────────────────────────────
-
-
 def is_stale(asset: Asset, *, now: datetime | None = None) -> bool:
     if asset.last_inventoried_at is None:
         return True
@@ -290,17 +244,6 @@ def is_stale(asset: Asset, *, now: datetime | None = None) -> bool:
 
 
 def _inherited_inventory(session: Session) -> dict[Any, datetime]:
-    """When each container's image was last inventoried.
-
-    A container's packages come from the image it was built from, so scanning the
-    image is what establishes its contents — there is no separate scan to run, and
-    counting containers as never-looked-at made the coverage metric unreachable: 54
-    of 353 assets could never become fresh, capping it at 84.7% against a 90% target.
-
-    Runtime installs into a live container are the honest gap here. They would not
-    be seen, which is why this is reported as inherited rather than folded silently
-    into the directly-scanned count.
-    """
     container = aliased(Asset)
     image = aliased(Asset)
     rows = session.execute(
@@ -318,11 +261,6 @@ def _inherited_inventory(session: Session) -> dict[Any, datetime]:
 
 
 def coverage(session: Session) -> dict[str, Any]:
-    """The honest answer to "is everything being watched?".
-
-    `never_scanned` is the number that matters: those assets are unknown, and no
-    aggregate elsewhere may present them as clean.
-    """
     now = datetime.now(UTC)
     rows = session.execute(
         select(Asset.kind, Asset.id, Asset.display_name, Asset.last_inventoried_at).where(
@@ -341,10 +279,6 @@ def coverage(session: Session) -> dict[str, Any]:
         if inventoried is None and asset_id in inherited_at:
             inventoried = inherited_at[asset_id]
             inherited += 1
-            # Judged against the image's window, not the container's. The
-            # observation is a scan of an image, and an image's contents change when
-            # it is rebuilt rather than hourly — holding it to the container's
-            # 24-hour window would mark it stale the day after it was taken.
             window_kind = AssetKind.IMAGE
 
         if inventoried is None:
@@ -372,13 +306,8 @@ def coverage(session: Session) -> dict[str, Any]:
         "assets_fresh": fresh,
         "assets_stale": len(stale),
         "assets_never_scanned": len(never),
-        # Explicitly not a percentage of "assets we know about and looked at" — the
-        # denominator is every registered asset, so a gap cannot hide in the ratio.
         "coverage_ratio": round(fresh / total, 4) if total else None,
         "inconclusive_scans_24h": failed_scans,
-        # Counted separately rather than folded into assets_fresh: their contents are
-        # known from the image they were built from, not from a scan of the running
-        # container, and a runtime install would not be seen.
         "assets_inherited": inherited,
         "never_scanned": never[:50],
         "stale": stale[:50],

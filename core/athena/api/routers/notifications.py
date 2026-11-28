@@ -1,10 +1,3 @@
-"""Reading notifications.
-
-Delivery is in-app: a notification "sends" by becoming visible here. Anything
-external is egress, which is a policy decision this deployment has not made — the
-`channel` column exists so it has somewhere to land when it is.
-"""
-
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -28,14 +21,10 @@ def _serialise(n: Notification) -> dict[str, Any]:
         "title": n.title,
         "body": n.body,
         "urgency": n.urgency,
-        # The count, not the list: a message naming two hundred assets is not more
-        # informative than one naming a few and saying how many there were.
         "occurrence_count": n.occurrence_count,
         "subjects": listed,
         "subjects_truncated": n.occurrence_count > len(listed),
         "state": n.state,
-        # Held for the digest is not the same as failed to send, and the UI needs to
-        # be able to say which.
         "digested": n.state == "digested",
         "channel": n.channel,
         "created_at": n.created_at,
@@ -54,10 +43,6 @@ def list_notifications(
     stmt = (
         select(Notification)
         .where(Notification.state.in_(("sent", "digested", "read")))
-        # Urgent first, then unread, then recency. Ordering by time alone buries an
-        # actively exploited flaw under whatever routine assessments happened to be
-        # dispatched in the same pass — they all carry the same timestamp, so the
-        # tie-break was effectively arbitrary.
         .order_by(
             (Notification.urgency != "urgent"),
             Notification.read_at.is_not(None),
@@ -86,7 +71,6 @@ def list_notifications(
             Notification.urgency == "urgent",
         )
     ).scalar_one()
-    # Counted so the digest can say what it is a digest of.
     held = session.execute(
         select(func.count())
         .select_from(Notification)

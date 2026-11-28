@@ -1,9 +1,3 @@
-"""Asset identity.
-
-Identity errors are the most expensive kind in this system: everything downstream
-inherits them, and a wrong merge cannot be undone.
-"""
-
 from __future__ import annotations
 
 import pytest
@@ -33,7 +27,6 @@ def test_repository_urls_that_mean_the_same_repo_agree(url: str) -> None:
 
 
 def test_credentials_in_a_url_are_not_part_of_identity() -> None:
-    """A token embedded in a remote must never end up stored as an identity key."""
     key = normalise_repository_url("https://user:ghp_secrettoken@github.com/org/repo.git")
     assert key == "github.com/org/repo"
     assert "ghp_secrettoken" not in key

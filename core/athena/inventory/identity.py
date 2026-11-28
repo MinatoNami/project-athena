@@ -1,11 +1,3 @@
-"""Asset identity.
-
-An asset's identity must survive restarts, re-imaging, DHCP leases, and container
-recreation. Content-addressed identity (digests, normalised URLs) is preferred over
-mutable labels (tags, hostnames, IP addresses), because a mutable label produces
-either duplicates or — worse — a wrong merge.
-"""
-
 from __future__ import annotations
 
 import re
@@ -30,12 +22,6 @@ _SCP_LIKE = re.compile(r"^(?P<user>[^@/]+)@(?P<host>[^:/]+):(?P<path>.+)$")
 
 
 def normalise_repository_url(url: str) -> str:
-    """Canonical form of a git remote.
-
-    `git@github.com:Org/Repo.git`, `https://github.com/org/repo`, and
-    `https://user:token@github.com/org/repo.git` are all the same repository, and any
-    credentials embedded in the URL are dropped rather than stored.
-    """
     url = url.strip()
     if not url:
         raise IdentityError("Empty repository URL")
@@ -57,12 +43,6 @@ def normalise_repository_url(url: str) -> str:
 def host_identity(
     *, machine_id: str | None = None, hardware_uuid: str | None = None, node_key: str | None = None
 ) -> str:
-    """Strongest available host identity.
-
-    Ordered by durability: `machine-id` survives reboots and hostname changes;
-    hardware UUID survives an OS reinstall; the node key is a last resort, because
-    re-enrolling produces a new one.
-    """
     if machine_id:
         return f"machine-id:{machine_id.strip().lower()}"
     if hardware_uuid:
@@ -73,7 +53,6 @@ def host_identity(
 
 
 def image_identity(digest: str) -> str:
-    """Images are identified by digest, never by tag — a tag is a moving pointer."""
     digest = digest.strip().lower()
     if not digest.startswith("sha256:") or len(digest) != 71:
         raise IdentityError(f"Expected a sha256 image digest, got {digest!r}")
@@ -89,11 +68,6 @@ def service_identity(host_key: str, protocol: str, port: int) -> str:
 
 
 def network_host_identity(*, mac: str | None = None, fingerprint: str | None = None) -> str:
-    """Deliberately weak, and labelled as such by the caller.
-
-    MAC addresses are randomised by modern clients and fingerprints drift, so network
-    hosts are the most likely source of false duplicates.
-    """
     if mac:
         return f"mac:{mac.strip().lower().replace('-', ':')}"
     if fingerprint:

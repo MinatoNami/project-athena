@@ -46,7 +46,6 @@ def bootstrap_required(session: Session = Depends(db)) -> dict:
 
 @router.post("/bootstrap", status_code=status.HTTP_201_CREATED)
 def bootstrap(body: BootstrapRequest, response: Response, session: Session = Depends(db)) -> dict:
-    """Create the first admin account from the single-use bootstrap token."""
     if A.any_user_exists(session):
         raise HTTPException(status.HTTP_409_CONFLICT, "An account already exists")
 
@@ -91,7 +90,6 @@ def login(
         select(User).where(User.email == body.email)
     ).scalar_one_or_none()
 
-    # Constant-ish work whether or not the account exists, so timing does not enumerate users.
     ok = user is not None and user.disabled_at is None and A.verify_password(
         user.password_hash, body.password
     )
@@ -134,7 +132,6 @@ def step_up(
     principal: Principal = Depends(current_principal),
     session: Session = Depends(db),
 ) -> dict:
-    """Re-authenticate for a consequential action. Required before every approval."""
     if body.email != principal.user.email or not A.verify_password(
         principal.user.password_hash, body.password
     ):

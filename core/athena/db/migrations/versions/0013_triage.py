@@ -1,12 +1,3 @@
-"""Record a triage disposition separately from an investigated verdict.
-
-Triage is a single cheap model call with no tools. It decides what deserves a full
-investigation; it never decides whether a vulnerability applies. Conflating the two
-would let a glance with no evidence behind it close a finding, which is precisely
-what this system exists not to do.
-
-Revision ID: 0013
-"""
 from __future__ import annotations
 
 import sqlalchemy as sa
@@ -19,9 +10,6 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # investigate | deprioritise. Deliberately not a finding state: a deprioritised
-    # finding is still `discovered`, still listed, and still says it has not been
-    # investigated.
     op.add_column("finding", sa.Column("triage_disposition", sa.String(16)))
     op.add_column("finding", sa.Column("triage_reason", sa.Text))
     op.add_column("finding", sa.Column("triage_confidence", sa.Float))

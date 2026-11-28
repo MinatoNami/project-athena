@@ -1,7 +1,3 @@
-"""Vulnerability intelligence, findings, and evidence.
-
-Revision ID: 0006
-"""
 from __future__ import annotations
 
 import sqlalchemy as sa
@@ -43,8 +39,6 @@ def upgrade() -> None:
         sa.Column("modified_at", sa.DateTime(timezone=True)),
         sa.Column("withdrawn_at", sa.DateTime(timezone=True)),
         sa.Column("references", pg.JSONB, nullable=False, server_default="[]"),
-        # Bumped only when something that could change a verdict changes, so a
-        # cosmetic edit upstream does not re-correlate the whole estate.
         sa.Column("revision", sa.Integer, nullable=False, server_default="1"),
         sa.Column("revised_at", sa.DateTime(timezone=True)),
         sa.Column("content_hash", sa.Text, nullable=False),
@@ -64,8 +58,6 @@ def upgrade() -> None:
         sa.Column("fixed", sa.Text),
         sa.Column("last_affected", sa.Text),
         sa.Column("source", sa.String(32), nullable=False),
-        # See athena/intel/authority.py. A distro tracker outranks an upstream
-        # advisory for a distro package, because only it knows about backports.
         sa.Column("authority", sa.SmallInteger, nullable=False),
         sa.Column("distro", sa.String(32)),
         sa.Column("distro_release", sa.String(32)),
@@ -83,16 +75,12 @@ def upgrade() -> None:
         sa.Column("advisories", sa.Integer, nullable=False, server_default="0"),
     )
 
-    # Created explicitly, then referenced with create_type=False: otherwise
-    # create_table emits a second CREATE TYPE and the migration fails on a fresh
-    # database.
     pg.ENUM(*FINDING_STATES, name="finding_state").create(op.get_bind(), checkfirst=True)
     finding_state = pg.ENUM(*FINDING_STATES, name="finding_state", create_type=False)
 
     op.create_table(
         "finding",
         sa.Column("id", pg.UUID(as_uuid=True), primary_key=True),
-        # One vulnerability across many assets is one group with many instances.
         sa.Column("group_key", sa.Text, nullable=False),
         sa.Column("vulnerability_id", sa.Text, sa.ForeignKey("vulnerability.id", ondelete="CASCADE"), nullable=False),
         sa.Column("asset_id", pg.UUID(as_uuid=True), sa.ForeignKey("asset.id", ondelete="CASCADE"), nullable=False),
@@ -105,8 +93,6 @@ def upgrade() -> None:
         sa.Column("risk_score", sa.SmallInteger),
         sa.Column("risk_band", sa.String(16)),
         sa.Column("confidence", sa.Float),
-        # The advisory revision this finding was evaluated against, so a revised
-        # advisory can be re-correlated without rescanning anything.
         sa.Column("advisory_revision", sa.Integer, nullable=False),
         sa.Column("first_seen", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("state_changed_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
@@ -131,8 +117,6 @@ def upgrade() -> None:
     )
     op.create_index("evidence_finding_idx", "evidence", ["finding_id"])
 
-    # A finding must never be created already confirmed: correlation produces
-    # candidates, and only investigation (M3) can confirm one.
     op.create_check_constraint(
         "finding_confidence_bounded", "finding",
         "match_confidence >= 0 AND match_confidence <= 1",

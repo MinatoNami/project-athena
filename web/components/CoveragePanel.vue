@@ -1,12 +1,4 @@
 <script setup lang="ts">
-/**
- * Coverage, reported as prominently as findings — a gap must never read as clean.
- *
- * Three states, three bars: read recently, read but past its window, and never read
- * at all. The third is the one that matters, so it is drawn dashed in the colour the
- * rest of the product uses for "nobody has looked" rather than shaded like a smaller
- * version of the other two.
- */
 const props = defineProps<{
   coverage: {
     assets_total: number

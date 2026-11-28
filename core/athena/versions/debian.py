@@ -1,19 +1,3 @@
-"""Debian/Ubuntu version ordering, per deb-version(7).
-
-The algorithm is unusual and worth stating precisely, because a naive
-implementation gets the common cases right and the security-relevant cases wrong:
-
-  * `~` sorts *before* everything, including the empty string, so
-    `1.0~rc1 < 1.0`. Distributions use this constantly for pre-releases.
-  * Letters sort before non-letters, so `1.0a < 1.0+`.
-  * Digit runs compare numerically, so `1.10 > 1.9`.
-  * An absent epoch means 0, so `1:1.0 > 2.0`.
-
-Ubuntu security updates are almost always a revision bump (`3.0.13-0ubuntu3.12`),
-so revision comparison is not a detail — it is how "is this host patched?" is
-answered.
-"""
-
 from __future__ import annotations
 
 import re
@@ -28,25 +12,18 @@ class InvalidVersion(ValueError):
 
 
 def _order(char: str) -> int:
-    """Character rank in dpkg's collation.
-
-    `~` is below the end of string; letters are next; everything else follows,
-    offset so it can never collide with a letter's rank.
-    """
     if char == "~":
         return -1
     if char.isdigit():
-        return 0          # digits are handled by the numeric pass, never here
+        return 0
     if char.isalpha():
         return ord(char)
     return ord(char) + 256
 
 
 def _compare_fragment(a: str, b: str) -> int:
-    """Compare one upstream or revision fragment."""
     i = j = 0
     while i < len(a) or j < len(b):
-        # Non-digit run, compared by dpkg collation.
         first_diff = 0
         while (i < len(a) and not a[i].isdigit()) or (j < len(b) and not b[j].isdigit()):
             ac = _order(a[i]) if i < len(a) and not a[i].isdigit() else 0
@@ -59,7 +36,6 @@ def _compare_fragment(a: str, b: str) -> int:
         if first_diff:
             return 1 if first_diff > 0 else -1
 
-        # Digit run, compared numerically. Leading zeros are insignificant.
         start_a, start_b = i, j
         while i < len(a) and a[i].isdigit():
             i += 1
@@ -71,7 +47,7 @@ def _compare_fragment(a: str, b: str) -> int:
             return 1 if num_a > num_b else -1
 
         if start_a == i and start_b == j:
-            break   # neither side advanced; the strings are equal here
+            break
     return 0
 
 

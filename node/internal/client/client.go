@@ -1,7 +1,3 @@
-// Package client speaks the node side of the Athena protocol.
-//
-// The node always dials out: core never opens a connection to a protected host, so
-// nothing Athena protects needs an inbound listener.
 package client
 
 import (
@@ -25,8 +21,6 @@ const (
 	requestTimeout = 60 * time.Second
 )
 
-// Client holds the node identity. The private key is generated on this host and is
-// never transmitted; only the public half ever reaches core.
 type Client struct {
 	BaseURL       string
 	NodeID        string
@@ -56,9 +50,6 @@ func nonce() (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
-// canonicalRequest must match athena/nodes/protocol.py exactly. Binding method,
-// path, timestamp, nonce, and a body digest stops a captured signature being
-// replayed against another endpoint or a modified payload.
 func canonicalRequest(method, path, timestamp, nonce string, body []byte) []byte {
 	sum := sha256.Sum256(body)
 	return []byte(strings.Join([]string{
@@ -113,7 +104,6 @@ func (c *Client) do(req *http.Request, out any) error {
 	return json.Unmarshal(payload, out)
 }
 
-// Task is one signed instruction from core.
 type Task struct {
 	TaskID     string          `json:"task_id"`
 	Capability string          `json:"capability"`
@@ -124,11 +114,6 @@ type Task struct {
 	Signature  string          `json:"signature"`
 }
 
-// Verify checks that core actually authorised this task, and that it has not expired.
-//
-// Without this a node would execute whatever reached it. With it, a task is only
-// run if it was signed by the key pinned at enrolment — which is what makes a
-// compromised or spoofed core unable to drive the agent.
 func (t *Task) Verify(corePub ed25519.PublicKey) error {
 	raw := map[string]any{
 		"task_id":    t.TaskID,

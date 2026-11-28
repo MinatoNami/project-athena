@@ -1,12 +1,4 @@
 <script setup lang="ts">
-/**
- * Today — a ranked worklist, not a dashboard.
- *
- * Every row still states why it is ranked where it is; it states it in chips rather
- * than a sentence. A rank with no stated cause is an opinion, and an opinion is
- * exactly what this product is trying not to be — but a paragraph per row is how a
- * queue of forty becomes unreadable, which is its own way of saying nothing.
- */
 useHead({ title: 'Today' })
 
 const { data: me } = await useMe()
@@ -17,8 +9,6 @@ const open = ref<string | null>(null)
 
 const QUERIES = {
   needs: 'needs_attention=true&sort=risk&limit=50',
-  // Outside the queue only, so the three tabs never list the same thing twice.
-  // Cleared means every instance was looked at; one that was not is still waiting.
   waiting: 'fully_assessed=false&needs_attention=false&sort=risk&limit=50',
   cleared: 'fully_assessed=true&needs_attention=false&sort=risk&limit=50',
 }
@@ -32,11 +22,6 @@ const { data: coverage } = await useAsyncData('today-coverage', () =>
   api<any>('coverage').catch(() => null),
 )
 
-/**
- * Estate-wide totals, fetched separately from whichever tab is open: the strip, the
- * charts and the all-clear state are denominators, and a denominator that shrinks
- * to match the filter is not a denominator.
- */
 const { data: estate, refresh: refreshEstate } = await useAsyncData('today-estate', () =>
   api<any>('findings?limit=1').catch(() => null),
 )
@@ -44,21 +29,12 @@ const { data: unclassified } = await useAsyncData('today-unclassified', () =>
   api<any>('assets/unclassified').catch(() => null),
 )
 
-// The estate figures move with the list: the tab counts, the strip and the charts
-// all describe the same findings the rows do, and an investigation finishing
-// changes both.
 useEvents(['findings'], () => {
   refresh()
   refreshEstate()
 })
 const { severity } = useChartTheme()
 
-/**
- * Which tab the rows on screen belong to. Nuxt sets `pending` on every refresh, so
- * keying the skeleton on it blanked the queue — and dropped the open row and the
- * keyboard focus — each time a live update arrived. Only a tab switch, or a first
- * load, has nothing true to show in the meantime.
- */
 const shownTab = ref(tab.value)
 watch(data, () => { shownTab.value = tab.value })
 const loading = computed(() => pending.value && (!data.value || shownTab.value !== tab.value))
@@ -69,11 +45,6 @@ function selectTab(id: string) {
   open.value = null
 }
 
-/**
- * One entry per decision, not per row in the database. Fourteen tags of one image
- * carrying one vulnerability is one thing to decide about, and the worst instance
- * is the one worth showing.
- */
 const instances = computed(() => {
   const collapsed = new Map<string, any>()
   for (const g of data.value?.groups ?? []) {
@@ -102,8 +73,6 @@ const rows = computed(() =>
 
 const facet = (name: string) => estate.value?.facets?.[name]?.total ?? 0
 
-// A failed estate fetch is not an empty estate: without this, the headline said
-// "Nothing is waiting on you" and every count read 0 whenever that one call failed.
 const estateUnknown = computed(() => estate.value == null)
 
 const tabs = computed(() => [
@@ -112,15 +81,6 @@ const tabs = computed(() => [
   { id: 'cleared', label: 'Cleared', count: estateUnknown.value ? null : facet('cleared') },
 ])
 
-/**
- * The worst band each group reached — over the groups that have one.
- *
- * The unassessed share sat in this chart at first and swamped it: 537 against a
- * worst band of 3 renders every real band as a sliver, so the chart answered
- * "most things are unassessed" (which the strip above already says) instead of
- * "here is the shape of what we know". It is stated in the caption instead, which
- * keeps it visible without letting it crush the scale.
- */
 const bands = computed(() => {
   const sev = severity.value
   return (['critical', 'high', 'medium', 'low', 'informational'] as const)
@@ -130,7 +90,6 @@ const bands = computed(() => {
 
 const unassessedGroups = computed(() => facet('band:unassessed'))
 
-/** Where the groups sit. Exposure is the half of risk that is not the advisory. */
 const exposure = computed(() =>
   (['internet', 'internal', 'isolated', 'unknown'] as const)
     .map(name => ({
@@ -146,7 +105,6 @@ const truncated = computed(() =>
   (data.value?.matching_group_count ?? 0) > (data.value?.groups?.length ?? 0),
 )
 
-/** Why this sits where it does — the same facts as before, as chips. */
 function signals(i: any) {
   const out: { text: string; tone?: 'bad' | 'warn' }[] = []
   if (i.group.kev) out.push({ text: 'actively exploited', tone: 'bad' })
@@ -175,13 +133,6 @@ async function suppressed() {
   await Promise.all([refresh(), refreshEstate()])
 }
 
-/**
- * Groups held out of every tab, estate-wide. Only counts of the same thing over
- * the same population belong on one chart: "needs an entitlement" and "lower
- * priority" used to sit here too, counted as rows of whichever tab was open — so
- * they changed on a tab switch, and the entitlement rows were never out of the
- * queue at all.
- */
 const heldBack = computed(() => {
   const out: { label: string; value: number }[] = []
   if (estate.value?.no_fix_available_count) {
@@ -196,7 +147,6 @@ const heldBack = computed(() => {
   return out
 })
 
-/** Rows of this tab left out of its list because triage ranked them lower. */
 const hiddenLowerPriority = computed(() =>
   tab.value === 'needs'
     ? 0
@@ -305,12 +255,8 @@ const hiddenLowerPriority = computed(() =>
           A statement about this tab, not about your estate.
         </StateBlock>
 
-        <!-- Rows belong to the same state chain as the skeleton and the empty states:
-             outside it, a tab switch drew the skeleton above the previous tab's rows. -->
         <template v-else>
         <div v-for="i in rows" :key="i.finding_id" class="row" :class="{ isopen: open === i.finding_id }">
-          <!-- The head alone toggles, so the actions inside the open body need no
-               stopPropagation, and the whole row is reachable from the keyboard. -->
           <div
             class="rowhead" role="button" tabindex="0"
             :aria-expanded="open === i.finding_id"
@@ -335,7 +281,6 @@ const hiddenLowerPriority = computed(() =>
               </div>
               <div class="chips">
                 <span v-if="i.group.malicious" class="tag bad strong caps">malware</span>
-                <!-- SSVC models flaws; on malware it would only restate "remove it". -->
                 <SsvcChip
                   v-if="!i.group.malicious && (i.ssvc === 'act' || i.ssvc === 'attend')"
                   :outcome="i.ssvc"
@@ -395,8 +340,6 @@ const hiddenLowerPriority = computed(() =>
       <aside class="rail">
         <BaselineOffer @done="refreshEstate(); refresh()" />
 
-        <!-- Unclassified assets score at a placeholder importance, so most of the
-             ranking beside this card is guesswork until it is filled in. -->
         <div v-if="unclassified?.asset_count" class="card lever">
           <div class="lbl">Biggest lever</div>
           <p>
@@ -466,8 +409,6 @@ const hiddenLowerPriority = computed(() =>
 .on { font-size: .76rem; color: var(--ink-muted); }
 .siblings { border: 1px dashed var(--rule); border-radius: 3px; padding: 0 .22rem; }
 
-/* The reason, compressed. Tone is carried by a word, never by colour alone; the
-   tags themselves are the shared primitive in main.css. */
 .chips { display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; }
 
 .score { display: flex; flex-direction: column; align-items: flex-end; gap: .1rem; flex-shrink: 0; }
@@ -493,8 +434,6 @@ const hiddenLowerPriority = computed(() =>
   font-size: .66rem; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-muted);
   border: 1px dashed var(--rule); border-radius: 4px; padding: .15rem .38rem; white-space: nowrap;
 }
-/* Outlined in the status colour, not filled with the CRITICAL ramp: beside
-   "unassessed" a filled block read as a band nothing had assigned. */
 .kevflag {
   border: 1px solid var(--bad); color: var(--ink); font-weight: 600;
   padding: 0 .22rem; border-radius: 3px; margin-left: .22rem;

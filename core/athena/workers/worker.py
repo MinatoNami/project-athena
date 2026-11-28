@@ -1,5 +1,3 @@
-"""Queue consumer."""
-
 from __future__ import annotations
 
 import signal
@@ -16,18 +14,18 @@ from athena.queue import (
     claim,
     finish,
     get_handler,
-    handlers,  # noqa: F401  (import registers the handlers)
+    handlers,  # noqa: F401
     publish,
 )
 from athena.workers import (
-    image,  # noqa: F401  (registers scan.image)
-    intel_jobs,  # noqa: F401  (registers intel.* and correlate.*)
-    investigate,  # noqa: F401  (registers investigate.finding)
-    node_ingest,  # noqa: F401  (registers ingest.node_observation)
-    notify_jobs,  # noqa: F401  (registers notify.dispatch)
-    repository,  # noqa: F401  (registers scan.repository)
-    rescore,  # noqa: F401  (registers rescore.findings)
-    suppression_jobs,  # noqa: F401  (registers suppression.review)
+    image,  # noqa: F401
+    intel_jobs,  # noqa: F401
+    investigate,  # noqa: F401
+    node_ingest,  # noqa: F401
+    notify_jobs,  # noqa: F401
+    repository,  # noqa: F401
+    rescore,  # noqa: F401
+    suppression_jobs,  # noqa: F401
 )
 
 log = structlog.get_logger(__name__)
@@ -44,7 +42,6 @@ def _install_signal_handlers() -> None:
 
 
 def _run_one() -> bool:
-    """Claim and execute a single job. Returns True if work was done."""
     from athena.db.models import Job
 
     with session_scope() as session:
@@ -58,7 +55,7 @@ def _run_one() -> bool:
 
     try:
         result = get_handler(kind)(payload)
-    except Exception as exc:  # noqa: BLE001 - a handler failure must not kill the worker
+    except Exception as exc:  # noqa: BLE001
         with session_scope() as session:
             j = session.get(Job, job_id)
             if j is not None:
@@ -93,7 +90,7 @@ def run() -> None:
             try:
                 if not _run_one():
                     _stop.wait(settings.poll_interval_seconds)
-            except Exception as exc:  # noqa: BLE001 - never let the loop die
+            except Exception as exc:  # noqa: BLE001
                 log.error("worker.loop_error", error=str(exc))
                 _stop.wait(settings.poll_interval_seconds)
 

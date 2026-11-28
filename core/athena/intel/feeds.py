@@ -1,10 +1,3 @@
-"""Feed fetchers.
-
-Athena is a guest on these services. Every fetch is rate-limit aware, cached, and
-backs off — and on sustained failure it serves what it has and says so, rather than
-failing the patrol.
-"""
-
 from __future__ import annotations
 
 import csv
@@ -30,9 +23,6 @@ OSV_ECOSYSTEM_ZIP = "https://osv-vulnerabilities.storage.googleapis.com/{ecosyst
 KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 EPSS_URL = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
 
-# OSV publishes one archive per ecosystem. Only the ones Athena can actually
-# correlate are fetched — pulling everything would be gigabytes of advisories for
-# ecosystems it cannot compare versions in.
 DEFAULT_ECOSYSTEMS = ["PyPI", "npm", "Go", "Debian", "Ubuntu", "Alpine"]
 
 
@@ -49,19 +39,12 @@ def _client(timeout: float | None = None) -> httpx.Client:
 
 
 def http_client(timeout: float | None = None) -> httpx.Client:
-    """A client with Athena's identity and timeouts, for callers that batch requests."""
     return _client(timeout)
 
 
 def fetch_osv_ecosystem(
     ecosystem: str, *, limit: int | None = None, timeout: float = 1800.0
 ) -> Iterator[dict[str, Any]]:
-    """Stream one OSV ecosystem archive, yielding advisory records.
-
-    Streamed to a temporary file and yielded lazily rather than held in memory: the
-    Ubuntu archive is hundreds of megabytes and tens of thousands of advisories, and
-    buffering it defeats the batching the caller does downstream.
-    """
     url = OSV_ECOSYSTEM_ZIP.format(ecosystem=ecosystem)
     log.info("intel.fetch", source="osv", ecosystem=ecosystem)
 
@@ -86,7 +69,7 @@ def fetch_osv_ecosystem(
                 try:
                     yield json.loads(archive.read(name))
                 except (json.JSONDecodeError, KeyError, zipfile.BadZipFile):
-                    continue    # one malformed record must not fail the ecosystem
+                    continue
 
 
 def fetch_kev() -> list[dict[str, Any]]:
@@ -100,10 +83,6 @@ def fetch_kev() -> list[dict[str, Any]]:
 
 
 def fetch_epss() -> tuple[dict[str, tuple[float, float]], dict[str, str]]:
-    """CVE → (probability, percentile), and the file's model metadata.
-
-    Refreshed daily upstream.
-    """
     try:
         with _client() as client:
             response = client.get(EPSS_URL)
@@ -115,12 +94,6 @@ def fetch_epss() -> tuple[dict[str, tuple[float, float]], dict[str, str]]:
 
 
 def parse_epss_csv(raw: str) -> tuple[dict[str, tuple[float, float]], dict[str, str]]:
-    """Scores, plus the `#model_version:…,score_date:…` header as a dict.
-
-    The model version is kept because scores jump at a version boundary — EPSS v5
-    replaced v4 on 2026-06-15 and moved Log4Shell from 0.94 to 0.99999 overnight —
-    and a score without its model is a number nobody can compare with last month's.
-    """
     scores: dict[str, tuple[float, float]] = {}
     meta: dict[str, str] = {}
     for row in csv.reader(io.StringIO(raw)):
@@ -141,10 +114,6 @@ def parse_epss_csv(raw: str) -> tuple[dict[str, tuple[float, float]], dict[str, 
     return scores, meta
 
 
-# CISA's Vulnrichment repository: one CVE JSON 5.x record per file, carrying CISA's
-# ADP container with its SSVC assessment. Raw GitHub is used rather than the CVE
-# Services API because it is a static file host with no per-client rate limit
-# worth negotiating, and the repository is CISA's own publication of the data.
 VULNRICHMENT_URL = (
     "https://raw.githubusercontent.com/cisagov/vulnrichment/develop/{year}/{bucket}xxx/{cve}.json"
 )
@@ -152,7 +121,6 @@ _CVE = re.compile(r"^CVE-(\d{4})-(\d{4,19})$")
 
 
 def vulnrichment_url(cve: str) -> str | None:
-    """The file for one CVE, or None if the id is not a CVE this layout can hold."""
     match = _CVE.match(cve or "")
     if not match:
         return None
@@ -161,7 +129,6 @@ def vulnrichment_url(cve: str) -> str | None:
 
 
 def fetch_vulnrichment(client: httpx.Client, cve: str) -> dict[str, Any] | None:
-    """CISA's record for one CVE, or None when CISA has published none (404)."""
     url = vulnrichment_url(cve)
     if url is None:
         return None
@@ -189,12 +156,6 @@ _SSVC_KEYS = {
 
 
 def parse_vulnrichment(record: dict[str, Any]) -> dict[str, Any] | None:
-    """CISA's SSVC decision points from a CVE JSON 5.x record, or None.
-
-    `options` is a list of one-key objects (`[{"Exploitation": "poc"}, …]`), so it is
-    flattened. Only the container CISA signs as `CISA-ADP` is read: the record holds
-    other providers' containers too, and their opinions are not CISA's.
-    """
     containers = (record.get("containers") or {}).get("adp") or []
     for container in containers:
         provider = (container.get("providerMetadata") or {}).get("shortName")

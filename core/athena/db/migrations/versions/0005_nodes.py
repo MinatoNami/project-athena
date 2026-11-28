@@ -1,7 +1,3 @@
-"""Node enrolment, task dispatch, and replay protection.
-
-Revision ID: 0005
-"""
 from __future__ import annotations
 
 import sqlalchemy as sa
@@ -20,8 +16,6 @@ def upgrade() -> None:
         sa.Column("id", pg.UUID(as_uuid=True), primary_key=True),
         sa.Column("asset_id", pg.UUID(as_uuid=True), sa.ForeignKey("asset.id", ondelete="SET NULL")),
         sa.Column("display_name", sa.Text, nullable=False),
-        # The node generates its keypair locally and sends only the public half, so
-        # the private key never exists anywhere but the protected host.
         sa.Column("public_key", sa.LargeBinary, nullable=False, unique=True),
         sa.Column("agent_version", sa.Text),
         sa.Column("platform", sa.Text),
@@ -66,8 +60,6 @@ def upgrade() -> None:
         postgresql_where=sa.text("completed_at IS NULL"),
     )
 
-    # Replay protection: a signed request may be accepted exactly once. Rows older
-    # than the clock-skew window are swept by the scheduler.
     op.create_table(
         "node_nonce",
         sa.Column("node_id", pg.UUID(as_uuid=True), sa.ForeignKey("node.id", ondelete="CASCADE"), primary_key=True),

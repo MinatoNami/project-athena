@@ -1,11 +1,3 @@
-"""Suppression.
-
-The property under test throughout is the difference between suppressing and
-hiding: a suppression records what it rested on, and stops applying when that stops
-holding. A test suite that only checked "suppressed findings disappear" would pass
-against a feature that is simply a delete button.
-"""
-
 from __future__ import annotations
 
 import uuid
@@ -56,9 +48,6 @@ def _visible(session, **kw):
     return {g["vulnerability_id"] for g in page.groups}
 
 
-# ── the basics ───────────────────────────────────────────────────────────────
-
-
 def test_a_suppressed_finding_leaves_the_default_list(session, finding):
     assert finding.vulnerability_id in _visible(session)
     create_suppression(
@@ -89,7 +78,6 @@ def test_revoking_puts_the_finding_back_and_keeps_the_record(session, finding):
     revoke_suppression(session, suppression=s, actor="you")
     session.flush()
     assert finding.vulnerability_id in _visible(session)
-    # Kept, not deleted: who changed their mind is part of the trail.
     assert session.get(Suppression, s.id) is not None
     assert session.get(Suppression, s.id).revoked_by == "you"
 
@@ -103,18 +91,12 @@ def test_an_expired_suppression_stops_applying_without_a_sweep(session, finding)
     session.flush()
     assert finding.vulnerability_id not in _visible(session)
 
-    # Expiry is evaluated in the query, so it takes effect on time rather than
-    # whenever something next happens to run.
     s.expires_at = datetime.now(UTC) - timedelta(minutes=1)
     session.flush()
     assert finding.vulnerability_id in _visible(session)
 
 
-# ── what makes it a suppression rather than a delete ─────────────────────────
-
-
 def test_exposure_growing_invalidates_the_dismissal(session, finding):
-    """The case the whole mechanism exists for: an isolated service becomes exposed."""
     create_suppression(
         session, finding=finding, reason_code="compensating_control",
         reason="not reachable from anywhere off this host", actor="you",
@@ -151,8 +133,6 @@ def test_becoming_known_exploited_invalidates_the_dismissal(session, finding):
 
 
 def test_the_situation_improving_does_not_invalidate(session, finding):
-    """Reinstating findings because things got better would train people to ignore
-    the mechanism, which is worse than not having it."""
     create_suppression(
         session, finding=finding, reason_code="accepted_risk",
         reason="acceptable while this stays internal", actor="you",
@@ -167,12 +147,7 @@ def test_the_situation_improving_does_not_invalidate(session, finding):
     assert finding.vulnerability_id not in _visible(session)
 
 
-# ── refusals ─────────────────────────────────────────────────────────────────
-
-
 def test_accepted_risk_must_carry_an_expiry(session, finding):
-    """It is a statement about appetite, not about the world, so nothing else will
-    ever prompt a review of it."""
     with pytest.raises(SuppressionError, match="expiry"):
         create_suppression(
             session, finding=finding, reason_code="accepted_risk",
@@ -210,12 +185,7 @@ def test_suppressing_the_same_scope_twice_is_refused(session, finding):
         )
 
 
-# ── scope ────────────────────────────────────────────────────────────────────
-
-
 def test_a_broader_scope_covers_findings_created_later(session, finding):
-    """Correlation recreates findings, so a suppression keyed on a finding id would
-    evaporate on the next scan. Scope is semantic instead."""
     create_suppression(
         session, finding=finding, reason_code="false_positive",
         reason="this advisory does not describe our build", scope="everywhere", actor="you",
@@ -240,8 +210,6 @@ def test_a_broader_scope_covers_findings_created_later(session, finding):
 
 
 def test_counts_are_not_inflated_when_two_suppressions_overlap(session, finding):
-    """A finding can be covered by an exact suppression and a broad one at once. A
-    join would return it twice and double every instance count that touched it."""
     create_suppression(
         session, finding=finding, reason_code="not_applicable",
         reason="the vulnerable module is not compiled in", scope="everywhere", actor="you",

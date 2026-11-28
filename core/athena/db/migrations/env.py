@@ -4,12 +4,11 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from athena.config import get_settings
-from athena.db import models  # noqa: F401  (import registers the tables)
+from athena.db import models  # noqa: F401
 from athena.db.base import Base
 
 config = context.config
 
-# Respect a URL supplied by the caller (tests, `alembic -x`); fall back to settings.
 if not config.get_main_option("sqlalchemy.url", None):
     config.set_main_option("sqlalchemy.url", get_settings().database_url)
 target_metadata = Base.metadata

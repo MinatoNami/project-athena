@@ -1,8 +1,3 @@
-"""Job handler registry.
-
-A job kind with no registered handler is a hard error, not a silent no-op.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Callable

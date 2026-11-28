@@ -1,10 +1,3 @@
-"""Grant verification.
-
-The executor can *verify* a grant signature. It holds no private key and therefore
-cannot mint one — which is what stops a compromised reasoning layer from authorising
-its own actions.
-"""
-
 from __future__ import annotations
 
 import json

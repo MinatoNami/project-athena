@@ -1,9 +1,3 @@
-"""Node enrolment and task exchange.
-
-Nodes always dial out: core never opens a connection to a protected host, so nothing
-Athena protects needs an inbound listener.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -42,9 +36,6 @@ def _hash(token: str) -> bytes:
     return hashlib.sha256(token.encode("utf-8")).digest()
 
 
-# ─── enrolment ───────────────────────────────────────────────────────────────
-
-
 class EnrolTokenRequest(BaseModel):
     tier: str = "unknown"
 
@@ -66,7 +57,6 @@ def mint_enrol_token(
     principal: Principal = Depends(current_principal),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
-    """Mint a single-use, short-lived enrolment token."""
     token = secrets.token_urlsafe(32)
     expires = datetime.now(UTC) + ENROLMENT_TTL
     session.add(
@@ -84,18 +74,11 @@ def mint_enrol_token(
         subject="nodes",
         detail={"tier": body.tier, "ttl_minutes": int(ENROLMENT_TTL.total_seconds() // 60)},
     )
-    # Returned exactly once; only its hash is stored.
     return {"token": token, "expires_at": expires}
 
 
 @router.post("/enrol", status_code=status.HTTP_201_CREATED)
 def enrol(body: EnrolRequest, request: Request, session: Session = Depends(db)) -> dict[str, Any]:
-    """Redeem an enrolment token.
-
-    Unauthenticated by session on purpose: the token *is* the authentication, and it
-    is single-use and short-lived. The node sends only its public key — the private
-    half is generated on the host and never transmitted.
-    """
     row = session.execute(
         select(NodeEnrolmentToken).where(NodeEnrolmentToken.token_hash == _hash(body.token))
     ).scalar_one_or_none()
@@ -157,8 +140,6 @@ def enrol(body: EnrolRequest, request: Request, session: Session = Depends(db)) 
     row.consumed_at = now
     row.consumed_by_node = node.id
 
-    # A host re-enrolling under a new key is a candidate duplicate, never a silent
-    # merge: re-imaging looks identical to a brand-new machine.
     _flag_possible_duplicates(session, node=node, asset=asset, machine_id=body.machine_id)
 
     record(
@@ -178,7 +159,6 @@ def enrol(body: EnrolRequest, request: Request, session: Session = Depends(db)) 
         "node_id": str(node.id),
         "asset_id": str(asset.id),
         "capabilities": OBSERVE_CAPABILITIES,
-        # Pinned by the node so it executes nothing core did not sign.
         "core_public_key": b64(task_signing_public_key()),
     }
 
@@ -210,9 +190,6 @@ def _flag_possible_duplicates(
         )
 
 
-# ─── node-authenticated requests ─────────────────────────────────────────────
-
-
 async def authenticated_node(
     request: Request,
     session: Session = Depends(db),
@@ -221,7 +198,6 @@ async def authenticated_node(
     x_athena_nonce: str = Header(...),
     x_athena_signature: str = Header(...),
 ) -> Node:
-    """Verify an Ed25519-signed node request, and refuse to accept it twice."""
     try:
         node_uuid = uuid.UUID(x_athena_node)
     except ValueError as exc:
@@ -251,7 +227,6 @@ async def authenticated_node(
         )
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
 
-    # Replay protection. The insert is the check: a nonce already present conflicts.
     inserted = session.execute(
         text(
             "INSERT INTO node_nonce (node_id, nonce) VALUES (:node, :nonce) "
@@ -274,7 +249,6 @@ async def authenticated_node(
 
 @router.get("/tasks")
 def poll_tasks(node: Node = Depends(authenticated_node), session: Session = Depends(db)) -> dict:
-    """Hand the node its pending work, as envelopes signed by core."""
     now = datetime.now(UTC)
     pending = session.execute(
         select(NodeTask)
@@ -341,9 +315,6 @@ def submit_result(
     return {"accepted": True}
 
 
-# ─── management ──────────────────────────────────────────────────────────────
-
-
 @router.get("")
 def list_nodes(
     _: Principal = Depends(current_principal), session: Session = Depends(db)
@@ -363,8 +334,6 @@ def list_nodes(
                 "enrolled_at": n.enrolled_at,
                 "last_seen_at": n.last_seen_at,
                 "revoked": n.revoked_at is not None,
-                # A node that has stopped reporting is not a healthy node. The UI
-                # must not let silence read as "nothing to report".
                 "offline": n.last_seen_at is None or (now - n.last_seen_at) > timedelta(minutes=5),
             }
             for n in nodes
@@ -378,7 +347,6 @@ def collect_now(
     principal: Principal = Depends(current_principal),
     session: Session = Depends(db),
 ) -> dict:
-    """Queue an immediate observe sweep for one node."""
     from athena.nodes.dispatch import enqueue_collection
 
     node = session.get(Node, uuid.UUID(node_id))
@@ -402,7 +370,6 @@ def revoke_node(
     principal: Principal = Depends(current_principal),
     session: Session = Depends(db),
 ) -> dict:
-    """Revoke a node's credentials and tombstone its asset, retaining history."""
     node = session.get(Node, uuid.UUID(node_id))
     if node is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such node")
@@ -427,7 +394,6 @@ def revoke_node(
 
 
 def sweep_nonces(session: Session) -> int:
-    """Drop nonces older than the skew window; they can no longer be replayed."""
     cutoff = datetime.now(UTC) - MAX_CLOCK_SKEW * 2
     result = session.execute(delete(NodeNonce).where(NodeNonce.seen_at < cutoff))
     return result.rowcount or 0

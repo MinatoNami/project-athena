@@ -1,16 +1,4 @@
 <script setup lang="ts">
-/**
- * Findings, grouped by vulnerability.
- *
- * Filtering, sorting and paging are the server's job now. They used to happen in the
- * browser over whatever the API returned, which meant the counts beside each facet
- * described the page rather than the estate, and the page was itself an arbitrary
- * slice once the estate outgrew it.
- *
- * Each facet shows two numbers when they differ: how many survive the current
- * filters, and how many exist at all. A count that silently means "of what you can
- * currently see" is how a filtered view comes to read as a complete one.
- */
 useHead({ title: 'Findings' })
 
 const { data: me } = await useMe()
@@ -35,8 +23,6 @@ watch(query, value => {
   debounceTimer = setTimeout(() => (debounced.value = value), 250)
 })
 
-/** Facet id → the query parameter it sets. Kept in one place so the chips, the
-    request and the counts cannot drift apart. */
 const FACET_PARAM: Record<string, string> = {
   assessed: 'assessed=true',
   unassessed: 'assessed=false',
@@ -66,9 +52,6 @@ const { data: intel, refresh: refreshIntelData } = await useAsyncData('intel', (
   api<any>('intel/sources'),
 )
 
-// A new filter set is a new list, not more of the old one. `immediate` matters:
-// the first payload arrives with the server-rendered page, before this watcher
-// exists, so without it the list stayed empty while the header counted 137.
 watch(data, value => {
   pages.value = value?.groups ?? []
   cursor.value = value?.next_cursor ?? null
@@ -103,15 +86,11 @@ async function exportVex() {
   }
 }
 
-/** The benchmark date, in words relative to today. */
 function dueLabel(i: any) {
   if (i.due_on_upgrade) return 'next upgrade'
   return dueText(i.due)
 }
 
-/** The group's most urgent SSVC outcome and soonest deadline, for the collapsed row:
-    a reader scanning the list should not have to open every row to find the
-    overdue one. Malware is left out of both — it is removed now, not scheduled. */
 const SSVC_RANK: Record<string, number> = { track: 0, 'track*': 1, attend: 2, act: 3 }
 function worstSsvc(g: any): string | null {
   if (g.malicious) return null
@@ -170,7 +149,6 @@ const facetGroups = computed(() => [
 ])
 
 function toggle(id: string) {
-  // Opposing facets are mutually exclusive: holding both asks for nothing.
   const opposite: Record<string, string> = {
     assessed: 'unassessed', unassessed: 'assessed', has_fix: 'no_fix', no_fix: 'has_fix',
   }
@@ -192,14 +170,6 @@ function clearAll() {
 
 const { severity } = useChartTheme()
 
-/**
- * The shape of what the current filters actually select.
- *
- * Read from `matching` rather than from the loaded rows: the list is paged, so
- * counting what is on screen would draw the first fifty and call it the estate.
- * Unassessed groups have no band at all and are stated in the caption instead of
- * being folded into the mildest one.
- */
 const bands = computed(() =>
   (['critical', 'high', 'medium', 'low', 'informational'] as const)
     .map(name => ({
@@ -219,7 +189,6 @@ function ageLabel(seconds: number | null) {
   return `${Math.round(seconds / 86400)}d ago`
 }
 
-/** Near-identical assets collapse: eight tags of one image are one decision. */
 function instanceLines(g: any) {
   const families = new Map<string, any[]>()
   for (const i of g.instances ?? []) {
@@ -259,8 +228,6 @@ function instanceLines(g: any) {
 
     <p v-if="exportNote" class="err">{{ exportNote }}</p>
 
-    <!-- The two populations, as figures rather than a paragraph. The caveat stays:
-         an un-investigated finding is a version match, not a confirmed one. -->
     <div v-if="data" class="statstrip">
       <StatTile
         label="Investigated"
@@ -282,9 +249,6 @@ function instanceLines(g: any) {
         :of="`of ${facetCount('malicious').total} in the estate`"
         status="bad"
       />
-      <!-- Findings with no published fix are left out of this list unless asked for,
-           so the facet over the list counted almost nothing (mostly malware, which
-           has no version to wait for). The API's own count is the real figure. -->
       <StatTile
         label="No fix published"
         :value="includeNoFix ? facetCount('no_fix').matching : (data?.no_fix_available_count ?? null)"
@@ -428,8 +392,6 @@ function instanceLines(g: any) {
               unassessed
               <span v-if="g.kev" class="kevflag">KEV</span>
             </span>
-            <!-- One grid cell: the row is a fixed five-column grid, and a sixth child
-                 would push every later cell one column over. -->
             <span class="idcell">
               <code class="cve">{{ g.vulnerability_id }}</code>
               <span v-if="g.malicious" class="tag bad strong caps">malware</span>
@@ -527,8 +489,6 @@ function instanceLines(g: any) {
 <style scoped>
 .idcell { display: flex; flex-direction: column; align-items: flex-start; gap: .15rem; min-width: 0; }
 .due { white-space: nowrap; font-size: .76rem; color: var(--ink-2); }
-/* Not `.summary`: that is the row's summary text, and sharing the name drew a
-   bordered box around every row's summary and hid this strip below 1000px. */
 .statstrip {
   display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: flex-start;
   border: 1px solid var(--rule); border-radius: 9px; background: var(--surface);
@@ -627,9 +587,6 @@ function instanceLines(g: any) {
   text-decoration: underline; text-decoration-color: var(--bad); text-decoration-thickness: 2px;
   text-underline-offset: 3px; }
 
-/* At 1024 the summary column measured 27px wide — present, but unreadable. Below
-   1180 it takes a line of its own under the id instead of being squeezed or hidden:
-   the summary is what tells a reader whether to open the row at all. */
 @media (max-width: 1180px) {
   .grow {
     grid-template-columns: 6.6rem 1fr auto auto;

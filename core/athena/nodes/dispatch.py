@@ -1,5 +1,3 @@
-"""Issue collection work to nodes."""
-
 from __future__ import annotations
 
 import secrets
@@ -11,8 +9,6 @@ from sqlalchemy.orm import Session
 from athena.db.models import Node, NodeTask
 from athena.nodes.protocol import CAPABILITIES, TASK_TTL
 
-# The full observe sweep. Ordered so identity lands before anything that depends on
-# it — a host's inventory is meaningless until we know which host it is.
 COLLECTION_ORDER = [
     "get_system_info",
     "list_packages",
@@ -22,15 +18,12 @@ COLLECTION_ORDER = [
     "inspect_docker",
 ]
 
-# How often a node is swept. PRD §42 puts host inventory on a daily cadence; this is
-# the floor between sweeps rather than the schedule itself.
 COLLECTION_INTERVAL = timedelta(hours=6)
 
 
 def enqueue_collection(
     session: Session, node: Node, *, capabilities: list[str] | None = None
 ) -> int:
-    """Create signed-on-dispatch tasks for a node. Returns how many were created."""
     wanted = capabilities or COLLECTION_ORDER
     now = datetime.now(UTC)
 
@@ -49,7 +42,6 @@ def enqueue_collection(
     for capability in wanted:
         if capability not in CAPABILITIES:
             continue
-        # Do not pile identical work on a node that has not answered yet.
         if capability in pending:
             continue
         session.add(
@@ -67,7 +59,6 @@ def enqueue_collection(
 
 
 def nodes_due(session: Session) -> list[Node]:
-    """Nodes with no live tasks that have not been swept recently."""
     now = datetime.now(UTC)
     cutoff = now - COLLECTION_INTERVAL
 

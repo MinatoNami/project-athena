@@ -1,11 +1,3 @@
-"""Share investigations between assets whose relevant state matches.
-
-Fourteen identical hosts carrying the same package at the same version, with the same
-exposure and tier, pose one question — not fourteen. Without this, investigating a
-fleet costs a model call per host and takes proportionally as long.
-
-Revision ID: 0012
-"""
 from __future__ import annotations
 
 import sqlalchemy as sa
@@ -22,8 +14,6 @@ def upgrade() -> None:
     op.create_table(
         "investigation",
         sa.Column("id", pg.UUID(as_uuid=True), primary_key=True),
-        # Hash of the facts that could change the verdict. Two findings sharing it
-        # share the answer.
         sa.Column("fingerprint", sa.Text, nullable=False, unique=True),
         sa.Column("vulnerability_id", sa.Text, nullable=False),
         sa.Column("advisory_revision", sa.Integer, nullable=False),
@@ -33,8 +23,6 @@ def upgrade() -> None:
         sa.Column("rationale", sa.Text),
         sa.Column("uncertainties", pg.JSONB, nullable=False, server_default="[]"),
         sa.Column("corrections", pg.JSONB, nullable=False, server_default="[]"),
-        # Everything needed to replay the conclusion. A verdict nobody can
-        # reconstruct is not evidence.
         sa.Column("model", sa.Text, nullable=False),
         sa.Column("prompt_hash", sa.Text, nullable=False),
         sa.Column("tool_calls", pg.JSONB, nullable=False, server_default="[]"),

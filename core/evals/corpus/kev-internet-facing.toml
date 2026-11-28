@@ -20,9 +20,6 @@ name = "nginx"
 version = "1.24.0-2ubuntu7"
 ecosystem = "deb"
 
-# The asset really is running the service, and the harness seeds a listening port to
-# match. A case that claims exposure the tools cannot confirm would teach the model to
-# assert what it cannot see.
 [[services]]
 name = "nginx"
 port = 443
@@ -41,5 +38,5 @@ kev = true
 [expected]
 verdict = "applicable"
 band_at_least = "high"
-never_below = "high"          # the KEV floor must hold whatever else the model concludes
+never_below = "high"
 outranks = ["library-in-container", "isolated-dev-laptop"]

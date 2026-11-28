@@ -1,9 +1,3 @@
-"""Audit trail integrity.
-
-These require a real Postgres: the append-only guarantee is a database trigger, and
-proving it on any other engine would prove nothing.
-"""
-
 from __future__ import annotations
 
 import pytest
@@ -54,8 +48,6 @@ def test_each_event_commits_to_its_predecessor(session):
 
 
 def test_rejected_attempts_survive_the_rollback_that_follows_them(session, monkeypatch):
-    """A failed login rolls back its request transaction. The audit record must not
-    roll back with it — failures are the events most worth keeping."""
     from athena.audit import record_isolated
 
     before = verify_chain(session)["checked"]

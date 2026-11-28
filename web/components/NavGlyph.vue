@@ -1,5 +1,4 @@
 <script setup lang="ts">
-/** Stroke icons on a 24px grid — never emoji, which do not recolour or scale. */
 defineProps<{ name: string }>()
 </script>
 

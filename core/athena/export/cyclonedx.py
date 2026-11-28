@@ -1,11 +1,3 @@
-"""CycloneDX SBOM for one asset.
-
-The SBOM describes the last inventory Athena holds, not the asset's present state,
-and it says which: the generating scan's id, tool, status and time go in the
-metadata, and a partial or failed last scan is stated as a property rather than left
-for the reader to assume the list is complete.
-"""
-
 from __future__ import annotations
 
 import uuid
@@ -21,7 +13,6 @@ from athena.inventory.purl import build_purl, parse_purl
 
 SPEC_VERSION = "1.6"
 
-# Asset kinds → the CycloneDX component type that describes them.
 _ASSET_TYPE = {
     "image": "container",
     "container": "container",
@@ -33,32 +24,21 @@ _ASSET_TYPE = {
 
 
 def component_purl(component: Component) -> str | None:
-    """The component's purl as recorded, or built from its coordinates."""
     if component.purl and parse_purl(component.purl):
         return component.purl
     if component.ecosystem == "generic":
         return None
     try:
         return build_purl(component.ecosystem, component.name, component.version)
-    except Exception:  # noqa: BLE001 - an unbuildable purl is omitted, never invented
+    except Exception:  # noqa: BLE001
         return None
 
 
-# Runs that read an asset's code rather than its packages. They share `scan_run`
-# with inventory but say nothing about what is installed.
 CODE_SCAN_KINDS = ("secret", "misconfiguration")
-# The one node capability that reports packages; the others (ports, services,
-# Docker) are separate runs that finish later in the same sweep.
 HOST_PACKAGES_TOOL = "athena-node/list_packages"
 
 
 def _inventory_runs(asset: Asset) -> list[Any]:
-    """Which runs can speak for this SBOM's contents.
-
-    "The last scan" was any run on the asset — a Trivy config scan on a repository,
-    or a host's Docker inspection that succeeded right after its package listing
-    failed, which stamped `succeeded` and no caveat on an inventory nobody had read.
-    """
     conditions: list[Any] = [ScanRun.kind.notin_(CODE_SCAN_KINDS)]
     if asset.kind == "host":
         conditions.append(ScanRun.tool == HOST_PACKAGES_TOOL)
@@ -66,7 +46,6 @@ def _inventory_runs(asset: Asset) -> list[Any]:
 
 
 def sbom_for(session: Session, asset: Asset) -> dict[str, Any]:
-    """A CycloneDX JSON document for the components recorded on `asset`."""
     rows = session.execute(
         select(Component, AssetComponent)
         .join(AssetComponent, AssetComponent.component_id == Component.id)
@@ -90,7 +69,6 @@ def sbom_for(session: Session, asset: Asset) -> dict[str, Any]:
     for component, link in rows:
         ref = str(component.id)
         if ref in seen:
-            # One component can be recorded under two scopes; the BOM lists it once.
             continue
         seen.add(ref)
         entry: dict[str, Any] = {

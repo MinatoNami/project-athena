@@ -28,17 +28,10 @@ from athena.queue import enqueue
 router = APIRouter(tags=["findings"])
 
 
-# Rank for ordering. Distribution advisories rarely carry CVSS, so without this the
-# list ties at zero and degenerates to alphabetical order by CVE id.
 SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "unknown": 0}
 
 
 def _severity_of(v: Vulnerability) -> str:
-    """A coarse label until real risk scoring arrives in M3.
-
-    Deliberately named `provisional_severity` in the API: it is the advisory's own
-    view, with no environmental context at all. Presenting it as risk would be a lie.
-    """
     if v.cvss_score is not None:
         if v.cvss_score >= 9.0:
             return "critical"
@@ -73,14 +66,6 @@ def list_findings(
     _: Principal = Depends(current_principal),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
-    """Findings, grouped by vulnerability.
-
-    One CVE affecting forty hosts is one row with forty instances, not forty rows.
-
-    Filtering, ordering and the page boundary are all decided in SQL. They used to be
-    decided in Python over an unordered slice of rows, which silently returned an
-    arbitrary subset once the estate outgrew the slice.
-    """
     if sort not in SORTS:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -100,8 +85,6 @@ def list_findings(
             q=q,
             assessed=assessed,
             fully_assessed=fully_assessed,
-            # `kev_only` predates the facet set and is kept so existing callers and
-            # bookmarks keep working.
             kev=kev_only,
             malicious=malicious,
             exposure=exposure,
@@ -115,9 +98,6 @@ def list_findings(
         ),
     )
 
-    # Over the population the list draws from — a withdrawn advisory's findings
-    # are in no list, with or without `include_no_fix` — and the asset it is scoped
-    # to, if any: this number is shown as what the list is holding back.
     no_fix = (
         select(func.count(func.distinct(Finding.vulnerability_id)))
         .join(Vulnerability, Vulnerability.id == Finding.vulnerability_id)
@@ -137,21 +117,13 @@ def list_findings(
 
     return {
         "groups": page.groups,
-        # `group_count` is the whole population and `matching_group_count` is what
-        # survives the filters. A single number cannot answer both "what am I looking
-        # at" and "what am I excluding", and only ever answering the first is how a
-        # filtered view comes to read as a complete one.
         "group_count": page.group_count,
         "matching_group_count": page.matching_group_count,
         "next_cursor": page.next_cursor,
-        # Over the whole matching set, not this page: these are the denominator for
-        # "how much of what I am looking at has been assessed".
         "instance_count": page.instance_count,
         "assessed_count": page.assessed_count,
-        # Each facet carries both numbers for the same reason.
         "facets": page.facets,
         "no_fix_available_count": no_fix_count,
-        # Both are held back rather than hidden, and both are one parameter away.
         "suppressed_group_count": page.suppressed_group_count,
         "baseline_group_count": page.baseline_group_count,
         "unbaselined_asset_count": page.unbaselined_asset_count,
@@ -236,7 +208,6 @@ def get_finding(
             "ecosystem": component.ecosystem,
             "purl": component.purl,
         },
-        # Every ✓ and ? in the UI traces to one of these rows.
         "evidence": [
             {
                 "kind": e.kind,
@@ -247,8 +218,6 @@ def get_finding(
             }
             for e in evidence
         ],
-        # Shown so a disagreement between sources is visible rather than resolved
-        # behind the scenes.
         "advisory_ranges": [
             {
                 "source": r.source,
@@ -259,8 +228,6 @@ def get_finding(
                 "distro": r.distro,
                 "distro_release": r.distro_release,
                 "channel": r.channel,
-                # Falls back to the denormalised facts: the referenced row is
-                # replaced whenever the advisory is revised.
                 "used_for_match": (
                     r.id == finding.matched_range_id
                     or (
@@ -298,22 +265,10 @@ def get_finding(
 def _prioritization(
     vulnerability: Vulnerability, asset: Asset, finding: Finding
 ) -> dict[str, Any]:
-    """The exploitability facts beside the score, each with where it came from.
-
-    Derived on read, like the remediation plan: every input is already stored, so a
-    stored copy could only ever disagree with them. Exists because a reader deciding
-    whether to trust "critical" asks the same three things every time — is it being
-    exploited, how likely is it to be, and what does the vector actually say — and
-    the answers were scattered or missing.
-    """
     from athena.intel import cvss
     from athena.risk import deadline, ssvc
 
     vector = vulnerability.cvss_vector
-    # The vector the stored score came from. A record publishing v4.0 then v3.1
-    # keeps the v4 one as `cvss_vector`, while the score is computed from the v3.1:
-    # compared with `cvss_vector`, that score read as the advisory's own number.
-    # Rows scored before the column existed fall back to the published vector.
     scoring = vulnerability.cvss_scoring_vector
     if scoring is None and vulnerability.cvss_score is not None:
         if cvss.base_score(vector) == vulnerability.cvss_score:
@@ -339,8 +294,6 @@ def _prioritization(
             "published": vulnerability.ssvc_cisa is not None,
             "checked_at": vulnerability.ssvc_checked_at,
         },
-        # Malware sits outside the directive's model: it is removed now, not on a
-        # timeline, and a "14 days" beside it would read as permission to wait.
         "deadline": None if vulnerability.malicious else deadline.deadline(
             exposure=asset.exposure,
             kev=vulnerability.kev,
@@ -353,8 +306,6 @@ def _prioritization(
             "score": vulnerability.epss_score,
             "percentile": vulnerability.epss_percentile,
             "updated_at": vulnerability.epss_updated_at,
-            # Absent and zero are different claims; the page must be able to say
-            # "not scored" rather than "0%".
             "scored": vulnerability.epss_score is not None,
         },
         "kev": {
@@ -369,12 +320,7 @@ def _prioritization(
             "vector": shown,
             "version": version,
             "score": vulnerability.cvss_score,
-            # Whether Athena computed the stored number from `vector`. False means
-            # the advisory published a score of its own, which is kept — but the
-            # page should not imply the vector produced it.
             "computed_from_vector": scoring is not None,
-            # The record's first vector, when it is not the one scored (a v4.0
-            # listed before the v3.1 the score came from).
             "published_vector": vector if scoring and vector != scoring else None,
             "scored": vulnerability.cvss_score is not None,
         },
@@ -383,16 +329,6 @@ def _prioritization(
 
 
 def _deferred(finding: Finding, asset: Asset, vulnerability) -> dict[str, Any] | None:
-    """Whether the configured floor is why nothing has looked at this.
-
-    Computed here rather than stored, from the same function the scheduler applies, so
-    the page cannot claim a finding is waiting its turn when the scheduler will never
-    select it — nor go on calling it deferred after the floor has moved.
-
-    None means the floor is not the reason. An already-investigated finding returns
-    None too: what the floor would say about it now is of no consequence once the work
-    has been done.
-    """
     if finding.investigation_id is not None:
         return None
     decision = decide(
@@ -414,11 +350,6 @@ def _deferred(finding: Finding, asset: Asset, vulnerability) -> dict[str, Any] |
 
 
 def _remediation(session: Session, finding: Finding, asset: Asset, component: Component):
-    """What kind of fix this needs, and where the change has to be made.
-
-    Derived rather than stored: it is a function of facts already on the finding, so
-    computing it here means it can never describe a state the finding has left.
-    """
     from athena.db.models import AssetComponent
     from athena.remediation import plan_for, source_for
 
@@ -444,14 +375,6 @@ def _remediation(session: Session, finding: Finding, asset: Asset, component: Co
 
 
 def _risk_explained(session: Session, finding: Finding) -> dict[str, Any] | None:
-    """The arithmetic behind the band, recomputed rather than stored.
-
-    "Why is this critical?" has to be answerable without reading code. Recomputing
-    from the stored verdict rather than persisting the breakdown keeps the
-    explanation and the scoring function from ever disagreeing — a stored breakdown
-    would go stale the first time a weight changed, and would then be a confident
-    account of a number nobody would reach again.
-    """
     from athena.db.models import InvestigationRecord
     from athena.risk import score
     from athena.workers.investigate import _verdict_of, signals_for
@@ -463,9 +386,6 @@ def _risk_explained(session: Session, finding: Finding) -> dict[str, Any] | None
         return None
     computed = score(signals_for(session, finding, _verdict_of(stored)))
     explained = computed.explain()
-    # A recomputation that disagrees with what is stored means the scoring function
-    # moved and this finding has not been rescored. Say so rather than quietly
-    # showing an explanation for a different number than the one on the page.
     explained["stored_score"] = finding.risk_score
     explained["stale"] = (
         finding.risk_score is not None and computed.value != finding.risk_score
@@ -474,12 +394,6 @@ def _risk_explained(session: Session, finding: Finding) -> dict[str, Any] | None
 
 
 def _investigation_of(session: Session, finding: Finding) -> dict[str, Any] | None:
-    """The stored investigation, so a verdict can be argued with rather than taken.
-
-    Includes the signals, the corrections applied to them, and how many other
-    findings share this answer — a reused verdict is a different claim from one
-    reached for this asset alone.
-    """
     from athena.db.models import InvestigationRecord
 
     if finding.investigation_id is None:
@@ -493,8 +407,6 @@ def _investigation_of(session: Session, finding: Finding) -> dict[str, Any] | No
         "confidence": stored.verdict_confidence,
         "rationale": stored.rationale,
         "uncertainties": stored.uncertainties,
-        # Where the model asserted something it could not support and code overruled
-        # it. Shown, not hidden: it is the clearest signal of how much to trust this.
         "corrections": stored.corrections,
         "signals": stored.signals,
         "model": stored.model,
@@ -510,7 +422,6 @@ def _investigation_of(session: Session, finding: Finding) -> dict[str, Any] | No
 def intel_sources(
     _: Principal = Depends(current_principal), session: Session = Depends(db)
 ) -> dict[str, Any]:
-    """Feed health. Stale intelligence looks exactly like a quiet week otherwise."""
     sources = source_health(session)
     total = session.execute(select(func.count()).select_from(Vulnerability)).scalar_one()
     kev = session.execute(
@@ -521,18 +432,12 @@ def intel_sources(
             Vulnerability.malicious.is_(True), Vulnerability.withdrawn_at.is_(None)
         )
     ).scalar_one()
-    # CISA's own SSVC coverage, over exactly the CVEs the enrichment job looks up —
-    # the same predicate, not a second copy of it. A denominator the job never works
-    # through (resolved findings, withdrawn CVEs) kept the figure below its total
-    # however long the job ran.
     from athena.intel.enrichment import eligible
 
     relevant_cves, ssvc_checked, ssvc_published = session.execute(
         select(
             func.count(),
             func.count().filter(Vulnerability.ssvc_checked_at.is_not(None)),
-            # Typed rather than IS NOT NULL, so a JSON `null` written by any older
-            # path is still read as "none published".
             func.count().filter(func.jsonb_typeof(Vulnerability.ssvc_cisa) == "object"),
         )
         .select_from(Vulnerability)
@@ -556,11 +461,6 @@ def intel_sources(
 def ai_status(
     _: Principal = Depends(current_principal), session: Session = Depends(db)
 ) -> dict[str, Any]:
-    """Whether the model is reachable, and what has left the network.
-
-    On a self-hosted security tool this is the answer to the question that matters
-    most, so it is a first-class view rather than something to reconstruct from logs.
-    """
     from sqlalchemy import func as sqlfunc
 
     from athena.db.models import EgressLog
@@ -585,7 +485,6 @@ def ai_status(
         "egress": {
             "calls": totals[0],
             "blocked": totals[1],
-            # The number that matters in local_only mode: it must stay zero.
             "left_the_network": totals[2],
             "prompt_tokens": totals[3],
             "completion_tokens": totals[4],
@@ -613,7 +512,6 @@ def refresh_intel(
     principal: Principal = Depends(current_principal),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
-    """Queue a full intelligence refresh."""
     from athena.intel.feeds import DEFAULT_ECOSYSTEMS
 
     stamp = datetime.now(UTC).strftime("%Y%m%d%H%M")

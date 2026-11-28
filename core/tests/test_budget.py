@@ -1,9 +1,3 @@
-"""AI spend limits.
-
-A local model has no invoice, but an unbounded sweep can occupy the machine
-indefinitely. The limit exists so unattended work has a ceiling.
-"""
-
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -48,7 +42,6 @@ def test_calls_outside_the_window_are_not_counted(session):
 
 
 def test_blocked_calls_do_not_consume_budget(session):
-    """A refused payload never reached the model, so it cost nothing."""
     before = current(session).spent
     _call(session, blocked=True)
     session.flush()
@@ -65,16 +58,10 @@ def test_exhaustion_is_reported_not_inferred(session, monkeypatch):
     budget = current(session)
     assert budget.exhausted is True
     assert budget.remaining == 0
-    # The sweep logs this rather than stopping quietly: "we stopped looking" and
-    # "there was nothing to find" must not look the same.
     assert budget.as_dict()["exhausted"] is True
 
 
-# ── enforcement at the gateway ───────────────────────────────────────────────
-
-
 def _spend(session, n: int, *, blocked: bool = False, purpose: str = "investigation"):
-    """Record n egress rows in the window."""
     from athena.db.models import EgressLog
 
     for _ in range(n):
@@ -106,20 +93,12 @@ def test_check_refuses_once_the_window_is_spent(session, monkeypatch):
 
 
 def test_a_refusal_is_not_an_outage(session, monkeypatch):
-    """BudgetExhausted must not be a ModelUnavailable: the endpoint is healthy and
-    we declined to use it. Reporting a self-imposed limit as an outage sends
-    somebody to debug something that is working."""
     from athena.llm import BudgetExhausted, ModelUnavailable
 
     assert not issubclass(BudgetExhausted, ModelUnavailable)
 
 
 def test_refusals_cannot_inflate_the_window_they_enforce(session, monkeypatch):
-    """A refused call is logged as blocked, and blocked rows are not counted.
-
-    Were they counted, the first refusal would push the window further past the
-    limit, and the budget would never recover no matter how long you waited.
-    """
     from athena.config import get_settings
     from athena.llm.budget import current
 
@@ -131,8 +110,6 @@ def test_refusals_cannot_inflate_the_window_they_enforce(session, monkeypatch):
 
 
 def test_triage_is_gated_by_the_same_budget(session, monkeypatch):
-    """Triage is a model call like any other, and an ungated cheap call is still a
-    call that occupies the machine."""
     from athena.config import get_settings
     from athena.llm.budget import BudgetExhausted, check
 

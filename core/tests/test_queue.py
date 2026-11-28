@@ -25,11 +25,6 @@ def test_claim_returns_a_job_then_leases_it(session):
 
 
 def test_failed_job_retries_until_attempts_are_exhausted(session):
-    """A job with attempts remaining is rescheduled; an exhausted one terminates.
-
-    Asserts on the enqueued row by id rather than on whatever `claim` happens to
-    return, so a concurrent worker cannot make this pass or fail by coincidence.
-    """
     from athena.db.models import Job
 
     created = enqueue(
@@ -53,9 +48,6 @@ def test_failed_job_retries_until_attempts_are_exhausted(session):
 
 
 def test_a_finished_job_does_not_reserve_its_key_forever(session):
-    """Deduplication is about not queueing outstanding work twice. Covering finished
-    rows meant the scheduler — which buckets keys by interval — could never re-enqueue
-    a task after one run, so all scheduled work silently stopped."""
     key = f"hourly-poll-{uuid.uuid4()}"
 
     first = enqueue(session, kind="system.echo", key=key)
@@ -74,7 +66,6 @@ def test_a_finished_job_does_not_reserve_its_key_forever(session):
 
 
 def test_a_failed_job_also_frees_its_key_once_exhausted(session):
-    """A failure must not suppress the task for the rest of the bucket."""
     key = f"failing-poll-{uuid.uuid4()}"
 
     first = enqueue(session, kind="system.fail", key=key, max_attempts=1)
@@ -90,13 +81,11 @@ def test_a_failed_job_also_frees_its_key_once_exhausted(session):
 
 
 def test_one_kind_cannot_occupy_every_worker_slot(session, monkeypatch):
-    """A backfill must not starve everything else. On the deployed host 805 queued
-    correlation jobs held all four slots and image scans never started."""
     from athena.config import get_settings
 
     settings = get_settings()
     monkeypatch.setattr(settings, "worker_concurrency", 3, raising=False)
-    cap = settings.worker_concurrency - 1  # 2
+    cap = settings.worker_concurrency - 1
 
     marker = uuid.uuid4()
     for i in range(5):
@@ -111,8 +100,6 @@ def test_one_kind_cannot_occupy_every_worker_slot(session, monkeypatch):
         claimed.append(job)
     session.commit()
 
-    # The flooding kind is now at its cap, so a further claim must skip past it and
-    # reach the lower-priority work instead of blocking on the queue head.
     nxt = claim(session)
     assert nxt is not None, "the pool must not stall while one kind is saturated"
     assert nxt.kind == "system.echo", f"expected the starved kind, got {nxt.kind}"

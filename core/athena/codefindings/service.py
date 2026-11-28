@@ -1,21 +1,3 @@
-"""Recording a code scan, and what it does and does not prove.
-
-A code scan gets its own `scan_run`, but deliberately not through
-`inventory.finish_scan`: that function marks the asset *inventoried*, and a secrets
-scan says nothing about which packages are installed. Letting it refresh inventory
-freshness would make a repository whose SBOM scan keeps failing look current.
-
-Resolution follows the rule the rest of the system uses for coverage. Only a scan
-that **succeeded** can resolve anything — a finding missing from a scan that timed
-out or failed was not looked for, and "not looked for" must never read as "fixed".
-
-The same rule covers a scan that cannot say *which* finding went. An adapter may
-mark observations it can only tell apart by order with a shared `identity_group`
-(the same credential pasted twice, say). When such a group shrinks, one of its
-members is gone but the report does not say which, so the unmatched one is held
-open — counted as `held`, never resolved — until the group disappears entirely.
-"""
-
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -28,7 +10,6 @@ from athena.audit import record
 from athena.codefindings.model import CodeObservation
 from athena.db.models import Asset, CodeFinding, ScanRun
 
-# What to do, per kind — the same for every finding of that kind, so stated once.
 GUIDANCE = {
     "secret": {
         "summary": (
@@ -66,7 +47,6 @@ def record_code_scan(
     error: str | None = None,
     stats: dict[str, Any] | None = None,
 ) -> dict[str, int]:
-    """Persist one code scan's outcome. Returns counts of new, seen and resolved."""
     if status not in {"succeeded", "partial", "failed", "timeout"}:
         raise ValueError(f"Unknown scan status {status!r}")
     now = datetime.now(UTC)
@@ -118,8 +98,6 @@ def record_code_scan(
             counts["new"] += 1
             continue
         if existing.resolved_at is not None:
-            # Back after being gone: a reverted fix, or a secret re-committed. The
-            # history matters, so it is the same finding reopened, not a new one.
             existing.resolved_at = None
             counts["reopened"] += 1
         counts["seen"] += 1
@@ -146,8 +124,6 @@ def record_code_scan(
             .all()
         )
         for finding in stale:
-            # Its group is still in the tree: one of its indistinguishable members
-            # went, and nothing says it was this one. Absence of proof of absence.
             if (finding.detail or {}).get("identity_group") in present_groups:
                 counts["held"] += 1
                 continue
@@ -157,8 +133,6 @@ def record_code_scan(
     run.stats = {**(stats or {}), "findings": len(seen), **counts}
     session.flush()
 
-    # A held finding changed nothing, so it is in the run's stats but does not by
-    # itself write an audit event — it would otherwise write one every patrol.
     if counts["new"] or counts["reopened"] or counts["resolved"] or status != "succeeded":
         record(
             session,

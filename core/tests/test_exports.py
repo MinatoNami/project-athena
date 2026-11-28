@@ -1,10 +1,3 @@
-"""SBOM and VEX exports.
-
-The VEX assertions are the important ones: a `not_affected` statement makes other
-scanners drop a finding, so only a person's recorded decision may produce one. An
-automated "not applicable" must come out as `under_investigation`.
-"""
-
 from __future__ import annotations
 
 import uuid
@@ -118,8 +111,6 @@ def estate(session):
         "accepted": finding(component("urllib3", "1.0")),
         "malware": finding(component("colourama", "0.1"), malicious=True),
         "resolved": finding(component("idna", "2.0"), state="resolved"),
-        # A malware report its publisher later retracted. The finding row outlives
-        # the retraction; the export must not.
         "withdrawn_malware": finding(
             component("colorama-lookalike", "0.2"), malicious=True, withdrawn=True
         ),
@@ -191,9 +182,6 @@ def test_vex_statuses_follow_who_decided(session, estate):
 
 
 def test_withdrawn_advisories_are_not_exported(session, estate):
-    """A retracted report makes no claim, so the VEX makes none on its behalf —
-    least of all `affected` with compromise guidance for a withdrawn malware record.
-    Neither is it turned into `not_affected`: only a person may assert that."""
     image, found = estate
     withdrawn = {
         found["withdrawn_malware"].vulnerability_id,
@@ -205,7 +193,6 @@ def test_withdrawn_advisories_are_not_exported(session, estate):
         vex_document(session, vulnerability_id=found["withdrawn_malware"].vulnerability_id),
     ):
         assert not {s["vulnerability"]["name"] for s in doc["statements"]} & withdrawn
-    # The live malware record beside it still leaves as affected.
     live = _statement(vex_document(session, asset_id=str(image.id)), found["malware"])
     assert live["status"] == "affected"
 
@@ -232,8 +219,6 @@ def test_sbom_lists_components_and_admits_a_partial_scan(session, estate):
     image, found = estate
     bom = sbom_for(session, image)
     assert bom["bomFormat"] == "CycloneDX" and bom["specVersion"] == "1.6"
-    # One component per fixture finding. Inventory, not advisories: a component
-    # whose only advisory was withdrawn is still installed, and still listed.
     assert len(bom["components"]) == len(found)
     assert all(c["purl"].startswith("pkg:pypi/") for c in bom["components"])
     props = {p["name"]: p["value"] for p in bom["metadata"]["properties"]}
@@ -264,7 +249,6 @@ def test_sbom_for_a_never_scanned_asset_says_so(session):
             "https://git.example.com:8443/team/svc",
         ),
         ("git@github.com:acme/api.git", "ssh://github.com/acme/api.git"),
-        # An IPv6 literal keeps the brackets `hostname` strips.
         (
             "https://bot:TOKEN@[fd00::5]:3000/acme/api.git",
             "https://[fd00::5]:3000/acme/api.git",
@@ -272,7 +256,6 @@ def test_sbom_for_a_never_scanned_asset_says_so(session):
     ],
 )
 def test_a_repository_product_id_never_carries_credentials(clone_url, published):
-    """The VEX leaves Athena; a token in the stored clone URL must not go with it."""
     repo = Asset(
         id=uuid.uuid4(),
         kind="repository",
@@ -286,8 +269,6 @@ def test_a_repository_product_id_never_carries_credentials(clone_url, published)
 
 
 def test_sbom_status_comes_from_the_inventory_run_not_a_later_code_scan(session, estate):
-    """A config scan that succeeded after a partial inventory run must not make the
-    SBOM claim its contents were read completely."""
     image, _ = estate
     session.add(
         ScanRun(

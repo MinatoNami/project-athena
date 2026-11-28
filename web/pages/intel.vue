@@ -1,13 +1,4 @@
 <script setup lang="ts">
-/**
- * Intelligence: where every fact on every finding comes from, and how old it is.
- *
- * Stale intelligence looks exactly like a quiet week (§10 rule 6), so each source
- * states its age and its last error, and "never fetched" is its own state rather
- * than an old timestamp. Since April 2026 the NVD no longer enriches most CVEs,
- * which makes per-source provenance more than housekeeping: a severity, an
- * exploitation flag and a decision point may each come from a different publisher.
- */
 useHead({ title: 'Intelligence' })
 const { data: me } = await useMe()
 if (!me.value) await navigateTo('/login')
@@ -34,7 +25,6 @@ async function refreshAll() {
   }
 }
 
-/** What each source contributes, in a sentence, so a row is not just a name. */
 const ROLE: Record<string, string> = {
   kev: 'CISA Known Exploited Vulnerabilities — confirmed exploitation, due dates, forensic-triage flags.',
   epss: 'FIRST EPSS — probability of exploitation activity in the next 30 days.',
@@ -47,7 +37,6 @@ function role(name: string) {
   return ROLE[name] ?? ''
 }
 
-/** The API's verdict, per source — the same one the shell's status line reads. */
 function stale(s: any) {
   return s.stale ?? s.never_succeeded
 }

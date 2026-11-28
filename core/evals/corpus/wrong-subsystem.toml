@@ -32,7 +32,5 @@ epss = 0.002
 kev = false
 
 [expected]
-# Either answer is defensible: a careful analyst would want to confirm the absence of a
-# radio rather than assume it, and the inventory does not record hardware.
 verdict_in = ["not_applicable", "uncertain"]
 band_at_most = "medium"

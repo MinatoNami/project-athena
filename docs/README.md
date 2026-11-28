@@ -6,6 +6,8 @@
 | [Technical Design](TECHNICAL_DESIGN.md) | How the system is built |
 | [Web UI Specification](WEB_UI.md) | How the Nuxt dashboard is built |
 | [Milestones and Checkpoints](MILESTONES.md) | What gets built when, and how each stage is proven |
+| [Security Agent Implementation Plan](SECURITY_AGENT_PLAN.md) | How Athena grows to identify, mitigate and resolve threats |
+| [Security Tooling Research, Nov 2026](RESEARCH_2026-11.md) | Which tools, standards and threats from 27 Oct to 27 Nov 2026 shape that plan |
 
 ### Reading order
 

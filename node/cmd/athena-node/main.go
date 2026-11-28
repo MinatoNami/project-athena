@@ -1,7 +1,3 @@
-// Command athena-node is the Athena host agent.
-//
-// It exposes a fixed set of read-only observation capabilities and executes only
-// instructions signed by the Athena core it enrolled with.
 package main
 
 import (

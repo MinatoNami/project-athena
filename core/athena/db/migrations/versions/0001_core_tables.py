@@ -1,7 +1,3 @@
-"""Core M0 tables.
-
-Revision ID: 0001
-"""
 from __future__ import annotations
 
 import sqlalchemy as sa
@@ -106,7 +102,6 @@ def upgrade() -> None:
     )
     op.create_index("outbox_topic_seq_idx", "outbox", ["topic", "seq"])
 
-    # NOTIFY on insert so the API relay wakes without polling.
     op.execute(
         """
         CREATE FUNCTION outbox_notify() RETURNS trigger AS $$

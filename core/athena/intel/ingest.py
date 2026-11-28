@@ -1,5 +1,3 @@
-"""Advisory ingestion and revision tracking."""
-
 from __future__ import annotations
 
 import json
@@ -18,14 +16,6 @@ log = structlog.get_logger(__name__)
 
 
 def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
-    """Ingest one source record. Returns 'new', 'revised', or 'unchanged'.
-
-    State is tracked per source record, not per vulnerability. Several records
-    converge on one CVE by design — an upstream advisory and each distribution's
-    tracker — and the authority rule needs their ranges side by side. Replacing all
-    ranges on every write made them overwrite each other, so whichever was ingested
-    last won and the others simply vanished.
-    """
     digest = content_hash(advisory)
     source_record = advisory.source_record or advisory.id
     source = _dominant_source(advisory)
@@ -39,7 +29,6 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
         {"id": advisory.id, "rec": source_record},
     ).first()
     known = stored.content_hash if stored else None
-    # Recorded before migration 0020 kept each source's malware classification.
     unclassified = stored is not None and stored.malicious is None
 
     if known == digest:
@@ -56,10 +45,6 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
         text("SELECT 1 FROM vulnerability WHERE id = :id"), {"id": advisory.id}
     ).first() is None
 
-    # Computed here rather than by the parser so the content hash is untouched (see
-    # `NormalisedAdvisory.scoring_vector`). A published number wins over a computed
-    # one; a v4-only record computes to None and the risk function falls back to the
-    # published label. The vector is kept only when it produced the number.
     scoring_vector: str | None = None
     if advisory.cvss_score is not None:
         score = advisory.cvss_score
@@ -141,8 +126,6 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
         malicious=is_malicious(advisory),
     )
     if unclassified:
-        # The unknown this source was may have been all that held the flag. This
-        # write already revised the advisory, so it is re-correlated either way.
         _settle_malicious(session, advisory.id)
 
     return "new" if is_new_vulnerability else "revised"
@@ -151,13 +134,6 @@ def upsert_advisory(session: Session, advisory: NormalisedAdvisory) -> str:
 def _classify(
     session: Session, advisory: NormalisedAdvisory, *, source_record: str, now: datetime
 ) -> str:
-    """Fill in an unchanged source's malware classification, recorded before 0020.
-
-    Ingest otherwise stops at an unchanged digest, so a source left unknown by the
-    migration stayed unknown for as long as its record did not change — and an
-    unknown is read as possibly malware, holding the advisory's flag after its only
-    real malware source had withdrawn. A withdrawn record classifies nothing.
-    """
     malicious = advisory.source_withdrawn_at is None and is_malicious(advisory)
     session.execute(
         text(
@@ -173,14 +149,6 @@ def _classify(
 
 
 def _settle_malicious(session: Session, vulnerability_id: str) -> bool:
-    """Clear the advisory's malware flag when no source still classifies it as malware.
-
-    The upsert only ever sets `malicious`, so the flag is recomputed from the
-    per-source classifications whenever one could have been the last to hold it: a
-    source retracted, or an unknown one classified. A GHSA with a true MAL- alias
-    counts as much as a MAL- record, and an unknown source counts as possibly
-    malware, never as not. Returns whether the flag was cleared.
-    """
     cleared = session.execute(
         text(
             """
@@ -198,7 +166,6 @@ def _settle_malicious(session: Session, vulnerability_id: str) -> bool:
 
 
 def _revise(session: Session, vulnerability_id: str, now: datetime) -> None:
-    """A new revision, so the poller and the stale sweep re-correlate the advisory."""
     session.execute(
         text(
             "UPDATE vulnerability SET revision = revision + 1, revised_at = :now"
@@ -217,9 +184,6 @@ def _record_source(
     digest: str,
     malicious: bool,
 ) -> None:
-    """This source record's ingestion state, and whether it says the advisory is
-    malware — kept per source so the advisory's flag can be recomputed when one is
-    retracted (`_retract_source`)."""
     session.execute(
         text(
             """
@@ -253,20 +217,10 @@ def _retract_source(
     digest: str,
     now: datetime,
 ) -> str:
-    """One source record withdrawn; the vulnerability it merged into is not.
-
-    Only that record's ranges go. The row's other fields came from every source and
-    stay, and `withdrawn_at` is left alone — it would hide the CVE from every source.
-    When ranges were removed the vulnerability is revised, so the poller
-    re-correlates it and findings no remaining range supports are closed
-    (`correlate_advisory`).
-    """
     exists = session.execute(
         text("SELECT 1 FROM vulnerability WHERE id = :id"), {"id": advisory.id}
     ).first()
     if exists is None:
-        # Withdrawn before Athena ever saw it: nothing was contributed, so nothing
-        # is retracted, and no row is created for it.
         return "unchanged"
 
     removed = session.execute(
@@ -275,7 +229,6 @@ def _retract_source(
             AffectedRange.source_record == source_record,
         )
     ).rowcount
-    # A withdrawn record classifies nothing any more.
     _record_source(
         session,
         advisory,
@@ -284,8 +237,6 @@ def _retract_source(
         digest=digest,
         malicious=False,
     )
-    # A withdrawn malware report merged under a CVE (by alias, upstream or related
-    # id) left the flag standing on the sources that never said it.
     cleared = _settle_malicious(session, advisory.id)
     if removed or cleared:
         _revise(session, advisory.id, now)
@@ -293,22 +244,13 @@ def _retract_source(
 
 
 def is_malicious(advisory: NormalisedAdvisory) -> bool:
-    """Is this an OpenSSF malicious-packages record?
-
-    OSV publishes those as `MAL-YYYY-N`, sometimes aliased to a GHSA. The id is the
-    signal rather than any wording in the summary, which is attacker-adjacent text.
-    """
     if advisory.malicious:
         return True
-    # Not `aliases`: the OSV adapter folds `related` ids into them for merging, and
-    # a record that only relates to a MAL- report is not malware. The adapter reads
-    # the record's true aliases and sets `malicious` itself.
     ids = [advisory.id, advisory.source_record]
     return any(isinstance(i, str) and i.upper().startswith("MAL-") for i in ids)
 
 
 def _dominant_source(advisory: NormalisedAdvisory) -> str:
-    """The source this record speaks for, used only for reporting."""
     for r in advisory.ranges:
         if r.source:
             return r.source
@@ -318,13 +260,6 @@ def _dominant_source(advisory: NormalisedAdvisory) -> str:
 def _replace_ranges(
     session: Session, advisory: NormalisedAdvisory, *, source_record: str
 ) -> None:
-    """Replace this source record's ranges, and only its own.
-
-    A range the source has retracted must disappear rather than linger and keep
-    matching. But a CVE routinely carries ranges from several records — an upstream
-    advisory and each distribution's tracker — so deleting all of them drops every
-    other source's, which is the bug this replaces.
-    """
     session.execute(
         delete(AffectedRange).where(
             AffectedRange.vulnerability_id == advisory.id,
@@ -351,11 +286,6 @@ def _replace_ranges(
 
 
 def apply_kev(session: Session, entries: list[dict[str, Any]]) -> int:
-    """Mark known-exploited vulnerabilities.
-
-    KEV is the strongest exploitation signal available, so it is applied even to
-    advisories that arrived from another source.
-    """
     marked = 0
     for entry in entries:
         cve = entry.get("cveID")
@@ -366,8 +296,6 @@ def apply_kev(session: Session, entries: list[dict[str, Any]]) -> int:
             "ransom": (entry.get("knownRansomwareCampaignUse") or "").lower() == "known",
             "added": _kev_date(entry.get("dateAdded")),
             "due": _kev_date(entry.get("dueDate")),
-            # "Yes" / "No" since BOD 26-04; absent on older catalogue snapshots,
-            # which is None rather than a claimed "no".
             "triage": {"yes": True, "no": False}.get(
                 str(entry.get("forensicTriage") or "").strip().lower()
             ),
@@ -383,10 +311,6 @@ def apply_kev(session: Session, entries: list[dict[str, Any]]) -> int:
             params,
         )
         marked += result.rowcount or 0
-        # CISA's dates are refreshed on entries already marked, separately so the
-        # return value still counts only what is newly known-exploited. A catalogue
-        # entry's due date can be revised, and the one on the page must be CISA's
-        # current one rather than whichever Athena happened to see first.
         session.execute(
             text(
                 "UPDATE vulnerability SET kev_ransomware = :ransom, "
@@ -404,7 +328,6 @@ def apply_kev(session: Session, entries: list[dict[str, Any]]) -> int:
 
 
 def _kev_date(value: Any) -> date | None:
-    """A catalogue date (`2026-03-14`), or None when absent or malformed."""
     if not isinstance(value, str):
         return None
     try:
@@ -414,7 +337,6 @@ def _kev_date(value: Any) -> date | None:
 
 
 def apply_epss(session: Session, scores: dict[str, tuple[float, float]]) -> int:
-    """Attach exploit-probability scores. Refreshed daily upstream."""
     updated = 0
     now = datetime.now(UTC)
     for cve, (score, percentile) in scores.items():
@@ -438,11 +360,6 @@ def record_source_result(
     cursor: str | None = None,
     error: str | None = None,
 ) -> None:
-    """Track per-source health.
-
-    Feed age is a first-class signal: stale intelligence looks exactly like a quiet
-    week, and the UI must be able to tell them apart.
-    """
     now = datetime.now(UTC)
     source = session.get(IntelSource, name)
     if source is None:
@@ -452,8 +369,6 @@ def record_source_result(
     source.last_attempt_at = now
     if succeeded:
         source.last_success_at = now
-        # Set once and never moved: this is the start line detection latency is
-        # measured from, and a moving one would make the metric meaningless.
         if source.first_success_at is None:
             source.first_success_at = now
         source.last_error = None
@@ -464,10 +379,6 @@ def record_source_result(
         source.last_error = (error or "unknown error")[:2000]
 
 
-# How old each source may get before it is stale. Defined once, here: the shell, the
-# intelligence page and the API each used a different threshold, so the shell could
-# show a green "20h old" while the page marked KEV and OSV stale. Daily publishers get
-# two days; hourly ones six hours.
 STALE_AFTER = {"epss": 2 * 86400, "vulnrichment": 2 * 86400}
 STALE_AFTER_DEFAULT = 6 * 3600
 
@@ -490,10 +401,7 @@ def source_health(session: Session) -> list[dict[str, Any]]:
             "age_seconds": (now - s.last_success_at).total_seconds() if s.last_success_at else None,
             "advisories": s.advisories,
             "last_error": s.last_error,
-            # Source-specific position or version: for EPSS, the model the current
-            # scores came from (`v2026.06.15@<score date>`).
             "cursor": s.cursor,
-            # Never fetched successfully is not the same as fetched a while ago.
             "never_succeeded": s.last_success_at is None,
         }
         for s in rows

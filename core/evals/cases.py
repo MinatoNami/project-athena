@@ -1,9 +1,3 @@
-"""Corpus case definitions.
-
-Cases are TOML because `tomllib` is stdlib: the corpus adds no dependency to an
-image that runs in production.
-"""
-
 from __future__ import annotations
 
 import tomllib
@@ -48,17 +42,11 @@ class Case:
 
     @property
     def expects_applicable(self) -> bool:
-        """True only when `applicable` is the sole accepted answer.
-
-        A false negative is only meaningful where the case admits no other verdict;
-        cases that also accept `uncertain` are not evidence of a miss.
-        """
         return self.expected.verdict_in == ["applicable"]
 
 
 def _expectation(raw: dict[str, Any]) -> Expectation:
     raw = dict(raw)
-    # `verdict = "x"` is shorthand for `verdict_in = ["x"]`.
     if (single := raw.pop("verdict", None)) is not None:
         raw["verdict_in"] = [single]
     if unknown := set(raw) - set(Expectation.__dataclass_fields__):
@@ -76,8 +64,6 @@ def _all_raw() -> list[dict[str, Any]]:
 def load(only: str | None = None) -> list[Case]:
     wanted: set[str] | None = None
     if only:
-        # A case that is checked against a control is meaningless without it, so
-        # asking for one by name pulls its control in too.
         wanted = {only}
         for raw in _all_raw():
             if raw["id"] == only:
@@ -104,8 +90,6 @@ def load(only: str | None = None) -> list[Case]:
     if only and not cases:
         raise SystemExit(f"no case with id {only!r} in {CORPUS}")
 
-    # An `outranks` pointing at a case that does not exist would silently never be
-    # checked, which is the failure mode a corpus can least afford.
     known = {r["id"] for r in _all_raw()}
     for case in cases:
         if missing := [t for t in case.expected.outranks if t not in known]:
