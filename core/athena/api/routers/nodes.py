@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, select, text
 from sqlalchemy.orm import Session
 
-from athena.api.deps import Principal, current_principal, db
+from athena.api.deps import Principal, administer_with_step_up, can_operate, can_read, db
 from athena.audit import record, record_isolated
 from athena.db.models import Node, NodeEnrolmentToken, NodeNonce, NodeTask
 from athena.nodes.keys import task_signing_key, task_signing_public_key
@@ -54,7 +54,7 @@ class EnrolRequest(BaseModel):
 @router.post("/enrol-token", status_code=status.HTTP_201_CREATED)
 def mint_enrol_token(
     body: EnrolTokenRequest,
-    principal: Principal = Depends(current_principal),
+    principal: Principal = Depends(administer_with_step_up),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     token = secrets.token_urlsafe(32)
@@ -100,9 +100,9 @@ def enrol(body: EnrolRequest, request: Request, session: Session = Depends(db)) 
     try:
         public_key = unb64(body.public_key)
     except ProtocolError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     if len(public_key) != 32:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Expected an Ed25519 public key")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Expected an Ed25519 public key")
 
     from athena.inventory.identity import AssetKind, IdentityError, host_identity
     from athena.inventory.service import register_asset
@@ -114,7 +114,7 @@ def enrol(body: EnrolRequest, request: Request, session: Session = Depends(db)) 
             node_key=b64(public_key),
         )
     except IdentityError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
     asset, created = register_asset(
         session,
@@ -317,7 +317,7 @@ def submit_result(
 
 @router.get("")
 def list_nodes(
-    _: Principal = Depends(current_principal), session: Session = Depends(db)
+    _: Principal = Depends(can_read), session: Session = Depends(db)
 ) -> dict[str, Any]:
     nodes = session.execute(select(Node).order_by(Node.display_name)).scalars().all()
     now = datetime.now(UTC)
@@ -344,7 +344,7 @@ def list_nodes(
 @router.post("/{node_id}/collect", status_code=status.HTTP_202_ACCEPTED)
 def collect_now(
     node_id: str,
-    principal: Principal = Depends(current_principal),
+    principal: Principal = Depends(can_operate),
     session: Session = Depends(db),
 ) -> dict:
     from athena.nodes.dispatch import enqueue_collection
@@ -367,7 +367,7 @@ def collect_now(
 @router.delete("/{node_id}")
 def revoke_node(
     node_id: str,
-    principal: Principal = Depends(current_principal),
+    principal: Principal = Depends(administer_with_step_up),
     session: Session = Depends(db),
 ) -> dict:
     node = session.get(Node, uuid.UUID(node_id))

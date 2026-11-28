@@ -16,22 +16,31 @@ const CAUSES: [RegExp, string][] = [
   [/clone|checkout|authentication|permission denied/i, 'Athena could not check the source out.'],
 ]
 
-export const CODE_SCAN_KINDS = ['secret', 'misconfiguration']
+export const CODE_SCAN_KINDS = ['secret', 'misconfiguration', 'startup-hook']
 
 export function scanOutcome(run: {
   status: string
   kind?: string
   error?: string | null
-  stats?: { components?: number; warnings?: number; findings?: number; files_checked?: number } | null
+  stats?: {
+    components?: number
+    warnings?: number
+    findings?: number
+    files_checked?: number
+    pth_files?: number
+  } | null
 }): ScanOutcome {
   const components = run.stats?.components
 
   if (run.kind && CODE_SCAN_KINDS.includes(run.kind) && run.status === 'succeeded') {
     const n = run.stats?.findings ?? 0
-    const what = run.kind === 'secret' ? 'secret' : 'misconfiguration'
+    const what = run.kind === 'secret' ? 'secret'
+      : run.kind === 'startup-hook' ? 'start-up hook' : 'misconfiguration'
     const scope = run.kind === 'secret'
       ? ' (working tree; history not searched)'
-      : run.stats?.files_checked != null ? ` across ${run.stats.files_checked} config files` : ''
+      : run.kind === 'startup-hook'
+        ? run.stats?.pth_files != null ? ` across ${run.stats.pth_files} .pth files` : ''
+        : run.stats?.files_checked != null ? ` across ${run.stats.files_checked} config files` : ''
     return {
       state: 'covered',
       headline: `Checked for ${what}s${scope}: ${n ? `${n} open` : 'none found'}.`,

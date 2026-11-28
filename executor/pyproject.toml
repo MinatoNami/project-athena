@@ -12,6 +12,9 @@ dependencies = [
     "structlog>=24.4",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8.3"]
+
 [project.scripts]
 athena-executor = "athena_executor.main:main"
 
@@ -21,3 +24,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["athena_executor*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error::DeprecationWarning"]

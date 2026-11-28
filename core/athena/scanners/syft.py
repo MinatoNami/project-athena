@@ -14,7 +14,6 @@ from athena.scanners.sandbox import Mount, SandboxResult, SandboxSpec, run_sandb
 
 log = structlog.get_logger(__name__)
 
-SYFT_IMAGE = "anchore/syft:latest"
 SYFT_TIMEOUT = 600
 
 ECOSYSTEM = {
@@ -33,7 +32,7 @@ _DEPENDENCY_RELATION = "dependency-of"
 def scan_directory(path_in_volume: str, *, work_volume: str) -> tuple[SandboxResult, str | None]:
     result = run_sandboxed(
         SandboxSpec(
-            image=SYFT_IMAGE,
+            image=get_settings().syft_image,
             command=["scan", f"dir:/scan/{path_in_volume}", "-o", "syft-json", "-q"],
             mounts=[Mount(volume=work_volume, target="/scan", read_only=True)],
             network="none",
@@ -64,7 +63,7 @@ def scan_image(reference: str) -> tuple[SandboxResult, str | None]:
     try:
         result = run_sandboxed(
             SandboxSpec(
-                image=SYFT_IMAGE,
+                image=get_settings().syft_image,
                 command=["scan", f"docker:{reference}", "-o", "syft-json", "-q"],
                 mounts=[
                     Mount(

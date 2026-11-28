@@ -6,14 +6,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from athena.api.deps import Principal, current_principal, db
+from athena.api.deps import Principal, can_read, db
 from athena.api.routers.exports import is_uuid
 from athena.codefindings import GUIDANCE
 from athena.db.models import Asset, CodeFinding, ScanRun
 
 router = APIRouter(tags=["code"])
 
-KINDS = ("secret", "misconfiguration")
+KINDS = ("secret", "misconfiguration", "startup-hook")
 _SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 
@@ -91,14 +91,14 @@ def list_code_findings(
     kind: str | None = None,
     include_resolved: bool = False,
     limit: int = Query(default=200, le=1000),
-    _: Principal = Depends(current_principal),
+    _: Principal = Depends(can_read),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     if asset_id is not None and not is_uuid(asset_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such asset")
     if kind is not None and kind not in KINDS:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, f"kind must be one of {', '.join(KINDS)}"
+            status.HTTP_422_UNPROCESSABLE_CONTENT, f"kind must be one of {', '.join(KINDS)}"
         )
     stmt = (
         select(CodeFinding, Asset)

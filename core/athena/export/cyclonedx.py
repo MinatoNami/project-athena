@@ -34,7 +34,7 @@ def component_purl(component: Component) -> str | None:
         return None
 
 
-CODE_SCAN_KINDS = ("secret", "misconfiguration")
+CODE_SCAN_KINDS = ("secret", "misconfiguration", "startup-hook")
 HOST_PACKAGES_TOOL = "athena-node/list_packages"
 
 

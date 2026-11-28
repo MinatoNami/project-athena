@@ -5,11 +5,11 @@ import uuid
 
 import structlog
 
+from athena.config import get_settings
 from athena.scanners.sandbox import Mount, SandboxSpec, run_sandboxed
 
 log = structlog.get_logger(__name__)
 
-GIT_IMAGE = "alpine/git:latest"
 CLONE_TIMEOUT = 600
 
 _SAFE_URL = re.compile(r"^(https://|git@|ssh://)[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$")
@@ -45,7 +45,7 @@ def clone(
 
     result = run_sandboxed(
         SandboxSpec(
-            image=GIT_IMAGE,
+            image=get_settings().git_image,
             command=command,
             mounts=[Mount(volume=work_volume, target="/work", read_only=False)],
             network="bridge",
@@ -61,7 +61,7 @@ def clone(
 
     head = run_sandboxed(
         SandboxSpec(
-            image=GIT_IMAGE,
+            image=get_settings().git_image,
             command=["-C", f"/work/{checkout}", "rev-parse", "HEAD"],
             mounts=[Mount(volume=work_volume, target="/work", read_only=True)],
             network="none",
@@ -78,7 +78,7 @@ def remove_checkout(checkout: str, *, work_volume: str) -> None:
         return
     run_sandboxed(
         SandboxSpec(
-            image=GIT_IMAGE,
+            image=get_settings().git_image,
             command=["sh", "-c", f"rm -rf /work/{checkout}"],
             mounts=[Mount(volume=work_volume, target="/work", read_only=False)],
             network="none",

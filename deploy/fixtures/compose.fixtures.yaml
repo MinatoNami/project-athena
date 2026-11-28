@@ -1,0 +1,29 @@
+services:
+  fixture-nginx:
+    image: nginx:1.18.0@sha256:e90ac5331fe095cea01b121a3627174b2e33e06e83720e9a934c7b8ccc9c55a0
+    profiles: [fixtures]
+    restart: "no"
+    labels:
+      athena.fixture: "true"
+      athena.fixture.role: "vulnerable-service"
+    security_opt: ["no-new-privileges:true"]
+    ports: ["127.0.0.1:18080:80"]
+    networks: [fixtures]
+
+  fixture-python:
+    image: python:3.8.0-slim-buster@sha256:8e243f41e500238f78f7a29a81656114d3fe603d5c34079a462d090f71c4b225
+    profiles: [fixtures]
+    restart: "no"
+    command: ["sleep", "infinity"]
+    labels:
+      athena.fixture: "true"
+      athena.fixture.role: "vulnerable-runtime"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [fixtures]
+
+networks:
+  fixtures:
+    labels:
+      athena.fixture: "true"

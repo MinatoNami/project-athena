@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select, text
@@ -18,7 +18,7 @@ def _canonical(
 ) -> bytes:
     body = json.dumps(
         {
-            "at": at.isoformat(),
+            "at": at.astimezone(UTC).isoformat(),
             "actor": actor,
             "action": action,
             "subject": subject,

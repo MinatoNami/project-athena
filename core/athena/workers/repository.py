@@ -15,9 +15,9 @@ from athena.inventory.service import (
     record_components,
     start_scan,
 )
-from athena.queue import publish
+from athena.queue import enqueue, publish
 from athena.queue.registry import handler
-from athena.scanners import manifests, misconfig, secrets, syft
+from athena.scanners import manifests, misconfig, secrets, startup_hooks, syft
 from athena.scanners.git import CheckoutError, clone, remove_checkout
 from athena.scanners.sandbox import SandboxError
 
@@ -109,6 +109,13 @@ def scan_repository(payload: dict[str, Any]) -> dict[str, Any]:
             detail={"components": count, "status": status, "commit": commit[:12]},
         )
         publish(session, topic="assets", subject_id=str(asset_id))
+        enqueue(
+            session,
+            kind="correlate.asset",
+            key=f"{asset_id}:repository-scan",
+            payload={"asset_id": str(asset_id)},
+            priority=4,
+        )
 
     log.info(
         "repository.scanned", asset=display, components=count, status=status,
@@ -186,6 +193,44 @@ def _scan_code(asset_id: str, checkout: str, *, work_volume: str, commit: str) -
                 )
         log.info("repository.code_scanned", asset=asset_id, tool=tool, status=status,
                  **counts)
+    _scan_startup_hooks(asset_id, checkout, commit=commit)
+
+
+def _scan_startup_hooks(asset_id: str, checkout: str, *, commit: str) -> None:
+    stats: dict[str, Any] = {"commit": commit[:12]}
+    observations = None
+    error = None
+    try:
+        found = startup_hooks.scan_tree(pathlib.Path(get_settings().work_dir) / checkout)
+        observations = found.observations
+        stats.update(
+            pth_files=found.files,
+            allowlisted=found.allowlisted[:20],
+            unread=found.unread[:20],
+            truncated=found.truncated,
+        )
+        if found.unread or found.truncated:
+            status = "partial"
+            error = f"{len(found.unread)} .pth file(s) not read" + (
+                "; file limit reached" if found.truncated else ""
+            )
+        else:
+            status = "succeeded"
+    except Exception as exc:  # noqa: BLE001
+        status, error = "failed", f"{startup_hooks.TOOL}: {type(exc).__name__}: {exc}"[:500]
+        observations = None
+    with session_scope() as session:
+        asset = session.get(Asset, asset_id)
+        if asset is None:
+            return
+        counts = record_code_scan(
+            session, asset=asset, kind=startup_hooks.KIND, tool=startup_hooks.TOOL,
+            tool_version=startup_hooks.TOOL_VERSION, status=status,
+            observations=observations, error=error, stats=stats,
+        )
+        publish(session, topic="assets", subject_id=str(asset_id))
+    log.info("repository.code_scanned", asset=asset_id, tool=startup_hooks.TOOL,
+             status=status, **counts)
 
 
 def _gap_summary(warnings: list[str], *, gap_count: int) -> str | None:

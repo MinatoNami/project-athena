@@ -57,6 +57,16 @@ _CLAIM_SQL = """
            AND j.run_after <= now()
            AND (j.lease_until IS NULL OR j.lease_until < now())
            AND COALESCE(i.running, 0) < :kind_cap
+           AND NOT (
+               j.kind LIKE 'investigate.%'
+               AND (
+                   EXISTS (SELECT 1 FROM control_state c WHERE c.halted)
+                   OR EXISTS (
+                       SELECT 1 FROM investigation_hold h
+                        WHERE h.finding_id::text = j.payload->>'finding_id'
+                   )
+               )
+           )
            {kind_clause}
          ORDER BY j.priority, j.run_after
          FOR UPDATE OF j SKIP LOCKED

@@ -25,6 +25,7 @@ const items = computed(() => [
   { to: '/intel', label: 'Intelligence', glyph: 'intel' },
   { to: '/metrics', label: 'Metrics', glyph: 'metrics' },
   { to: '/activity', label: 'Activity', glyph: 'activity' },
+  ...(showsAdminNav(me.value) ? [{ to: '/users', label: 'Users', glyph: 'users' }] : []),
 ])
 
 const paletteOpen = ref(false)
@@ -131,7 +132,7 @@ async function logout() {
         </div>
         <div class="who">
           <span class="avatar">{{ (me?.email || '?').charAt(0).toUpperCase() }}</span>
-          <span class="email" :title="me?.email">{{ me?.email }}</span>
+          <NuxtLink to="/account" class="email" :title="`${me?.email ?? ''}: account security`">{{ me?.email }}</NuxtLink>
           <button class="signout" title="Sign out" aria-label="Sign out" @click="logout">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -143,7 +144,10 @@ async function logout() {
       </div>
     </nav>
 
-    <main id="main" class="main" tabindex="-1"><slot /></main>
+    <main id="main" class="main" tabindex="-1">
+      <HaltBanner v-if="me" :can-administer="showsAdminNav(me)" :mfa-enabled="!!me.mfa_enabled" />
+      <slot />
+    </main>
     <CommandPalette v-model:open="paletteOpen" />
   </div>
 </template>
@@ -194,8 +198,9 @@ async function logout() {
 }
 .email {
   font-size: .74rem; color: var(--ink-2); overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap; flex-grow: 1;
+  text-overflow: ellipsis; white-space: nowrap; flex-grow: 1; text-decoration: none;
 }
+.email:hover { color: var(--ink); text-decoration: underline; }
 .signout {
   background: none; border: 0; padding: .15rem; margin: 0; line-height: 0;
   color: var(--ink-muted); cursor: pointer; border-radius: 5px; flex-shrink: 0;

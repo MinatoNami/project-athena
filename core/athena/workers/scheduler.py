@@ -36,6 +36,9 @@ NONCE_SWEEP_INTERVAL = 300
 CORRELATION_SWEEP_INTERVAL = 300
 IMAGE_SWEEP_INTERVAL = 600
 TRIAGE_SWEEP_INTERVAL = 120
+COMPROMISE_SWEEP_INTERVAL = 600
+IDEMPOTENCY_SWEEP_INTERVAL = 3600
+COMPROMISE_SWEEP_BATCH = 50
 
 
 def _acquire_leadership(session) -> bool:
@@ -121,7 +124,16 @@ def _sweep_triage(session, last_run: dict[str, float], now: float) -> None:
                -- current revision (`investigate.match_is_current`): queued now, the
                -- worker would only set it aside, on every pass until then.
                AND f.advisory_revision >= v.revision
-               AND (f.triage_disposition IS NULL OR f.triage_disposition = 'investigate')
+               AND (
+                   f.triage_disposition IS NULL
+                   OR (
+                       f.triage_disposition = 'investigate'
+                       AND NOT EXISTS (SELECT 1 FROM control_state c WHERE c.halted)
+                       AND NOT EXISTS (
+                           SELECT 1 FROM investigation_hold h WHERE h.finding_id = f.id
+                       )
+                   )
+               )
              ORDER BY v.malicious DESC,
                       v.kev DESC,
                       COALESCE(v.cvss_score, 0) DESC,
@@ -192,6 +204,21 @@ def _sweep_images(session, last_run: dict[str, float], now: float) -> None:
         log.info("scheduler.image_scans", queued=len(rows))
 
 
+def _sweep_compromise_assessments(session, last_run: dict[str, float], now: float) -> None:
+    if now - last_run.get("compromise-sweep", 0) < COMPROMISE_SWEEP_INTERVAL:
+        return
+    last_run["compromise-sweep"] = now
+
+    from athena.correlation.engine import OPEN_STATES
+    from athena.investigation.compromise import open_compromise_assessments
+
+    opened = open_compromise_assessments(
+        session, states=OPEN_STATES, limit=COMPROMISE_SWEEP_BATCH
+    )
+    if opened:
+        log.info("scheduler.compromise_assessments_opened", opened=opened)
+
+
 def _sweep_nonces(session, last_run: dict[str, float], now: float) -> None:
     if now - last_run.get("nonce-sweep", 0) < NONCE_SWEEP_INTERVAL:
         return
@@ -202,6 +229,18 @@ def _sweep_nonces(session, last_run: dict[str, float], now: float) -> None:
     removed = sweep_nonces(session)
     if removed:
         log.info("scheduler.nonces_swept", removed=removed)
+
+
+def _sweep_idempotency_keys(session, last_run: dict[str, float], now: float) -> None:
+    if now - last_run.get("idempotency-sweep", 0) < IDEMPOTENCY_SWEEP_INTERVAL:
+        return
+    last_run["idempotency-sweep"] = now
+
+    from athena.api.idempotency import sweep_idempotency_keys
+
+    removed = sweep_idempotency_keys(session)
+    if removed:
+        log.info("scheduler.idempotency_keys_swept", removed=removed)
 
 
 def run() -> None:
@@ -228,9 +267,11 @@ def run() -> None:
                 now = time.monotonic()
                 _sweep_nodes(session, last_run, now)
                 _sweep_nonces(session, last_run, now)
+                _sweep_idempotency_keys(session, last_run, now)
                 _sweep_correlation(session, last_run, now)
                 _sweep_images(session, last_run, now)
                 _sweep_triage(session, last_run, now)
+                _sweep_compromise_assessments(session, last_run, now)
                 for name, interval, kind, payload in SCHEDULE:
                     if now - last_run.get(name, 0) < interval:
                         continue

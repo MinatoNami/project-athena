@@ -4,13 +4,15 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from athena.api.deps import Principal, current_principal, db
+from athena.api.deps import Principal, can_operate, can_read, db
 from athena.api.routers.exports import is_uuid
 from athena.audit import record
 from athena.config import get_settings
+from athena.control import is_investigation_paused
 from athena.db.models import (
     AffectedRange,
     Asset,
@@ -22,6 +24,11 @@ from athena.db.models import (
 from athena.findings import FindingQuery, query_findings
 from athena.findings.query import DEFAULT_LIMIT, MAX_LIMIT, SORTS
 from athena.intel.ingest import source_health
+from athena.investigation.compromise import (
+    AssessmentError,
+    answer_compromise_assessment,
+    compromise_assessment_of,
+)
 from athena.investigation.priority import decide
 from athena.queue import enqueue
 
@@ -63,12 +70,12 @@ def list_findings(
     sort: str = "risk",
     cursor: str | None = None,
     limit: int = Query(default=DEFAULT_LIMIT, le=MAX_LIMIT),
-    _: Principal = Depends(current_principal),
+    _: Principal = Depends(can_read),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     if sort not in SORTS:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"Unknown sort {sort!r} — expected one of {', '.join(SORTS)}",
         )
     if asset_id is not None and not is_uuid(asset_id):
@@ -140,7 +147,7 @@ def list_findings(
 @router.get("/findings/{finding_id}")
 def get_finding(
     finding_id: str,
-    _: Principal = Depends(current_principal),
+    _: Principal = Depends(can_read),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     row = session.execute(
@@ -178,6 +185,7 @@ def get_finding(
         "advisory_revision": finding.advisory_revision,
         "first_seen": finding.first_seen,
         "last_evaluated_at": finding.last_evaluated_at,
+        "investigation_held": is_investigation_paused(session, finding.id),
         "vulnerability": {
             "id": vulnerability.id,
             "aliases": vulnerability.aliases,
@@ -256,10 +264,37 @@ def get_finding(
             else None
         ),
         "investigation": _investigation_of(session, finding),
+        "compromise_assessment": compromise_assessment_of(session, finding),
         "prioritization": _prioritization(vulnerability, asset, finding),
         "risk_explained": _risk_explained(session, finding),
         "remediation": _remediation(session, finding, asset, component),
     }
+
+
+class CompromiseAnswers(BaseModel):
+    answers: dict[str, str]
+
+
+@router.post("/findings/{finding_id}/compromise-assessment")
+def answer_compromise(
+    finding_id: str,
+    body: CompromiseAnswers,
+    principal: Principal = Depends(can_operate),
+    session: Session = Depends(db),
+) -> dict[str, Any]:
+    if not is_uuid(finding_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such finding")
+    finding = session.execute(
+        select(Finding).where(Finding.id == finding_id).with_for_update()
+    ).scalar_one_or_none()
+    if finding is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such finding")
+    try:
+        return answer_compromise_assessment(
+            session, finding, body.answers, actor=principal.actor
+        )
+    except AssessmentError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
 
 def _prioritization(
@@ -301,6 +336,7 @@ def _prioritization(
             vector=vector,
             cisa_ssvc=vulnerability.ssvc_cisa,
             first_seen=finding.first_seen.date(),
+            kev_due_date=due,
         ).as_dict(today=today),
         "epss": {
             "score": vulnerability.epss_score,
@@ -420,7 +456,7 @@ def _investigation_of(session: Session, finding: Finding) -> dict[str, Any] | No
 
 @router.get("/intel/sources")
 def intel_sources(
-    _: Principal = Depends(current_principal), session: Session = Depends(db)
+    _: Principal = Depends(can_read), session: Session = Depends(db)
 ) -> dict[str, Any]:
     sources = source_health(session)
     total = session.execute(select(func.count()).select_from(Vulnerability)).scalar_one()
@@ -459,7 +495,7 @@ def intel_sources(
 
 @router.get("/ai/status")
 def ai_status(
-    _: Principal = Depends(current_principal), session: Session = Depends(db)
+    _: Principal = Depends(can_read), session: Session = Depends(db)
 ) -> dict[str, Any]:
     from sqlalchemy import func as sqlfunc
 
@@ -509,7 +545,7 @@ def ai_status(
 
 @router.post("/intel/refresh", status_code=status.HTTP_202_ACCEPTED)
 def refresh_intel(
-    principal: Principal = Depends(current_principal),
+    principal: Principal = Depends(can_operate),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     from athena.intel.feeds import DEFAULT_ECOSYSTEMS

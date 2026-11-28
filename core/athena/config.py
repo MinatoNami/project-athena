@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     cookie_secure: bool = True
     session_idle_minutes: int = 30
     step_up_ttl_seconds: int = 300
+    mfa_lockout_failures: int = 5
+    mfa_lockout_window_seconds: int = 900
+    single_use_credential_ttl_hours: int = 72
 
     worker_concurrency: int = 4
     job_lease_seconds: int = 300
@@ -58,8 +61,18 @@ class Settings(BaseSettings):
         "aquasec/trivy:0.76.2"
         "@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb"
     )
+    syft_image: str = (
+        "anchore/syft:v1.57.2"
+        "@sha256:e97e20b6e6d1699c60296b66ab337941724f9bd06ac279d893eda89601fc4b2a"
+    )
+    git_image: str = (
+        "alpine/git:v2.54.1"
+        "@sha256:29cff25811f790b9f72fc266bf8009a5a911714c0e03c31c47339c50909d9aef"
+    )
 
-    @field_validator("gitleaks_image", "trivy_image", mode="before")
+    @field_validator(
+        "gitleaks_image", "trivy_image", "syft_image", "git_image", mode="before"
+    )
     @classmethod
     def _blank_image_means_default(cls, value: Any, info: Any) -> Any:
         if isinstance(value, str) and not value.strip():
@@ -75,6 +88,23 @@ class Settings(BaseSettings):
     sla_days_critical: int = 7
     sla_days_high: int = 30
     sla_days_medium: int = 90
+
+    deadline_window_short_days: int = Field(default=3, ge=1)
+    deadline_window_medium_days: int = Field(default=14, ge=1)
+    deadline_window_long_days: int = Field(default=60, ge=1)
+
+    @model_validator(mode="after")
+    def _deadline_windows_ascend(self) -> Settings:
+        short = self.deadline_window_short_days
+        medium = self.deadline_window_medium_days
+        long = self.deadline_window_long_days
+        if not short <= medium <= long:
+            raise ValueError(
+                "deadline windows must be ordered short <= medium <= long "
+                f"(got {short}, {medium}, {long})"
+            )
+        return self
+
     llm_base_url: str = "http://127.0.0.1:1234"
     llm_model: str = "qwen/qwen3.6-35b-a3b"
     llm_timeout: float = 300.0

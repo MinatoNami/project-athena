@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from athena.api.deps import Principal, current_principal, db
+from athena.api.deps import Principal, can_operate, can_read, db
 from athena.db.models import Notification
 
 router = APIRouter(tags=["notifications"])
@@ -37,7 +37,7 @@ def _serialise(n: Notification) -> dict[str, Any]:
 def list_notifications(
     unread_only: bool = False,
     limit: int = Query(default=50, le=200),
-    _: Principal = Depends(current_principal),
+    _: Principal = Depends(can_read),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     stmt = (
@@ -88,7 +88,7 @@ def list_notifications(
 @router.post("/notifications/{notification_id}/read")
 def mark_read(
     notification_id: str,
-    _: Principal = Depends(current_principal),
+    _: Principal = Depends(can_operate),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     notification = session.get(Notification, notification_id)
@@ -101,7 +101,7 @@ def mark_read(
 
 @router.post("/notifications/read-all")
 def mark_all_read(
-    _: Principal = Depends(current_principal),
+    _: Principal = Depends(can_operate),
     session: Session = Depends(db),
 ) -> dict[str, Any]:
     result = session.execute(

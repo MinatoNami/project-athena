@@ -102,7 +102,7 @@ Every data-bound component renders four distinct states: loading, empty, error, 
 /assets[/id]          inventory, graph, components, freshness, relationships
 /patrols              runs, schedules, coverage report
 /intel                advisories, feed health and age
-/code                 secrets and misconfigurations in repositories, with coverage
+/code                 secrets, misconfigurations and start-up hooks in repositories, with coverage
 /metrics              §7
 /chat                 natural-language interface, cited
 /audit                trail + hash-chain verification
@@ -369,6 +369,13 @@ Strict-Transport-Security · X-Content-Type-Options · Referrer-Policy: same-ori
 
 No CDN, no external fonts, no third-party analytics. CSRF protection on state-changing proxy routes; rate limiting on login and step-up at the Nitro layer; no secrets in the bundle or SSR payload (audited in CI); no production source maps.
 
+CSRF defence on the proxy, beyond `SameSite=Lax`, lives in `server/utils/crossSite.ts`. Every method other than `GET`, `HEAD` and `OPTIONS` must pass two checks before Nitro forwards it to core, or it gets a 403 with `detail` set to the reason:
+
+- **Origin.** The `Origin` header, or the `Referer` when `Origin` is absent, must have exactly the dashboard's origin: same scheme, host and port. The dashboard's origin is `NUXT_DASHBOARD_ORIGIN` when set, and otherwise the request's own `Host` and protocol. A request with neither header is refused (`csrf_source_missing`), and so is a mismatch (`csrf_origin_mismatch`). A mismatched `Origin` is never rescued by a matching `Referer`.
+- **Custom header.** The request must carry `X-Requested-By: athena-web` (`csrf_header_missing`). `useApi` sends it on every call. A cross-site HTML form cannot set it, and a cross-site script cannot set it without a CORS preflight that the BFF never grants.
+
+Safe methods, including the `/api/events` stream, pass through untouched. Behind a reverse proxy that rewrites `Host` or terminates TLS without `X-Forwarded-Proto`, set `NUXT_DASHBOARD_ORIGIN` to the URL users type, or every mutation is refused.
+
 ---
 
 # 14. Budgets and Testing
@@ -401,6 +408,7 @@ Multi-stage Node 22 Alpine build producing `.output/`, run as a non-root user on
 NUXT_ATHENA_API_URL        internal core URL
 NUXT_SESSION_SECRET_FILE   session signing key
 NUXT_PUBLIC_APP_NAME       display name
+NUXT_DASHBOARD_ORIGIN      public origin for the CSRF check, e.g. https://athena.example.com
 NUXT_TLS_*                 optional direct TLS, or terminate upstream
 ```
 

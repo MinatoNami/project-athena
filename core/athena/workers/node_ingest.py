@@ -21,7 +21,7 @@ from athena.inventory.service import (
     register_asset,
     start_scan,
 )
-from athena.queue import publish
+from athena.queue import enqueue, publish
 from athena.queue.registry import handler
 from athena.remediation import link_image_source
 
@@ -75,6 +75,14 @@ def ingest(payload: dict[str, Any]) -> dict[str, Any]:
             detail={"capability": capability, **stats},
         )
         publish(session, topic="assets", subject_id=str(asset.id))
+        if capability == "list_packages":
+            enqueue(
+                session,
+                kind="correlate.asset",
+                key=f"{asset.id}:node-packages",
+                payload={"asset_id": str(asset.id)},
+                priority=4,
+            )
 
     log.info("node.ingested", capability=capability, asset=str(node.asset_id), **stats)
     return {"status": "succeeded", "capability": capability, **stats}

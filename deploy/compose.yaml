@@ -86,6 +86,8 @@ services:
       ATHENA_CODE_SCANS_ENABLED: ${ATHENA_CODE_SCANS_ENABLED:-true}
       ATHENA_GITLEAKS_IMAGE: ${ATHENA_GITLEAKS_IMAGE:-}
       ATHENA_TRIVY_IMAGE: ${ATHENA_TRIVY_IMAGE:-}
+      ATHENA_SYFT_IMAGE: ${ATHENA_SYFT_IMAGE:-}
+      ATHENA_GIT_IMAGE: ${ATHENA_GIT_IMAGE:-}
     group_add:
       - "${ATHENA_SECRET_GID:-0}"
       - "${DOCKER_SOCKET_GID:-0}"
@@ -166,6 +168,7 @@ services:
       NUXT_SESSION_SECRET_FILE: /run/secrets/session_secret
       NUXT_PUBLIC_APP_NAME: ${ATHENA_APP_NAME:-Athena}
       NUXT_APP_BASE_URL: ${ATHENA_BASE_PATH:-/}
+      NUXT_DASHBOARD_ORIGIN: ${ATHENA_DASHBOARD_ORIGIN:-}
     secrets: [session_secret]
     group_add:
       - "${ATHENA_SECRET_GID:-0}"

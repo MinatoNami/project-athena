@@ -2,10 +2,7 @@
 const props = defineProps<{ assetId?: string; compact?: boolean }>()
 
 const route = useRoute()
-const KINDS = ['all', 'secret', 'misconfiguration'] as const
-const kind = ref<(typeof KINDS)[number]>(
-  KINDS.find(k => k === route.query.kind) ?? 'all',
-)
+const kind = ref<CodeFindingFilter>(codeFindingFilter(route.query.kind))
 const showResolved = ref(route.query.resolved === '1')
 watch([kind, showResolved], ([k, r]) => navigateTo({
   query: { ...route.query, kind: k === 'all' ? undefined : k, resolved: r ? '1' : undefined },
@@ -28,7 +25,12 @@ const { data, pending, error, refresh } = await useAsyncData(
 useEvents(['assets'], refresh)
 
 const cov = computed(() => data.value?.coverage)
-function openCount(k: 'secret' | 'misconfiguration') {
+const scannedAny = computed(() =>
+  CODE_FINDING_KINDS.some(k => (cov.value?.[k]?.scanned ?? 0) > 0))
+const notCheckedWhat = computed(() => kind.value === 'all'
+  ? 'secrets, configuration or start-up hook'
+  : CODE_KIND_LABELS[kind.value].scanned)
+function openCount(k: CodeFindingKind) {
   return Object.values<number>(data.value?.open_counts?.[k] ?? {}).reduce((a, b) => a + b, 0)
 }
 
@@ -42,10 +44,10 @@ function ago(at: string) {
   <section class="codefind">
     <div class="head">
       <div class="cov">
-        <template v-for="k in (['secret', 'misconfiguration'] as const)" :key="k">
+        <template v-for="k in CODE_FINDING_KINDS" :key="k">
           <div class="covtile">
             <StatTile
-              :label="k === 'secret' ? 'Secrets' : 'Misconfigurations'"
+              :label="CODE_KIND_LABELS[k].tile"
               :value="cov?.[k]?.scanned ? openCount(k) : null"
               of="open"
               hint="not checked yet"
@@ -63,9 +65,11 @@ function ago(at: string) {
       <div class="ctrl">
         <div class="seg">
           <button :class="{ on: kind === 'all' }" :aria-pressed="kind === 'all'" @click="kind = 'all'">All</button>
-          <button :class="{ on: kind === 'secret' }" :aria-pressed="kind === 'secret'" @click="kind = 'secret'">Secrets</button>
-          <button :class="{ on: kind === 'misconfiguration' }" :aria-pressed="kind === 'misconfiguration'" @click="kind = 'misconfiguration'">
-            Config
+          <button
+            v-for="k in CODE_FINDING_KINDS" :key="k"
+            :class="{ on: kind === k }" :aria-pressed="kind === k" @click="kind = k"
+          >
+            {{ CODE_KIND_LABELS[k].filter }}
           </button>
         </div>
         <label class="chk"><input v-model="showResolved" type="checkbox"> resolved</label>
@@ -80,11 +84,10 @@ function ago(at: string) {
 
     <StateBlock
       v-else-if="data && !data.findings.length && cov && cov.repositories &&
-        (kind === 'all' ? cov.secret.scanned + cov.misconfiguration.scanned === 0
-                        : cov[kind].scanned === 0)"
+        (kind === 'all' ? !scannedAny : !cov[kind]?.scanned)"
       kind="never" title="Not checked yet"
     >
-      No repository has completed a {{ kind === 'misconfiguration' ? 'configuration' : 'secrets or configuration' }}
+      No repository has completed a {{ notCheckedWhat }}
       scan, so this is <strong>unknown, not clean</strong>. Scans run with the next
       repository patrol.
     </StateBlock>
@@ -106,8 +109,8 @@ function ago(at: string) {
     <ul v-else-if="data" class="list">
       <li v-for="f in data.findings" :key="f.id" class="item" :class="{ resolved: f.resolved_at }">
         <button class="row" :aria-expanded="open === f.id" @click="open = open === f.id ? null : f.id">
-          <span class="tag caps kind" :class="{ bad: f.kind === 'secret' }">
-            {{ f.kind === 'secret' ? 'secret' : 'config' }}
+          <span class="tag caps kind" :class="{ bad: f.kind === 'secret' || f.kind === 'startup-hook' }">
+            {{ codeKindTag(f.kind) }}
           </span>
           <SeverityChip :severity="f.severity === 'info' ? 'informational' : f.severity" />
           <span class="meat">
@@ -128,6 +131,17 @@ function ago(at: string) {
           <ol v-if="f.kind === 'secret'" class="steps">
             <li v-for="(s, i) in data.guidance.secret.steps" :key="i">{{ s }}</li>
           </ol>
+          <template v-else-if="f.kind === 'startup-hook'">
+            <p class="guide">{{ data.guidance['startup-hook']?.summary }}</p>
+            <p v-if="f.detail.line_text" class="fix">
+              <span class="lbl">Line {{ f.line }}</span>
+              <code class="hookline"><UntrustedText :text="f.detail.line_text" /></code>
+              <span v-if="f.detail.line_truncated" class="fine"> (cut short)</span>
+            </p>
+            <ol v-if="data.guidance['startup-hook']?.steps?.length" class="steps">
+              <li v-for="(s, i) in data.guidance['startup-hook'].steps" :key="i">{{ s }}</li>
+            </ol>
+          </template>
           <template v-else>
             <p v-if="f.detail.message" class="guide"><UntrustedText :text="f.detail.message" /></p>
             <p v-if="f.detail.resolution" class="fix">
@@ -179,6 +193,7 @@ function ago(at: string) {
 .meat { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: .1rem; }
 .title { font-size: .82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .loc { font-size: .72rem; color: var(--ink-muted); }
+.hookline { font-size: .74rem; overflow-wrap: anywhere; }
 .on { font-size: .74rem; color: var(--ink-2); white-space: nowrap; }
 .when { font-size: .7rem; color: var(--ink-muted); white-space: nowrap; }
 .body { border-top: 1px solid var(--rule); padding: .6rem .8rem .7rem; background: var(--plane);

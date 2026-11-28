@@ -14,7 +14,6 @@ from athena.db.base import session_scope
 from athena.db.models import Finding, InvestigationRecord
 from athena.investigation.tools import TOOL_DESCRIPTIONS
 from athena.risk import Signals, component_role, score
-
 from evals import seed
 from evals.cases import BANDS, Case, band_rank, load
 
@@ -256,10 +255,14 @@ def report(cases: list[Case], runs: list[dict[str, Result]], violations: list[st
             )
 
         flag = "  UNSTABLE" if unstable else ""
+        if scores and min(scores) != max(scores):
+            score_range = f"{min(scores)}–{max(scores)}"
+        else:
+            score_range = scores[0] if scores else "—"
         print(
             f"{case.id:26} {passes}/{repeats:<4}  {fmt(verdicts):34} "
             f"{fmt(bands):24} "
-            f"{(f'{min(scores)}–{max(scores)}' if scores and min(scores) != max(scores) else (scores[0] if scores else '—'))}"
+            f"{score_range}"
             f"{flag}"
         )
         seen: set[str] = set()
